@@ -1,0 +1,9 @@
+# 这是一个纯 Windows 项目，全部统一成 CRLF。
+#
+# 为什么要专门锁：.bat 文件必须是 CRLF，用 LF 的话
+# cmd 解析多行结构（比如 if (...) 块）会出错。
+# 如果有人在 Linux/Mac 上克隆再传回来，不锁就会被转成 LF。
+* text=auto eol=crlf
+
+# 截图是二进制，别去做换行转换
+*.png binary
