@@ -2160,7 +2160,7 @@ Windows 不再插手。
 
     $tweaks += @{
         Id = 'ErrorReporting'; Name = '关闭 Windows 错误报告'
-        Category = '激进优化'; Risk = '低'; Effect = '游戏崩溃后不再卡住几十秒收集数据'
+        Category = '系统瘦身'; Risk = '低'; Effect = '游戏崩溃后不再卡住几十秒收集数据'
         Recommended = $false; Reboot = $false
         Detail = @'
 【这是干什么的】

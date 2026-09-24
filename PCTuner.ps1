@@ -32,9 +32,9 @@ $ErrorActionPreference = 'Continue'
 
 # ===== 版本号 =====
 # 改版本号只改这一处，标题栏 / 副标题 / 诊断报告都从这里取。
-$Script:AppVersion     = '2.1'
+$Script:AppVersion     = '3.0'
 $Script:AppVersionDate = '2026-09-24'
-$Script:AppVersionName = '激进优化版'
+$Script:AppVersionName = '全人群版'
 
 # ---------------------------------------------------------------------
 #  0. 加载 .NET 界面库
@@ -349,8 +349,106 @@ $Script:CARD_SEL_BG  = '#E4E7EC'
 $Script:CARD_SEL_BD  = '#7F8A99'
 $Script:SelectedCard = $null
 
+# =====================================================================
+#  动画
+# ---------------------------------------------------------------------
+#  用的是 WPF 自带的 Storyboard，没有引入任何第三方 UI 库。
+#
+#  ★ 为什么不用现成的界面库（MaterialDesign / ModernWpf 那些）★
+#    它们确实好看，但要带一堆 DLL、要匹配 .NET 版本。
+#    这个工具最大的优点是「解压双击就能跑、零依赖、两百 KB」，
+#    为了动画把这个优点毁掉不划算。WPF 原生动画已经够用。
+#
+#  ★ 三条自我约束 ★
+#    1. 只动 Opacity 和 Transform —— 这两样走 GPU 合成，
+#       不会触发重新布局，是所有动画里最便宜的。
+#       绝不动 Width/Height/Margin，那种会让整页反复重排。
+#    2. 时长压在 120~220ms。再长就从「顺滑」变成「等它放完」。
+#    3. 可以整体关掉 —— 这工具本来就服务配置差的机器，
+#       动画不能反过来变成负担。
+# =====================================================================
+$Script:AnimEnabled = $true
+
+function Start-FadeSlideIn {
+    <#
+      内容换新时的淡入 + 轻微上移。用在右侧详情栏这种「整块换内容」的地方。
+      SlideY 是起始位置相对最终位置往下偏多少像素。
+    #>
+    param($Element, [double]$Ms = 200, [double]$SlideY = 10)
+    if ($null -eq $Element) { return }
+    if (-not $Script:AnimEnabled) {
+        $Element.Opacity = 1
+        $Element.RenderTransform = $null
+        return
+    }
+    try {
+        $tt = New-Object System.Windows.Media.TranslateTransform
+        $tt.Y = $SlideY
+        $Element.RenderTransform = $tt
+
+        $dur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Ms))
+        $ease = New-Object System.Windows.Media.Animation.CubicEase
+        $ease.EasingMode = 'EaseOut'
+
+        $fade = New-Object System.Windows.Media.Animation.DoubleAnimation (0, 1, $dur)
+        $fade.EasingFunction = $ease
+        $Element.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fade)
+
+        $slide = New-Object System.Windows.Media.Animation.DoubleAnimation ($SlideY, 0, $dur)
+        $slide.EasingFunction = $ease
+        $tt.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $slide)
+    } catch {
+        # 动画失败绝不能拖垮功能：直接显示出来就是了
+        $Element.Opacity = 1
+    }
+}
+
+function Start-ColorFade {
+    <#
+      背景色平滑过渡。用在卡片悬停上 —— 以前是「啪」地换色，
+      现在是 140ms 渐变过去。
+
+      ★ 注意 ★ 只能对「没被 Freeze 的画笔」做动画。
+        主题里那 20 支资源画笔是 Frozen 的（为了渲染快），
+        直接拿来动画会抛 InvalidOperationException。
+        所以这里每次都 new 一支独立画笔给这个控件用。
+    #>
+    param($Element, [string]$ToHex, [double]$Ms = 140)
+    if ($null -eq $Element) { return }
+    $to = [System.Windows.Media.ColorConverter]::ConvertFromString((Get-ThemedHex $ToHex))
+    if (-not $Script:AnimEnabled) {
+        $Element.Background = New-Object System.Windows.Media.SolidColorBrush $to
+        return
+    }
+    try {
+        $cur = $Element.Background
+        # 不是纯色画笔、或者是冻结的，就先换一支可动画的同色画笔
+        if ($cur -isnot [System.Windows.Media.SolidColorBrush] -or $cur.IsFrozen) {
+            $startColor = if ($cur -is [System.Windows.Media.SolidColorBrush]) { $cur.Color } else { $to }
+            $cur = New-Object System.Windows.Media.SolidColorBrush $startColor
+            $Element.Background = $cur
+        }
+        $dur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Ms))
+        $anim = New-Object System.Windows.Media.Animation.ColorAnimation
+        $anim.To = $to
+        $anim.Duration = $dur
+        $cur.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $anim)
+    } catch {
+        $Element.Background = New-Object System.Windows.Media.SolidColorBrush $to
+    }
+}
+
+function Get-ThemedHex {
+    <# 拿到某个基准色号在当前皮肤下的实际色号（Get-Brush 的纯字符串版）#>
+    param([string]$Hex)
+    if ($Script:ColorRemap -and $Script:ColorRemap.ContainsKey($Hex.ToUpper())) {
+        return $Script:ColorRemap[$Hex.ToUpper()]
+    }
+    return $Hex
+}
+
 function New-ListCard {
-    <# 统一生成左侧列表用的卡片，自带悬停反馈 #>
+    <# 统一生成左侧列表用的卡片，自带悬停反馈（带颜色过渡动画） #>
     $c = New-Object System.Windows.Controls.Border
     $c.Background = Get-Brush $Script:CARD_BG
     $c.BorderBrush = Get-Brush $Script:CARD_BORDER
@@ -359,8 +457,8 @@ function New-ListCard {
     $c.Padding = New-Thick 13 11 13 11
     $c.Margin = New-Thick 0 0 0 7
     $c.Cursor = 'Hand'
-    $c.Add_MouseEnter({ if ($Script:SelectedCard -ne $this) { $this.Background = Get-Brush $Script:CARD_HOVER } })
-    $c.Add_MouseLeave({ if ($Script:SelectedCard -ne $this) { $this.Background = Get-Brush $Script:CARD_BG } })
+    $c.Add_MouseEnter({ if ($Script:SelectedCard -ne $this) { Start-ColorFade $this $Script:CARD_HOVER } })
+    $c.Add_MouseLeave({ if ($Script:SelectedCard -ne $this) { Start-ColorFade $this $Script:CARD_BG } })
     return $c
 }
 
@@ -822,7 +920,7 @@ $xamlText = @'
             <Border Grid.Row="0" Background="{DynamicResource CardBg}" CornerRadius="8" BorderBrush="{DynamicResource BorderMed}"
                     BorderThickness="1" Padding="13,11" Margin="0,0,0,10">
               <StackPanel>
-                <TextBlock Text="预设 · 点一下自动勾好。游戏预设保证三个游戏都不吃亏；浏览器瘦身按代价从小到大分三档。"
+                <TextBlock Text="预设 · 点一下自动勾好。先在「按用途选」里找到你自己那类；只玩竞技射击的用下面那排。涉及安全性的激进项不会进任何预设。"
                            Foreground="{DynamicResource TextDim}" FontSize="12" Margin="0,0,0,9"/>
                 <WrapPanel x:Name="PresetBar"/>
               </StackPanel>
@@ -1167,25 +1265,56 @@ function Build-PresetUI {
     $bar = $Script:UI.PresetBar
     $bar.Children.Clear()
 
+    # 分组顺序是写死的，不跟着定义顺序走。
+    #
+    # ★ 「按用途选」必须排第一 ★
+    #   v3.0 之前第一排是五个 FPS 预设，不玩 FPS 的人打开工具，
+    #   第一眼看到的全是跟自己无关的东西，会直接觉得「这工具不是给我用的」。
+    #   现在第一排是「你主要拿这台电脑干什么」，每个人都能对号入座。
+    $groupOrder = @('按用途选', '竞技射击', '浏览器瘦身')
     $groups = @()
+    foreach ($g in $groupOrder) {
+        if ($Script:Presets | Where-Object { $_.Group -eq $g }) { $groups += $g }
+    }
+    # 兜底：万一以后加了新分组忘了写进上面的顺序表，也别让它消失
     foreach ($ps in $Script:Presets) { if ($groups -notcontains $ps.Group) { $groups += $ps.Group } }
 
     foreach ($grp in $groups) {
-        $row = New-Object System.Windows.Controls.StackPanel
-        $row.Orientation = 'Horizontal'
+        # ★ 这里必须用 Grid，不能用横向 StackPanel ★
+        #   横向 StackPanel 会给子元素「无限宽度」去测量，
+        #   里面的 WrapPanel 因此永远认为自己放得下，一行排到天边，
+        #   超出窗口的按钮就被切掉了（名字长的预设只看得见前半截）。
+        #   Grid 的星号列会把「剩余的实际宽度」给 WrapPanel，才会真的换行。
+        $row = New-Object System.Windows.Controls.Grid
         $row.Margin = New-Thick 0 0 0 2
+        $cd0 = New-Object System.Windows.Controls.ColumnDefinition
+        $cd0.Width = [System.Windows.GridLength]::Auto
+        $cd1 = New-Object System.Windows.Controls.ColumnDefinition
+        $cd1.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        $row.ColumnDefinitions.Add($cd0)
+        $row.ColumnDefinitions.Add($cd1)
+
         $lbl = New-TextBlock -Text $grp -Size 11.5 -Bold $true -Color '#55606F'
         $lbl.Width = 68
-        $lbl.VerticalAlignment = 'Center'
+        $lbl.VerticalAlignment = 'Top'
+        $lbl.Margin = New-Thick 0 7 0 0
+        [System.Windows.Controls.Grid]::SetColumn($lbl, 0)
         $row.Children.Add($lbl) | Out-Null
+
         $wrap = New-Object System.Windows.Controls.WrapPanel
+        [System.Windows.Controls.Grid]::SetColumn($wrap, 1)
         foreach ($ps in ($Script:Presets | Where-Object { $_.Group -eq $grp })) {
             $b = New-Object System.Windows.Controls.Button
             $b.Content = $ps.Name
             $b.Tag = $ps
             $b.Margin = New-Thick 0 0 8 6
-            # 每组的主推项用强调色：游戏是三合一，浏览器是深度档
-            if ($ps.Id -in 'FPS3', 'BROW2') {
+            # ★ v3.0 起「竞技射击」那组不再用强调色 ★
+            #   以前 FPS3 是深色按钮，整屏最抢眼。但现在没有「唯一主推」了
+            #   —— 主推是哪个，取决于你是什么人。继续把 FPS 按钮做成
+            #   最显眼的那个，等于还在暗示「这工具是给打枪的用的」，
+            #   而那正是这一版要改掉的事。
+            #   浏览器那组保留强调，因为它确实有一个推荐默认档。
+            if ($ps.Id -eq 'BROW2') {
                 try { $b.Style = $Script:Window.FindResource('AccentButton') } catch { }
             }
             $b.Add_Click({ Select-Preset $this.Tag })
@@ -1223,6 +1352,7 @@ function Show-PresetDetail {
     param($Preset, [int]$Count)
     $p = $Script:UI.TweakDetail
     $p.Children.Clear()
+    Start-FadeSlideIn $p   # 换内容时淡入 + 轻微上移，避免「啪」地一下跳变
 
     $p.Children.Add((New-TextBlock -Text $Preset.Name -Size 17 -Bold $true -Wrap $true)) | Out-Null
 
@@ -1270,23 +1400,32 @@ function Show-TweakDetail {
     param($Tweak)
     $p = $Script:UI.TweakDetail
     $p.Children.Clear()
+    Start-FadeSlideIn $p   # 换内容时淡入 + 轻微上移，避免「啪」地一下跳变
     if ($Tweak -and $Script:TweakRows[$Tweak.Id]) { Select-Card $Script:TweakRows[$Tweak.Id].Card } else { Select-Card $null }
     if (-not $Tweak) {
         $p.Children.Add((New-TextBlock -Text '怎么用这一页' -Size 16 -Bold $true)) | Out-Null
         $tip = New-TextBlock -Wrap $true -Size 12.5 -Color '#565349' -Text @'
 
-最省事的办法：点上面的「★ 三合一 FPS 通用」，它会自动勾好
-对 CS2 / 无畏契约 / 三角洲行动 三个游戏都有好处的项目，
-然后点左下角「应用选中的优化」。
+最省事的办法：在上面「**按用途选**」那一排里，点你自己属于的那类。
+
+· **大型单机 3A** —— 黑神话、艾尔登法环这类，要的是不卡顿、读图快
+· **网游 / 挂机 / 多开** —— 重点在网络延迟和后台别抢带宽
+· **★ 不玩游戏** —— 办公上网刷视频，只想电脑别这么卡
+· **老机器救急** —— 配置吃紧、内存小、机械盘
+
+只玩竞技射击的，用下面「竞技射击」那一排。
+
+点完会自动勾好对应的项目，然后点左下角「应用选中的优化」。
 
 想自己挑，就点左边任意一项 —— 这里会显示：
 · 这一项是干什么的、原理是什么
-· 对 CS2、无畏契约、三角洲【分别】有什么影响
+· **对八种使用场景分别有什么影响**（同一项对不同人结论经常是相反的）
 · 代价和风险是什么、出问题怎么还原
 
-设计原则：所有预设都只做「三个游戏都不吃亏」的事。
-任何可能让其中一个变差的项目（比如全局关闭全屏优化），
-一律不放进预设，只留给你自己单独测。
+两条设计原则：
+1. 所有预设都只做「**对这类人不吃亏**」的事。可能让某种场景变差的项，
+   一律不放进预设，只留给你自己单独测。
+2. 涉及安全性的「激进优化」**不进任何预设**，必须你自己看完代价再勾。
 '@
         $p.Children.Add($tip) | Out-Null
         return
@@ -1305,14 +1444,55 @@ function Show-TweakDetail {
 
     $p.Children.Add((New-TextBlock -Text ("预期效果：" + $Tweak.Effect) -Size 12.5 -Color '#4A4842' -Wrap $true)) | Out-Null
 
-    # ---- 对三个 FPS 游戏分别的影响 ----
-    $gt = New-TextBlock -Text '对你玩的三个游戏分别意味着什么' -Size 13 -Bold $true -Color '#55606F'
+    # ---- 对各类使用场景的影响 ----
+    #
+    # v3.0 之前这里只讲「对三个 FPS 游戏的影响」，不玩 FPS 的人
+    # 每一项都看到一堆跟自己无关的内容。现在覆盖八种使用场景。
+    #
+    # 八张卡全平铺会很长，所以分两层：
+    #   第一层「一眼看懂」—— 按结论等级把场景名归拢成几行，扫一眼就知道
+    #   第二层  详细卡片  —— 结论和理由都相同的场景自动合并成一张
+    $gt = New-TextBlock -Text '这一项对各类使用场景意味着什么' -Size 13 -Bold $true -Color '#55606F'
     $gt.Margin = New-Thick 0 16 0 8
     $p.Children.Add($gt) | Out-Null
 
-    foreach ($g in $Script:GAME_LIST) {
-        $v = Get-TweakGameVerdict -Notes $Script:GameNotes -TweakId $Tweak.Id -GameKey $g.Key
-        $col = Get-VerdictColor $v.V
+    $merged = @(Get-MergedVerdicts -Notes $Script:GameNotes -TweakId $Tweak.Id)
+
+    # ---- 第一层：结论汇总 ----
+    # 按「必做 > 推荐 > 需实测 > 慎用 > 中性」排序，同一结论的场景并成一行。
+    $order = @{ '必做' = 0; '推荐' = 1; '需实测' = 2; '慎用' = 3; '中性' = 4 }
+    $byVerdict = [ordered]@{}
+    foreach ($m in $merged) {
+        if (-not $byVerdict.Contains($m.V)) { $byVerdict[$m.V] = New-Object System.Collections.ArrayList }
+        foreach ($nm in $m.Names) { [void]$byVerdict[$m.V].Add($nm) }
+    }
+    $sumBox = New-Object System.Windows.Controls.Border
+    $sumBox.Background = Get-Brush '#FBFAF8'
+    $sumBox.BorderBrush = Get-Brush '#E0DED8'
+    $sumBox.BorderThickness = New-Thick 1
+    $sumBox.CornerRadius = New-Object System.Windows.CornerRadius 6
+    $sumBox.Padding = New-Thick 11 9 11 6
+    $sumBox.Margin = New-Thick 0 0 0 10
+    $sumSp = New-Object System.Windows.Controls.StackPanel
+    foreach ($vk in ($byVerdict.Keys | Sort-Object { $order["$_"] })) {
+        $row = New-Object System.Windows.Controls.StackPanel
+        $row.Orientation = 'Horizontal'
+        $row.Margin = New-Thick 0 0 0 4
+        $vcol = Get-VerdictColor $vk
+        $b = New-Badge -Text $vk -Fg $vcol -Bg (Get-TintBg $vcol)
+        $b.Margin = New-Thick 0 0 8 0
+        $row.Children.Add($b) | Out-Null
+        $names = New-TextBlock -Text (($byVerdict[$vk]) -join ' · ') -Size 12 -Color '#4A4842' -Wrap $true
+        $names.VerticalAlignment = 'Center'
+        $row.Children.Add($names) | Out-Null
+        $sumSp.Children.Add($row) | Out-Null
+    }
+    $sumBox.Child = $sumSp
+    $p.Children.Add($sumBox) | Out-Null
+
+    # ---- 第二层：逐条理由 ----
+    foreach ($m in $merged) {
+        $col = Get-VerdictColor $m.V
 
         $gc = New-Object System.Windows.Controls.Border
         $gc.Background = Get-Brush '#FBFAF8'
@@ -1325,14 +1505,14 @@ function Show-TweakDetail {
         $gsp = New-Object System.Windows.Controls.StackPanel
         $hdr = New-Object System.Windows.Controls.StackPanel
         $hdr.Orientation = 'Horizontal'
-        $gname = New-TextBlock -Text $g.Short -Size 12.5 -Bold $true
+        $gname = New-TextBlock -Text (($m.Names) -join ' / ') -Size 12.5 -Bold $true -Wrap $true
         $hdr.Children.Add($gname) | Out-Null
-        $vb = New-Badge -Text $v.V -Fg $col -Bg (Get-TintBg $col)
+        $vb = New-Badge -Text $m.V -Fg $col -Bg (Get-TintBg $col)
         $vb.Margin = New-Thick 8 0 0 0
         $hdr.Children.Add($vb) | Out-Null
         $gsp.Children.Add($hdr) | Out-Null
 
-        $gn = New-TextBlock -Text $v.N -Size 12 -Color '#5E5B54' -Wrap $true
+        $gn = New-TextBlock -Text $m.N -Size 12 -Color '#5E5B54' -Wrap $true
         $gn.Margin = New-Thick 0 4 0 0
         $gsp.Children.Add($gn) | Out-Null
 
@@ -1620,6 +1800,7 @@ function Show-CleanDetail {
     param($Item)
     $p = $Script:UI.CleanDetail
     $p.Children.Clear()
+    Start-FadeSlideIn $p   # 换内容时淡入 + 轻微上移，避免「啪」地一下跳变
     if ($Item -and $Script:CleanRows[$Item.Id]) { Select-Card $Script:CleanRows[$Item.Id].Card } else { Select-Card $null }
     if (-not $Item) {
         $p.Children.Add((New-TextBlock -Text "点左边任意一项，这里会说明它清的是什么、安不安全。`r`n`r`n建议先点「扫描可清理的垃圾」看看各项能清多少，再决定。" -Color '#6E6B63' -Wrap $true)) | Out-Null
@@ -1938,6 +2119,42 @@ function Build-ThemeUI {
 
     $ic.Child = $isp
     $panel.Children.Add($ic) | Out-Null
+
+    # ---------- 动画开关 ----------
+    $t3 = New-TextBlock -Text '界面动画' -Size 15 -Bold $true
+    $t3.Margin = New-Thick 0 18 0 8
+    $panel.Children.Add($t3) | Out-Null
+
+    $ac = New-Object System.Windows.Controls.Border
+    $ac.Background = Get-Brush '#F6F5F2'
+    $ac.BorderBrush = Get-Brush '#E0DED8'
+    $ac.BorderThickness = New-Thick 1
+    $ac.CornerRadius = New-Object System.Windows.CornerRadius 8
+    $ac.Padding = New-Thick 14 12 14 14
+    $asp = New-Object System.Windows.Controls.StackPanel
+
+    $acb = New-Object System.Windows.Controls.CheckBox
+    $acb.Content = '开启界面动画（切换页面、点开详情时淡入）'
+    $acb.IsChecked = [bool]$Script:AnimEnabled
+    $acb.FontSize = 13
+    $acb.Add_Click({
+            $Script:AnimEnabled = [bool]$this.IsChecked
+            $st = Get-ThemeSetting
+            Save-ThemeSetting -Name $st.Name -Image $st.Image -Opacity $st.Opacity -Anim $Script:AnimEnabled
+            Set-Status $(if ($Script:AnimEnabled) { '界面动画已开启' } else { '界面动画已关闭' })
+        })
+    $asp.Children.Add($acb) | Out-Null
+
+    $atip = New-TextBlock -Size 12 -Color '#6E6B63' -Wrap $true -Text (
+        '动画只用透明度和位移两种效果，走显卡合成，不会触发页面重排 —— ' +
+        '正常机器上开销可以忽略。' + "`r`n`r`n" +
+        '但这个工具本来就是给配置吃紧的机器用的：如果你的机器点哪都要等一下，' +
+        '关掉动画能让操作反馈更"干脆"。关了之后所有切换都是瞬间完成，功能一模一样。')
+    $atip.Margin = New-Thick 0 8 0 0
+    $asp.Children.Add($atip) | Out-Null
+
+    $ac.Child = $asp
+    $panel.Children.Add($ac) | Out-Null
 }
 
 function Apply-PanelOpacity {
@@ -3245,6 +3462,8 @@ $Script:ThemeImage = ''
 $Script:ThemeOpacity = 0.88
 try {
     $savedTheme = Get-ThemeSetting
+    # 动画开关和皮肤存在同一份配置里，启动时一起读回来
+    $Script:AnimEnabled = [bool]$savedTheme.Anim
     Set-AppTheme -Name $savedTheme.Name -Image $savedTheme.Image -Opacity $savedTheme.Opacity
     Apply-PanelOpacity
 } catch { Write-Log "套用皮肤失败，用默认配色：$($_.Exception.Message)" '警告' }
@@ -3270,7 +3489,7 @@ $Script:Window.Add_ContentRendered({
         Build-ThemeUI
         if (Test-ProcAuditEnabled) { $Script:UI.BtnProcAudit.Content = '关闭持续记录' }
         Build-HealthUI
-        Set-Status '就绪 —— 先看「系统体检」页（有 ACE 反作弊环境检测），再回来点「★ 三合一 FPS 通用」预设'
+        Set-Status '就绪 —— 先看「系统体检」页，再回到「性能优化」页，在「按用途选」里点你属于的那一类'
     })
 
 # ---------------------------------------------------------------------
@@ -3289,6 +3508,8 @@ $Script:AppxBuilt = $false
 $Script:UI.Tabs.Add_SelectionChanged({
         param($sender, $e)
         if ($e.OriginalSource -ne $Script:UI.Tabs) { return }
+        # 切页签时让新页面淡入，比瞬间闪过去舒服
+        try { Start-FadeSlideIn $Script:UI.Tabs.SelectedContent -Ms 160 -SlideY 6 } catch { }
         $header = "$($Script:UI.Tabs.SelectedItem.Header)"
         if ($header -eq '自带软件' -and -not $Script:AppxBuilt) {
             $Script:AppxBuilt = $true

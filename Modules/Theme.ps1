@@ -182,8 +182,8 @@ function Get-BuiltinThemes {
 function Get-ThemeFile { Join-Path $Script:BackupDir 'theme.json' }
 
 function Get-ThemeSetting {
-    <# 返回 @{ Name; Image; Opacity } —— 读不到就给默认值 #>
-    $def = @{ Name = '暖灰（默认）'; Image = ''; Opacity = 0.88 }
+    <# 返回 @{ Name; Image; Opacity; Anim } —— 读不到就给默认值 #>
+    $def = @{ Name = '暖灰（默认）'; Image = ''; Opacity = 0.88; Anim = $true }
     try {
         $f = Get-ThemeFile
         if (-not (Test-Path -LiteralPath $f)) { return $def }
@@ -192,14 +192,19 @@ function Get-ThemeSetting {
             Name    = if ($j.Name) { "$($j.Name)" } else { $def.Name }
             Image   = if ($j.Image) { "$($j.Image)" } else { '' }
             Opacity = if ($j.Opacity) { [double]$j.Opacity } else { $def.Opacity }
+            # ★ 这里必须用 $null -eq 判断，不能写成 if ($j.Anim) ★
+            #   用户明确关掉动画时存进去的是 false，
+            #   用 if ($j.Anim) 判断的话 false 会被当成「没设置过」，
+            #   下次启动又自动变回开着 —— 用户会以为开关坏了。
+            Anim    = if ($null -ne $j.Anim) { [bool]$j.Anim } else { $true }
         }
     } catch { return $def }
 }
 
 function Save-ThemeSetting {
-    param([string]$Name, [string]$Image = '', [double]$Opacity = 0.88)
+    param([string]$Name, [string]$Image = '', [double]$Opacity = 0.88, [bool]$Anim = $true)
     try {
-        $o = [PSCustomObject]@{ Name = $Name; Image = $Image; Opacity = $Opacity }
+        $o = [PSCustomObject]@{ Name = $Name; Image = $Image; Opacity = $Opacity; Anim = $Anim }
         $o | ConvertTo-Json | Set-Content -LiteralPath (Get-ThemeFile) -Encoding UTF8
     } catch { Write-Log "保存皮肤设置失败：$($_.Exception.Message)" '警告' }
 }
@@ -296,7 +301,7 @@ function Set-AppTheme {
         $Script:Window.Background = [System.Windows.Media.Brush]$Script:Window.Resources['WindowBg']
     }
 
-    Save-ThemeSetting -Name $Name -Image $Image -Opacity $Opacity
+    Save-ThemeSetting -Name $Name -Image $Image -Opacity $Opacity -Anim ([bool]$Script:AnimEnabled)
 }
 
 function Test-ThemeIsDark {
