@@ -25,14 +25,29 @@ param(
 
     # 静默清理模式：不开界面，直接跑一遍推荐的清理项。
     # 「日常维护」页里的「每周自动清理」建立的计划任务就是调用这个。
-    [switch]$AutoClean
+    [switch]$AutoClean,
+
+    # 出图模式：把每一页各存一张 PNG 到指定目录，然后自动退出。
+    # 用来更新 README 里的界面截图 —— 也是改完界面之后唯一靠谱的自查方式：
+    # 程序会自己提权，外面的截图脚本发不进鼠标键盘、也拍不到提权窗口。
+    [string]$Shot = '',
+
+    # 只出某一页（页签序号，从 0 数）。不给就全出。
+    [int]$ShotTab = -1,
+
+    # 出图时临时把窗口拉到这么高，好把整页一次拍全。
+    # 注意窗口高度会被显示器工作区卡住，拉不到任意高 —— 页面更长就配合 -ShotScroll。
+    [int]$ShotH = 0,
+
+    # 出图前把页面里的滚动区往下滚这么多像素，用来拍长页面的下半截。
+    [int]$ShotScroll = 0
 )
 
 $ErrorActionPreference = 'Continue'
 
 # ===== 版本号 =====
 # 改版本号只改这一处，标题栏 / 副标题 / 诊断报告都从这里取。
-$Script:AppVersion     = '5.0'
+$Script:AppVersion     = '5.1'
 $Script:AppVersionDate = '2026-09-27'
 
 # ---------------------------------------------------------------------
@@ -127,9 +142,13 @@ $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $SelfTest -and -not $AutoClean -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     try {
         $exe = (Get-Process -Id $PID).Path
-        Start-Process -FilePath $exe -Verb RunAs -ArgumentList @(
-            '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`""
-        )
+        $argv = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+        # 提权是重开一个进程 —— 原来带的参数得跟着过去，否则出图模式一提权就没了
+        if ($Shot) { $argv += @('-Shot', "`"$Shot`"") }
+        if ($ShotTab -ge 0) { $argv += @('-ShotTab', "$ShotTab") }
+        if ($ShotH -gt 0) { $argv += @('-ShotH', "$ShotH") }
+        if ($ShotScroll -gt 0) { $argv += @('-ShotScroll', "$ShotScroll") }
+        Start-Process -FilePath $exe -Verb RunAs -ArgumentList $argv
     } catch {
         [System.Windows.Forms.MessageBox]::Show(
             "这个工具需要管理员权限才能修改系统设置。`r`n`r`n请双击「电脑调优助手.exe」，并在弹出的「用户账户控制」里点「是」。",
@@ -475,6 +494,20 @@ function New-Thick {
     if ($null -eq $T) { return (New-Object System.Windows.Thickness $L) }
     return (New-Object System.Windows.Thickness $L, $T, $R, $B)
 }
+function Find-Descendants {
+    <# 在可视树里找出某个类型的所有后代。出图模式滚页面用。 #>
+    param($Root, [Type]$Type)
+    $out = @()
+    if ($null -eq $Root) { return $out }
+    $n = [System.Windows.Media.VisualTreeHelper]::GetChildrenCount($Root)
+    for ($i = 0; $i -lt $n; $i++) {
+        $c = [System.Windows.Media.VisualTreeHelper]::GetChild($Root, $i)
+        if ($c -is $Type) { $out += $c }
+        $out += Find-Descendants $c $Type
+    }
+    return $out
+}
+
 function Sync-UI {
     <# WPF 版的 DoEvents：长任务执行时让界面还能刷新，不至于「假死」 #>
     $frame = New-Object System.Windows.Threading.DispatcherFrame
@@ -955,122 +988,127 @@ function Get-TintBg {
 # 报告表的列轨。★ 这是模数，别在调用处手填宽度 ★
 #   窄了缩列，不重排 —— 四栏的相对位置在任何宽度下都不变，
 #   这样用户扫第二行时不用重新找「结果」在哪。
-$Script:RptCol = @{ Result = 86; Mark = 30; Bar = 184; Ref = 104; Unit = 46 }
+$Script:RptCol = @{ Result = 86; Mark = 30; Bar = 212; Ref = 104; Unit = 46 }
 
-$Script:BarW = 168      # 区间条内宽。★ 模数，别在调用处手填 ★
+$Script:BarW = 204      # 血条总宽（含右边百分比）。★ 模数，别在调用处手填 ★
 
 function New-RangeBar {
     <#
-      参考区间条。返回 @{ Host; Track; Band; Tick; Lo; Hi }
+      血条。返回 @{ Host; Track; Fill; Line; Pct }
 
-      画法（照着化验单上的参考区间图）：
-          ├──────▓▓▓▓▓▓▓▓▓▓──────┤
-                      │
-                    你的值
+      画法：
+          ████████████░░░░░░░│░░░   41%
+          └─ 填了多少 ────┘   └ 安全线
 
-        Track  整条量程（0 ~ 满量程）
-        Band   合格区间，填一层很淡的同色块
-        Tick   你的值所在位置的刻记
+        Track  整条量程的底槽
+        Fill   当前值填掉的那一段
+        Line   安全线（合格上限或下限所在的位置）
+        Pct    填充比例，写在条子右边
 
-      ★ 刻记落在 Band 外面时上法定墨 ★
-        这样「超了」这件事同时被三处表达：数字加粗上墨、↑ 标记、刻记跑出区间。
-        同一件事说三遍不是啰嗦 —— 用户扫表时可能只看见其中任何一处。
+      ★ 为什么不是化验单那张参考区间图 ★
+        上一版照化验单画了「底槽 + 合格区间色块 + 一根刻记」。
+        三个抽象符号叠在一条 168px 的线上，读者得先分清哪个代表自己
+        才能开始读 —— 老板一句「一点都看不懂」，那就是设计错了，
+        不是他没耐心。血条不用教：填得多就是占得多。
+
+      ★ 越线时整条上法定墨，不是只红超出的那一段 ★
+        血量告急是整条变红，这是所有人都见过的。
+        只红一小段，反而要读者去比较两段颜色的长度。
     #>
     $g = New-Object System.Windows.Controls.Grid
     $g.Width = $Script:BarW
-    $g.Height = 18
+    $g.Height = 20
     $g.HorizontalAlignment = 'Left'
     $g.VerticalAlignment = 'Center'
 
-    # 量程底槽
+    $barW = $Script:BarW - 44      # 右边留给百分比
+
+    # 底槽
     $track = New-Object System.Windows.Shapes.Rectangle
-    $track.Height = 5
-    $track.RadiusX = 0; $track.RadiusY = 0
-    $track.Fill = Get-Brush '#E5E3DC'          # SurfaceSunken
+    $track.Width = $barW
+    $track.Height = 11
+    $track.RadiusX = 1; $track.RadiusY = 1
+    $track.Fill = Get-Brush '#D2D0C9'          # BorderMed，比 SurfaceSunken 深一档
+    #   ★ 底槽必须在纸色上看得见 ★
+    #     用 SurfaceSunken(#E5E3DC) 拍出来几乎隐形，0% 那一行只剩一根竖线，
+    #     读者不知道满格在哪，血条就白画了。
+    $track.HorizontalAlignment = 'Left'
     $track.VerticalAlignment = 'Center'
     $g.Children.Add($track) | Out-Null
 
-    # 合格区间。★ 必须明显亮于底槽 ★
-    #   上一版 band 用 BorderMed，和底槽只差一两个灰阶，
-    #   整条看下来根本分不出哪一段是合格的 —— 那这张图就白画了。
-    $band = New-Object System.Windows.Shapes.Rectangle
-    $band.Height = 5
-    $band.HorizontalAlignment = 'Left'
-    $band.VerticalAlignment = 'Center'
-    $band.Fill = Get-Brush '#C6C4BC'           # BorderStrong
-    $band.Width = 0
-    $g.Children.Add($band) | Out-Null
+    # 填充段
+    $fill = New-Object System.Windows.Shapes.Rectangle
+    $fill.Height = 11
+    $fill.RadiusX = 1; $fill.RadiusY = 1
+    $fill.Width = 0
+    $fill.HorizontalAlignment = 'Left'
+    $fill.VerticalAlignment = 'Center'
+    $fill.Fill = Get-Brush '#565349'           # 中性深灰，正常值不上彩墨
+    $g.Children.Add($fill) | Out-Null
 
-    # 区间两端的端点线，化验单上那个 ├ ┤
-    $capL = New-Object System.Windows.Shapes.Rectangle
-    $capL.Width = 1.5; $capL.Height = 11
-    $capL.HorizontalAlignment = 'Left'; $capL.VerticalAlignment = 'Center'
-    $capL.Fill = Get-Brush '#C6C4BC'
-    $capL.Visibility = 'Collapsed'
-    $g.Children.Add($capL) | Out-Null
+    # 安全线。★ 必须比填充色深、比底槽重，否则被填充段吃掉看不见 ★
+    $line = New-Object System.Windows.Shapes.Rectangle
+    $line.Width = 2
+    $line.Height = 18
+    $line.HorizontalAlignment = 'Left'
+    $line.VerticalAlignment = 'Center'
+    $line.Fill = Get-Brush '#2B2A26'           # TextMain
+    $line.Visibility = 'Collapsed'
+    $g.Children.Add($line) | Out-Null
 
-    $capR = New-Object System.Windows.Shapes.Rectangle
-    $capR.Width = 1.5; $capR.Height = 11
-    $capR.HorizontalAlignment = 'Left'; $capR.VerticalAlignment = 'Center'
-    $capR.Fill = Get-Brush '#C6C4BC'
-    $capR.Visibility = 'Collapsed'
-    $g.Children.Add($capR) | Out-Null
+    # 百分比。★ 表格数位 ★ 每秒刷新时不加这句整列会左右抖
+    $pct = New-TextBlock -Text '' -Size 13 -Color '#66635B'
+    $pct.HorizontalAlignment = 'Right'
+    $pct.VerticalAlignment = 'Center'
+    [System.Windows.Documents.Typography]::SetNumeralAlignment($pct, 'Tabular')
+    $g.Children.Add($pct) | Out-Null
 
-    # 你的值
-    $tick = New-Object System.Windows.Shapes.Rectangle
-    $tick.Width = 3
-    $tick.Height = 17
-    $tick.HorizontalAlignment = 'Left'
-    $tick.VerticalAlignment = 'Center'
-    $tick.Fill = Get-Brush '#2B2A26'           # TextMain
-    $tick.Visibility = 'Collapsed'
-    $g.Children.Add($tick) | Out-Null
-
-    return @{ Host = $g; Track = $track; Band = $band; CapL = $capL; CapR = $capR; Tick = $tick }
+    return @{ Host = $g; Track = $track; Fill = $fill; Line = $line; Pct = $pct; W = $barW }
 }
 
 function Set-RangeBar {
     <#
-      刷一条区间条。
-        Value  当前值（$null = 读不到，整条隐掉刻记）
+      刷一条血条。
+        Value  当前值（$null = 读不到，条子留空、百分比写「—」）
         Max    满量程
-        Lo/Hi  合格区间的下/上限（$null 表示那一侧不限）
-      读不到就不画刻记 —— 和「绝不编数字」一个道理，不画假位置。
+        Lo/Hi  安全线。Lo = 低于它就不合格（刷新率、剩余空间）
+                        Hi = 高于它就不合格（温度、占用率）
+        Abnormal 越线了 —— 整条上法定墨
+
+      读不到就不填 —— 和「绝不编数字」一个道理，不画一个假的长度。
     #>
     param($Bar, $Value, [double]$Max = 100, $Lo = $null, $Hi = $null, [bool]$Abnormal = $false)
     if ($null -eq $Bar) { return }
     if ($Max -le 0) { $Max = 100 }
-    $w = $Script:BarW
+    $w = [double]$Bar.W
 
-    # 合格区间
-    $lo = if ($null -ne $Lo) { [double]$Lo } else { 0 }
-    $hi = if ($null -ne $Hi) { [double]$Hi } else { $Max }
-    $lo = [math]::Max(0, [math]::Min($lo, $Max))
-    $hi = [math]::Max(0, [math]::Min($hi, $Max))
-    if ($null -eq $Lo -and $null -eq $Hi) {
-        # 没有参考范围的项（瞬时占用率）：只画量程和刻记，不画合格区间 ——
-        # 画了就等于编了一个并不存在的阈值
-        $Bar.Band.Width = 0
-        $Bar.CapL.Visibility = 'Collapsed'
-        $Bar.CapR.Visibility = 'Collapsed'
+    # --- 安全线 ---
+    #   两侧都有限值时（很少见）画上限那一侧 —— 用户更怕的是超上限。
+    $mark = if ($null -ne $Hi) { [double]$Hi } elseif ($null -ne $Lo) { [double]$Lo } else { $null }
+    if ($null -eq $mark) {
+        # 没有阈值的项（瞬时占用率）：不画安全线。
+        # 画了就等于对用户承诺了一个并不存在的标准。
+        $Bar.Line.Visibility = 'Collapsed'
     } else {
-        $x1 = $w * $lo / $Max
-        $x2 = $w * $hi / $Max
-        $Bar.Band.Margin = New-Thick $x1 0 0 0
-        $Bar.Band.Width = [math]::Max(0, $x2 - $x1)
-        # 端点线只在那一侧真的有限值时才画 —— 「< 95」没有下限，就不画左端点
-        $Bar.CapL.Visibility = $(if ($null -ne $Lo) { 'Visible' } else { 'Collapsed' })
-        $Bar.CapL.Margin = New-Thick ([math]::Max(0, $x1 - 0.75)) 0 0 0
-        $Bar.CapR.Visibility = $(if ($null -ne $Hi) { 'Visible' } else { 'Collapsed' })
-        $Bar.CapR.Margin = New-Thick ([math]::Max(0, $x2 - 0.75)) 0 0 0
+        $mk = [math]::Max(0, [math]::Min($mark, $Max))
+        $Bar.Line.Visibility = 'Visible'
+        $Bar.Line.Margin = New-Thick ([math]::Max(0, $w * $mk / $Max - 1)) 0 0 0
     }
 
-    if ($null -eq $Value) { $Bar.Tick.Visibility = 'Collapsed'; return }
+    # --- 填充 ---
+    if ($null -eq $Value) {
+        $Bar.Fill.Width = 0
+        $Bar.Pct.Text = '—'
+        $Bar.Pct.Foreground = Get-Brush '#66635B'
+        return
+    }
     $v = [math]::Max(0, [math]::Min([double]$Value, $Max))
-    $Bar.Tick.Visibility = 'Visible'
-    $Bar.Tick.Margin = New-Thick ([math]::Max(0, $w * $v / $Max - 1.5)) 0 0 0
-    $Bar.Tick.Fill = Get-Brush $(if ($Abnormal) { '#8A5750' } else { '#2B2A26' })
-    $Bar.Tick.Height = $(if ($Abnormal) { 19 } else { 17 })
+    $Bar.Fill.Width = [math]::Max(0, $w * $v / $Max)
+    $Bar.Fill.Fill = Get-Brush $(if ($Abnormal) { '#8A5750' } else { '#565349' })
+
+    $Bar.Pct.Text = ('{0}%' -f [math]::Round(100 * $v / $Max))
+    $Bar.Pct.Foreground = Get-Brush $(if ($Abnormal) { '#8A5750' } else { '#66635B' })
+    $Bar.Pct.FontWeight = $(if ($Abnormal) { 'SemiBold' } else { 'Normal' })
 }
 
 # =====================================================================
@@ -1335,6 +1373,60 @@ function New-RptGrid {
     return $g
 }
 
+function Add-RptAct {
+    <# 往一行的处置位里塞一个控件，顺手把处置位显形 #>
+    param($Row, $Control)
+    if ($null -eq $Row -or $null -eq $Control) { return }
+    if ($Control -is [System.Windows.Controls.Control]) { $Control.Margin = New-Thick 0 0 8 6 }
+    $Row.Act.Children.Add($Control) | Out-Null
+    $Row.Act.Visibility = 'Visible'
+}
+
+function New-ActRow {
+    <#
+      一行处置项：左边项目名 + 一行小字说明，右边动作。
+      返回 @{ Row; Slot; Note }
+
+      ★ 别再用圆角卡片装这些 ★
+        上一版这一页是四张带底色的圆角卡叠下来。卡片本身不携带任何信息，
+        只是把页面切成四块 —— 四块一样大，读者反而分不出哪件事更重要。
+        一条细线做同样的分隔，而且不抢墨。
+    #>
+    param([string]$Name, [string]$Note = '')
+    $wrap = New-Object System.Windows.Controls.Border
+    $wrap.Padding = New-Thick 0 11 0 11
+    $wrap.BorderBrush = Get-Brush $Script:CARD_BORDER
+    $wrap.BorderThickness = New-Thick 0 0 0 1
+
+    $g = New-Object System.Windows.Controls.Grid
+    $cd0 = New-Object System.Windows.Controls.ColumnDefinition
+    $cd0.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+    $g.ColumnDefinitions.Add($cd0)
+    $cd1 = New-Object System.Windows.Controls.ColumnDefinition
+    $cd1.Width = New-Object System.Windows.GridLength -1, ([System.Windows.GridUnitType]::Auto)
+    $g.ColumnDefinitions.Add($cd1)
+
+    $left = New-Object System.Windows.Controls.StackPanel
+    $left.VerticalAlignment = 'Center'
+    $nm = New-TextBlock -Text $Name -Size 15 -Color '#2B2A26' -Wrap $true
+    $left.Children.Add($nm) | Out-Null
+    $nt = New-TextBlock -Text $Note -Size 13 -Color '#66635B' -Wrap $true
+    $nt.Margin = New-Thick 0 3 0 0
+    if (-not $Note) { $nt.Visibility = 'Collapsed' }
+    $left.Children.Add($nt) | Out-Null
+    $g.Children.Add($left) | Out-Null
+
+    $slot = New-Object System.Windows.Controls.StackPanel
+    $slot.Orientation = 'Horizontal'
+    $slot.VerticalAlignment = 'Center'
+    $slot.Margin = New-Thick 18 0 0 0
+    [System.Windows.Controls.Grid]::SetColumn($slot, 1)
+    $g.Children.Add($slot) | Out-Null
+
+    $wrap.Child = $g
+    return @{ Row = $wrap; Slot = $slot; Note = $nt; Name = $nm }
+}
+
 function New-RptHeader {
     <# 表头行：项目 / 结果 / 参考范围 / 单位，下面一条粗线 #>
     param([string]$First = '项目')
@@ -1346,8 +1438,8 @@ function New-RptHeader {
         @{ T = $First; Col = 0; Align = 'Left' },
         @{ T = '结果'; Col = 1; Align = 'Right' },
         @{ T = ''; Col = 2; Align = 'Center' },
-        @{ T = '量程'; Col = 3; Align = 'Left' },
-        @{ T = '参考范围'; Col = 4; Align = 'Right' },
+        @{ T = '占了多少'; Col = 3; Align = 'Left' },
+        @{ T = '安全范围'; Col = 4; Align = 'Right' },
         @{ T = '单位'; Col = 5; Align = 'Right' })
     foreach ($c in $cells) {
         if (-not $c.T) { continue }
@@ -1381,7 +1473,8 @@ function New-RptRow {
         [string]$Ref = '',
         [string]$Unit = '',
         [string]$Note = '',
-        [bool]$Zebra = $false
+        [bool]$Zebra = $false,
+        [bool]$NoBar = $false
     )
     $wrap = New-Object System.Windows.Controls.Border
     $wrap.Padding = New-Thick 0 9 0 9
@@ -1418,6 +1511,9 @@ function New-RptRow {
     #   化验单自带的那张图：一条量程、一段合格区间、一个刻记。
     #   它比圆环多一层信息 —— 不只是「你多少」，而是「你在合格区间的哪」。
     $bar = New-RangeBar
+    # 没有量程可言的项（「一键维护」这种纯操作行）不画空槽 ——
+    # 画一条永远空着的量程，等于对用户承诺了一个并不存在的测量。
+    if ($NoBar) { $bar.Host.Visibility = 'Collapsed' }
     [System.Windows.Controls.Grid]::SetColumn($bar.Host, 3)
     $g.Children.Add($bar.Host) | Out-Null
 
@@ -1444,8 +1540,23 @@ function New-RptRow {
     if (-not $Note) { $nt.Visibility = 'Collapsed' }
     $outer.Children.Add($nt) | Out-Null
 
+    # --- 处置位 ---
+    #   报告单上「处置 / 医嘱」是跟在那一行结论后面的，不另开一栏。
+    #   界面上同理：能对这一项做的操作就排在它的附注下面，
+    #   而不是收进页尾一排按钮里让用户自己对号。
+    #   没人往里塞控件就不占高度。
+    #   ★ WrapPanel，不是横排 StackPanel ★
+    #     刷新率那一行有八个档位按钮，横排会顶出行宽。
+    #   ★ WrapPanel 在 System.Windows.Controls，不在 .Primitives ★
+    #     （UniformGrid 才在 Primitives。写错了 New-Object 返回 $null，
+    #       后面每一句都在 $null 上操作，界面少一块但不报错 —— 踩过。）
+    $act = New-Object System.Windows.Controls.WrapPanel
+    $act.Margin = New-Thick 0 7 0 0
+    $act.Visibility = 'Collapsed'
+    $outer.Children.Add($act) | Out-Null
+
     $wrap.Child = $outer
-    $r = @{ Row = $wrap; Name = $nm; Result = $rs; Mark = $mk; Ref = $rf; Unit = $un; Note = $nt; Bar = $bar }
+    $r = @{ Row = $wrap; Name = $nm; Result = $rs; Mark = $mk; Ref = $rf; Unit = $un; Note = $nt; Bar = $bar; Act = $act }
     Set-RptMark $r $Mark
     return $r
 }
@@ -1884,7 +1995,7 @@ $xamlText = @'
               </Grid.ColumnDefinitions>
               <TextBlock Text="检验项目" Grid.Column="0" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}" Margin="26,0,0,0"/>
               <TextBlock Text="结果" Grid.Column="1" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
-              <TextBlock Text="参考范围" Grid.Column="3" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
+              <TextBlock Text="安全范围" Grid.Column="3" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
             </Grid>
             <Rectangle Grid.Row="3" Height="1.5" Fill="{DynamicResource BorderMed}" Margin="0,6,10,0"/>
             <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -1966,8 +2077,8 @@ $xamlText = @'
                 <RowDefinition Height="*"/>
               </Grid.RowDefinitions>
               <StackPanel Grid.Row="0">
-                <TextBlock Text="大文件查找" FontSize="15" FontWeight="SemiBold"/>
-                <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextDim}" Margin="0,6,0,0"
+                <TextBlock Text="大文件查找" FontSize="17" FontWeight="SemiBold"/>
+                <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextDim}" Margin="0,6,0,0"
                            Text="「我的 C 盘到底被什么占满了」—— 点一个盘符开始扫描，列出最大的 40 个文件。只列出来给你看，不会自动删任何东西。扫描要一两分钟。"/>
                 <WrapPanel x:Name="BigFileDrives" Margin="0,10,0,6"/>
               </StackPanel>
@@ -3942,7 +4053,7 @@ function Build-StartupUI {
         return
     }
 
-    Add-ColHeader $panel -First '开机启动项' -Cols @(@{ T = '结果'; W = 76 }, @{ T = '参考范围'; W = 88 })
+    Add-ColHeader $panel -First '开机启动项' -Cols @(@{ T = '结果'; W = 76 }, @{ T = '安全范围'; W = 88 })
     foreach ($it in $items) {
         # 行式表，和别的页一个语汇：没有圆角、没有底色、没有边框盒子，
         # 只有一条行间细线。深度靠表面阶梯，不靠盒子。
@@ -4037,30 +4148,6 @@ $card.Child = $g
 # ---------------------------------------------------------------------
 #  7.5 日常维护页
 # ---------------------------------------------------------------------
-function New-MaintainCard {
-    <# 生成一个带标题和说明的卡片，返回卡片本身和可往里塞控件的容器 #>
-    param([string]$Title, [string]$Desc)
-    $card = New-Object System.Windows.Controls.Border
-    $card.Background = Get-Brush '#F6F5F2'
-    $card.BorderBrush = Get-Brush '#E0DED8'
-    $card.BorderThickness = New-Thick 1
-    $card.CornerRadius = New-Object System.Windows.CornerRadius 9
-    $card.Padding = New-Thick 16 14 16 14
-    $card.Margin = New-Thick 0 0 0 10
-
-    $sp = New-Object System.Windows.Controls.StackPanel
-    $sp.Children.Add((New-TextBlock -Text $Title -Size 14.5 -Bold $true)) | Out-Null
-    if ($Desc) {
-        $d = New-TextBlock -Text $Desc -Size 12 -Color '#66635B' -Wrap $true
-        $d.Margin = New-Thick 0 6 0 0
-        $sp.Children.Add($d) | Out-Null
-    }
-    $body = New-Object System.Windows.Controls.StackPanel
-    $body.Margin = New-Thick 0 11 0 0
-    $sp.Children.Add($body) | Out-Null
-    $card.Child = $sp
-    return @{ Card = $card; Body = $body }
-}
 
 function New-ToolButton {
     param([string]$Text, [scriptblock]$OnClick, $Tag = $null)
@@ -4244,160 +4331,43 @@ function Export-DiagnosticReport {
 }
 
 function Build-MaintainUI {
+    <#
+      这一页是报告单末尾的「处置」栏：能测的先报数，能做的就跟在那一行后面。
+
+      ★ 全页只有两种行 ★
+        New-RptRow  —— 有数可报的项（刷新率、硬盘寿命、占用）
+        New-ActRow  —— 只有动作的项（一键维护、开关、打开某个设置）
+      上一版是四张一模一样的圆角卡，四件轻重完全不同的事看起来一样重。
+    #>
     $p = $Script:UI.MaintainPanel
     $p.Children.Clear()
 
-    # ---------- 一键日常维护 ----------
-    $c1 = New-MaintainCard -Title '一键日常维护' -Desc '平时每个月点一次就行：清垃圾 + 刷新 DNS + 优化系统盘，一条龙。不会改任何性能设置。'
-    $bAll = New-ToolButton -Text '开始一键维护' -OnClick { Invoke-DailyMaintenance }
+    function Add-Sec {
+        param([string]$Title, [string]$Aside = '', [bool]$First = $false)
+        $sec = New-RptSection -Title $Title -Aside $Aside
+        $sec.Margin = New-Thick 0 $(if ($First) { 0 } else { 24 }) 0 8
+        $p.Children.Add($sec) | Out-Null
+    }
+
+    # ==================== 例行处置 ====================
+    Add-Sec -Title '例行处置' -Aside '每月一次就够' -First $true
+
+    $r1 = New-ActRow -Name '一键日常维护' `
+        -Note '清垃圾 + 刷新 DNS + 优化系统盘，一条龙。不会改任何性能设置，也不碰你的文件。'
+    $bAll = New-ToolButton -Text '开始维护' -OnClick { Invoke-DailyMaintenance }
     try { $bAll.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
-    # ★ 这里以前有一句 $bAll.Padding = New-Thick 22 10 22 10，别加回去 ★
-    #   那是给旧按钮样式调的。HandyControl 的按钮模板自己算高度，
-    #   再塞 10px 上下内边距，内容就超出按钮实际高度被**竖着切掉**，
-    #   「开始一键维护」会显示成上半截没了的样子。
-    $bAll.HorizontalAlignment = 'Left'
-    $c1.Body.Children.Add($bAll) | Out-Null
-    $p.Children.Add($c1.Card) | Out-Null
+    # ★ 别给它加 Padding ★ HandyControl 的按钮模板自己算高度，
+    #   再塞上下内边距，文字会超出按钮高度被竖着切掉。
+    $bAll.Margin = New-Thick 0
+    $r1.Slot.Children.Add($bAll) | Out-Null
+    $p.Children.Add($r1.Row) | Out-Null
 
-    # ---------- 显示器刷新率 ----------
-    # 买了高刷屏却还跑在 60Hz 非常常见（换线、重装驱动、接新屏都会退回去）。
-    # 对 FPS 玩家来说这个差距比任何注册表优化都大，所以放在第二位。
-    $cur = Get-CurrentDisplayMode
-    $opts = @(Get-DisplayRefreshOptions)
-    if ($cur -and $opts.Count -gt 0) {
-        $maxHz = $opts[0]
-        $desc = if ($cur.Hz -lt $maxHz) {
-            "当前 $($cur.Hz)Hz，但这套「显示器 + 线 + 显卡」最高能跑 $maxHz Hz —— 没跑满。"
-        } else {
-            "当前 $($cur.Hz)Hz，已经是这套配置能跑的最高刷新率。"
-        }
-        $c15 = New-MaintainCard -Title '显示器刷新率' -Desc ("{0} x {1}   ·   {2}" -f $cur.Width, $cur.Height, $desc)
-        $wrap15 = New-Object System.Windows.Controls.WrapPanel
-        foreach ($hz in $opts) {
-            $b = New-ToolButton -Text ("{0} Hz" -f $hz) -Tag $hz -OnClick { Invoke-SetRefresh $this.Tag }
-            if ($hz -eq $cur.Hz) {
-                $b.IsEnabled = $false
-                $b.Content = "{0} Hz（当前）" -f $hz
-            } elseif ($hz -eq $maxHz) {
-                try { $b.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
-                $b.Content = "{0} Hz（最高）" -f $hz
-            }
-            $wrap15.Children.Add($b) | Out-Null
-        }
-        $c15.Body.Children.Add($wrap15) | Out-Null
-        $t15 = New-TextBlock -Size 11.5 -Color '#66635B' -Wrap $true -Text '切换后会弹一个 15 秒倒计时确认框。万一切完黑屏或花屏，什么都别动，倒计时结束会自动切回原来的设置 —— 和 Windows 自己改分辨率时的行为一样。'
-        $t15.Margin = New-Thick 0 8 0 0
-        $c15.Body.Children.Add($t15) | Out-Null
-        $p.Children.Add($c15.Card) | Out-Null
-    }
-
-    # ---------- 快捷小工具 ----------
-    $c2 = New-MaintainCard -Title '快捷小工具' -Desc '一些偶尔会用到、但藏得很深的系统功能。'
-    $wrap2 = New-Object System.Windows.Controls.WrapPanel
-    $wrap2.Children.Add((New-ToolButton -Text '刷新 DNS 缓存' -OnClick {
-                Clear-DnsCacheNow | Out-Null
-                Show-Msg -Text "DNS 缓存已刷新。`r`n`r`n什么时候用它：某个网站突然打不开但别的正常、刚换过 DNS、游戏登录服务器连不上但网页能开。" | Out-Null
-            })) | Out-Null
-    $wrap2.Children.Add((New-ToolButton -Text '重启资源管理器' -OnClick {
-                Restart-ExplorerShell
-                Set-Status '资源管理器已重启'
-            })) | Out-Null
-    $wrap2.Children.Add((New-ToolButton -Text '打开系统磁盘清理' -OnClick {
-                Start-Process 'cleanmgr.exe' -ArgumentList "/d $env:SystemDrive" -ErrorAction SilentlyContinue
-            })) | Out-Null
-    $wrap2.Children.Add((New-ToolButton -Text '打开存储设置' -OnClick {
-                Start-Process 'ms-settings:storagesense' -ErrorAction SilentlyContinue
-            })) | Out-Null
-    $wrap2.Children.Add((New-ToolButton -Text '打开已安装程序' -OnClick {
-                Start-Process 'ms-settings:appsfeatures' -ErrorAction SilentlyContinue
-            })) | Out-Null
-    $c2.Body.Children.Add($wrap2) | Out-Null
-    $tip2 = New-TextBlock -Size 11.5 -Color '#66635B' -Wrap $true -Text '顺带一提：游戏里画面卡死、显卡驱动假死的时候，按 Win + Ctrl + Shift + B 可以直接重启显卡驱动，屏幕会黑一下然后恢复，不用重启电脑。这是 Windows 自带的快捷键。'
-    $tip2.Margin = New-Thick 0 8 0 0
-    $c2.Body.Children.Add($tip2) | Out-Null
-    $p.Children.Add($c2.Card) | Out-Null
-
-    # ---------- 磁盘优化 ----------
-    $c3 = New-MaintainCard -Title '磁盘优化（固态 TRIM / 机械 碎片整理）' -Desc '工具会自动识别介质：固态盘做 TRIM（恢复写入速度），机械盘做碎片整理。不会对固态盘做碎片整理——那只会白白消耗寿命。半年做一次就够。'
-    foreach ($v in (Get-VolumesToOptimize)) {
-        $row = New-Object System.Windows.Controls.StackPanel
-        $row.Orientation = 'Horizontal'
-        $row.Margin = New-Thick 0 0 0 6
-        $lbl = New-TextBlock -Text ("{0}:  {1}   {2} / {3} 可用" -f $v.Letter, $(if ($v.IsSSD) { '固态' } else { '机械' }), (Format-Size $v.Free), (Format-Size $v.Size)) -Size 12.5
-        $lbl.VerticalAlignment = 'Center'
-        $lbl.Width = 260
-        $row.Children.Add($lbl) | Out-Null
-        $row.Children.Add((New-ToolButton -Text $(if ($v.IsSSD) { '执行 TRIM' } else { '碎片整理' }) -Tag $v -OnClick {
-                    $vv = $this.Tag
-                    Set-Status ("正在优化 {0} 盘，机械盘可能要几十分钟，请耐心等…" -f $vv.Letter)
-                    Sync-UI
-                    $ok = Invoke-DiskOptimize -DriveLetter $vv.Letter -IsSSD $vv.IsSSD
-                    Set-Status $(if ($ok) { "$($vv.Letter) 盘优化完成" } else { "$($vv.Letter) 盘优化失败，详见日志" })
-                })) | Out-Null
-        $c3.Body.Children.Add($row) | Out-Null
-    }
-    $p.Children.Add($c3.Card) | Out-Null
-
-    # ---------- 硬盘健康 ----------
-    $c4 = New-MaintainCard -Title '硬盘健康与寿命' -Desc '读 SMART 数据。老机器最怕硬盘悄悄坏掉，这里能提前发现苗头。'
-    foreach ($d in (Get-DiskHealthReport)) {
-        $col = switch ($d.Level) { '严重' { '#8A5750' } '建议' { '#7A6B45' } default { '#556B54' } }
-        $b = New-Object System.Windows.Controls.Border
-        $b.BorderBrush = Get-Brush $col
-        $b.BorderThickness = New-Thick 3 0 0 0
-        $b.Background = Get-Brush '#FBFAF8'
-        $b.CornerRadius = New-Object System.Windows.CornerRadius 4
-        $b.Padding = New-Thick 11 8 11 9
-        $b.Margin = New-Thick 0 0 0 6
-        $sp = New-Object System.Windows.Controls.StackPanel
-        $sp.Children.Add((New-TextBlock -Text ("{0}   {1}   {2}" -f $d.Name, $d.Media, $d.Size) -Size 12.5 -Bold $true -Wrap $true)) | Out-Null
-        $extra = @()
-        if ($null -ne $d.Temp -and $d.Temp -gt 0) { $extra += "温度 $($d.Temp)°C" }
-        if ($null -ne $d.Hours) { $extra += "已通电 $($d.Hours) 小时" }
-        if ($extra.Count -gt 0) {
-            $e = New-TextBlock -Text ($extra -join '   ·   ') -Size 11.5 -Color '#66635B'
-            $e.Margin = New-Thick 0 3 0 0
-            $sp.Children.Add($e) | Out-Null
-        }
-        $vt = New-TextBlock -Text $d.Verdict -Size 12 -Color $col -Wrap $true
-        $vt.Margin = New-Thick 0 4 0 0
-        $sp.Children.Add($vt) | Out-Null
-        $b.Child = $sp
-        $c4.Body.Children.Add($b) | Out-Null
-    }
-    $p.Children.Add($c4.Card) | Out-Null
-
-    # ---------- 微信 / QQ 占用 ----------
-    $c5 = New-MaintainCard -Title '微信 / QQ 占用多少空间' -Desc '这两个是国内 C 盘杀手的常客，几十个 GB 很常见。这里只统计不删——聊天图片和文件是你的资料，该不该删只有你自己知道。「垃圾清理」页里的微信/QQ 那一项只清纯缓存（小程序缓存等），绝不碰聊天内容。'
-    $c5Body = $c5.Body
-    $c5Body.Children.Add((New-ToolButton -Text '扫描占用（可能要一两分钟）' -Tag $c5Body -OnClick {
-                $body = $this.Tag
-                Set-Status '正在统计微信 / QQ 占用…'
-                Sync-UI
-                # 清掉上一次的结果，只留按钮
-                while ($body.Children.Count -gt 1) { $body.Children.RemoveAt(1) }
-                $rows = @(Get-ChatAppUsage)
-                if ($rows.Count -eq 0) {
-                    $body.Children.Add((New-TextBlock -Text '没有找到微信或 QQ 的数据目录（可能没装，或者装在非默认位置）。' -Size 12 -Color '#66635B' -Wrap $true)) | Out-Null
-                } else {
-                    foreach ($r in $rows) {
-                        $t = New-TextBlock -Text ("{0}：{1}`r`n{2}" -f $r.App, (Format-Size $r.Size), $r.Path) -Size 12 -Color '#4A4842' -Wrap $true
-                        $t.Margin = New-Thick 0 8 0 0
-                        $body.Children.Add($t) | Out-Null
-                    }
-                    $h = New-TextBlock -Size 11.5 -Color '#7A6B45' -Wrap $true -Text '占用太大的话，用软件自带的清理功能挑着删：微信 → 设置 → 文件管理 → 清理微信存储空间；QQ → 设置 → 文件管理 → 清理。它们能按聊天对象和时间筛选，比无脑全删安全得多。'
-                    $h.Margin = New-Thick 0 10 0 0
-                    $body.Children.Add($h) | Out-Null
-                }
-                Set-Status '统计完成'
-            })) | Out-Null
-    $p.Children.Add($c5.Card) | Out-Null
-
-    # ---------- 每周自动清理 ----------
-    $c6 = New-MaintainCard -Title '每周自动清理' -Desc '开启后会建一个计划任务，每周日中午 12 点在后台静默跑一遍「垃圾清理」页的推荐项。不弹窗、不影响你用电脑、不碰任何性能设置。人不在电脑前的时候错过了，下次开机会自动补跑。'
+    $r2 = New-ActRow -Name '每周自动清理' `
+        -Note '建一个计划任务，每周日 12:00 在后台静默跑一遍「垃圾清理」页的推荐项。不弹窗、不影响你用电脑、不碰性能设置。人不在电脑前错过了，下次开机自动补跑。'
     $cbAuto = New-Object System.Windows.Controls.CheckBox
-    $cbAuto.Content = '开启每周自动清理'
-    $cbAuto.FontSize = 13
+    $cbAuto.Content = '开启'
+    $cbAuto.FontSize = 13.5
+    $cbAuto.VerticalAlignment = 'Center'
     $cbAuto.IsChecked = (Test-AutoCleanEnabled)
     $cbAuto.Add_Click({
             if ($this.IsChecked) {
@@ -4409,8 +4379,177 @@ function Build-MaintainUI {
                 Set-Status '已关闭每周自动清理'
             }
         })
-    $c6.Body.Children.Add($cbAuto) | Out-Null
-    $p.Children.Add($c6.Card) | Out-Null
+    $r2.Slot.Children.Add($cbAuto) | Out-Null
+    $p.Children.Add($r2.Row) | Out-Null
+
+    # ==================== 显示器 ====================
+    # 买了高刷屏却还跑在 60Hz 非常常见（换线、重装驱动、接新屏都会退回去）。
+    # 对 FPS 玩家来说这个差距比任何注册表优化都大，所以排在第二位。
+    $cur = Get-CurrentDisplayMode
+    $opts = @(Get-DisplayRefreshOptions)
+    if ($cur -and $opts.Count -gt 0) {
+        $maxHz = $opts[0]
+        Add-Sec -Title '显示器' -Aside ("{0} × {1}" -f $cur.Width, $cur.Height)
+        $p.Children.Add((New-RptHeader -First '项目')) | Out-Null
+
+        # 没跑满最高刷新率 = 没达到参考范围，正是法定墨该管的那一件事
+        $low = ($cur.Hz -lt $maxHz)
+        $rHz = New-RptRow -Name '刷新率' -Result ([string]$cur.Hz) -Mark $(if ($low) { '↓' } else { '' }) `
+            -Ref ("最高 {0}" -f $maxHz) -Unit 'Hz' `
+            -Note $(if ($low) {
+                "这套「显示器 + 线 + 显卡」最高能跑 $maxHz Hz —— 现在没跑满。"
+            } else {
+                "已经是这套配置能跑的最高刷新率。"
+            })
+        Set-RangeBar $rHz.Bar -Value $cur.Hz -Max $maxHz -Lo $maxHz -Abnormal $low
+        foreach ($hz in $opts) {
+            $b = New-ToolButton -Text ("{0} Hz" -f $hz) -Tag $hz -OnClick { Invoke-SetRefresh $this.Tag }
+            $b.Margin = New-Thick 0
+            if ($hz -eq $cur.Hz) {
+                $b.IsEnabled = $false
+                $b.Content = "{0} Hz（当前）" -f $hz
+            } elseif ($hz -eq $maxHz) {
+                try { $b.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
+                $b.Content = "{0} Hz（最高）" -f $hz
+            }
+            Add-RptAct $rHz $b
+        }
+        $p.Children.Add($rHz.Row) | Out-Null
+
+        $t15 = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text '切换后会弹一个 15 秒倒计时确认框。万一切完黑屏或花屏，什么都别动，倒计时结束会自动切回原来的设置 —— 和 Windows 自己改分辨率时的行为一样。'
+        $t15.Margin = New-Thick 0 9 0 0
+        $p.Children.Add($t15) | Out-Null
+    }
+
+    # ==================== 硬盘健康 ====================
+    $disks = @(Get-DiskHealthReport)
+    if ($disks.Count -gt 0) {
+        Add-Sec -Title '硬盘健康' -Aside '读 SMART 数据'
+        $p.Children.Add((New-RptHeader -First '硬盘')) | Out-Null
+        foreach ($d in $disks) {
+            $abn = ($d.Level -ne '良好')
+            $mark = switch ($d.Level) { '严重' { '↑↑' } '建议' { '↑' } default { '' } }
+
+            # 固态看写入寿命，机械看通电时长 —— 各有各的参考范围。
+            # 两个都读不到就只报「—」，不编数字。
+            if ($null -ne $d.Wear) {
+                $val = [double]$d.Wear; $max = 100; $hi = 70
+                $res = [string]$d.Wear; $ref = '< 70'; $unit = '% 寿命'; $nobar = $false
+            } elseif ($null -ne $d.Hours) {
+                $val = [double]$d.Hours; $max = 44000; $hi = 35000
+                $res = [string]$d.Hours; $ref = '< 35000'; $unit = '小时'; $nobar = $false
+            } else {
+                $val = $null; $max = 100; $hi = $null
+                $res = '—'; $ref = ''; $unit = ''; $nobar = $true
+                if (-not $abn) { $mark = '—' }
+            }
+
+            $extra = @($d.Media, $d.Size)
+            if ($null -ne $d.Hours -and $null -ne $d.Wear) { $extra += "已通电 $($d.Hours) 小时" }
+            if ($null -ne $d.Temp -and $d.Temp -gt 0) { $extra += "$($d.Temp) °C" }
+            $extra += $d.Verdict
+
+            $rd = New-RptRow -Name $d.Name -Result $res -Mark $mark -Ref $ref -Unit $unit `
+                -Note ($extra -join '   ·   ') -NoBar $nobar
+            if (-not $nobar) { Set-RangeBar $rd.Bar -Value $val -Max $max -Hi $hi -Abnormal $abn }
+            $p.Children.Add($rd.Row) | Out-Null
+        }
+    }
+
+    # ==================== 磁盘优化 ====================
+    $vols = @(Get-VolumesToOptimize)
+    if ($vols.Count -gt 0) {
+        Add-Sec -Title '磁盘优化' -Aside '半年一次'
+        $sd = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text '自动认介质：固态做 TRIM（恢复写入速度），机械做碎片整理。不会对固态盘做碎片整理 —— 那只会白白消耗寿命。'
+        $sd.Margin = New-Thick 0 0 0 4
+        $p.Children.Add($sd) | Out-Null
+        foreach ($v in $vols) {
+            $rv = New-ActRow -Name ("{0}:   {1}" -f $v.Letter, $(if ($v.IsSSD) { '固态' } else { '机械' })) `
+                -Note ("{0} 可用 / 共 {1}" -f (Format-Size $v.Free), (Format-Size $v.Size))
+            $bv = New-ToolButton -Text $(if ($v.IsSSD) { '执行 TRIM' } else { '碎片整理' }) -Tag $v -OnClick {
+                $vv = $this.Tag
+                Set-Status ("正在优化 {0} 盘，机械盘可能要几十分钟，请耐心等…" -f $vv.Letter)
+                Sync-UI
+                $ok = Invoke-DiskOptimize -DriveLetter $vv.Letter -IsSSD $vv.IsSSD
+                Set-Status $(if ($ok) { "$($vv.Letter) 盘优化完成" } else { "$($vv.Letter) 盘优化失败，详见日志" })
+            }
+            $bv.Margin = New-Thick 0
+            $rv.Slot.Children.Add($bv) | Out-Null
+            $p.Children.Add($rv.Row) | Out-Null
+        }
+    }
+
+    # ==================== 微信 / QQ 占用 ====================
+    Add-Sec -Title '微信 / QQ 占用' -Aside '只统计，不删'
+    $rc = New-ActRow -Name '统计聊天软件占了多少空间' `
+        -Note '这两个是国内 C 盘杀手的常客，几十个 GB 很常见。这里只统计不删 —— 聊天图片和文件是你的资料，该不该删只有你自己知道。「垃圾清理」页的微信/QQ 那一项只清纯缓存，绝不碰聊天内容。'
+    $chatHost = New-Object System.Windows.Controls.StackPanel
+    $bChat = New-ToolButton -Text '扫描占用' -Tag $chatHost -OnClick {
+        $holder = $this.Tag
+        Set-Status '正在统计微信 / QQ 占用…'
+        Sync-UI
+        $holder.Children.Clear()
+        $rows = @(Get-ChatAppUsage)
+        if ($rows.Count -eq 0) {
+            $t = New-TextBlock -Text '没有找到微信或 QQ 的数据目录（可能没装，或者装在非默认位置）。' -Size 13 -Color '#66635B' -Wrap $true
+            $t.Margin = New-Thick 0 10 0 0
+            $holder.Children.Add($t) | Out-Null
+        } else {
+            $holder.Children.Add((New-RptHeader -First '软件')) | Out-Null
+            foreach ($r in $rows) {
+                # 占用没有「参考范围」这回事 —— 多少算多只有用户自己知道，
+                # 所以不给量程、不给阈值、不上标记。
+                $gb = [math]::Round($r.Size / 1GB, 1)
+                $rr = New-RptRow -Name $r.App -Result ([string]$gb) -Unit 'GB' -Note $r.Path -NoBar $true
+                $holder.Children.Add($rr.Row) | Out-Null
+            }
+            $h = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text '嫌大的话用软件自带的清理挑着删：微信 → 设置 → 文件管理 → 清理微信存储空间；QQ → 设置 → 文件管理 → 清理。它们能按聊天对象和时间筛选，比无脑全删安全得多。'
+            $h.Margin = New-Thick 0 10 0 0
+            $holder.Children.Add($h) | Out-Null
+        }
+        Set-Status '统计完成'
+    }
+    $bChat.Margin = New-Thick 0
+    $rc.Slot.Children.Add($bChat) | Out-Null
+    $p.Children.Add($rc.Row) | Out-Null
+    $p.Children.Add($chatHost) | Out-Null
+
+    # ==================== 快捷工具 ====================
+    # 上一版这里是五个光溜溜的按钮排一行，没写各自什么时候用 ——
+    # 「刷新 DNS 缓存」对不懂的人等于一个不敢按的按钮。一项一行，写清场合。
+    Add-Sec -Title '快捷工具' -Aside '藏得很深的系统功能'
+
+    $tools = @(
+        @{ N = '刷新 DNS 缓存'; B = '执行'
+            D = '某个网站突然打不开但别的正常、刚换过 DNS、游戏登录服务器连不上但网页能开 —— 这三种情况试它。'
+            A = {
+                Clear-DnsCacheNow | Out-Null
+                Show-Msg -Text "DNS 缓存已刷新。`r`n`r`n什么时候用它：某个网站突然打不开但别的正常、刚换过 DNS、游戏登录服务器连不上但网页能开。" | Out-Null
+            } },
+        @{ N = '重启资源管理器'; B = '重启'
+            D = '任务栏卡住不响应、桌面图标刷不出来、右键菜单卡死的时候用。屏幕会黑闪一下，打开的文件夹窗口会关掉，不影响别的程序。'
+            A = { Restart-ExplorerShell; Set-Status '资源管理器已重启' } },
+        @{ N = '系统磁盘清理'; B = '打开'
+            D = 'Windows 自带的 cleanmgr。本工具的「垃圾清理」页覆盖不到的项（比如旧的 Windows 更新备份）在它那儿。'
+            A = { Start-Process 'cleanmgr.exe' -ArgumentList "/d $env:SystemDrive" -ErrorAction SilentlyContinue } },
+        @{ N = '存储设置'; B = '打开'
+            D = '看 C 盘被哪类文件占了多少，也能开「存储感知」让 Windows 自己定期清。'
+            A = { Start-Process 'ms-settings:storagesense' -ErrorAction SilentlyContinue } },
+        @{ N = '已安装程序'; B = '打开'
+            D = '卸载软件的地方。不确定某个程序是什么，先别卸 —— 名字里带厂商驱动的多半是必需的。'
+            A = { Start-Process 'ms-settings:appsfeatures' -ErrorAction SilentlyContinue } }
+    )
+    foreach ($t in $tools) {
+        $rt = New-ActRow -Name $t.N -Note $t.D
+        $bt = New-ToolButton -Text $t.B -OnClick $t.A
+        $bt.Margin = New-Thick 0
+        $bt.MinWidth = 76
+        $rt.Slot.Children.Add($bt) | Out-Null
+        $p.Children.Add($rt.Row) | Out-Null
+    }
+    $tip2 = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text '顺带一提：游戏里画面卡死、显卡驱动假死的时候，按 Win + Ctrl + Shift + B 可以直接重启显卡驱动，屏幕会黑一下然后恢复，不用重启电脑。这是 Windows 自带的快捷键，不需要本工具。'
+    $tip2.Margin = New-Thick 0 10 0 0
+    $p.Children.Add($tip2) | Out-Null
 }
 
 function Build-BigFileDrives {
@@ -4424,13 +4563,33 @@ function Build-BigFileDrives {
                     Invoke-BigFileScan $this.Tag
                 })) | Out-Null
     }
+    # 结果区还空着就摆上空状态（换肤重建时也会走这儿，不会覆盖已有结果）
+    if ($Script:UI.BigFilePanel -and $Script:UI.BigFilePanel.Children.Count -eq 0) { Set-BigFileEmpty }
+}
+
+function Set-BigFileEmpty {
+    <# 右栏的空状态。空着一大片白什么也不说，是在浪费用户的一次注视。 #>
+    $panel = $Script:UI.BigFilePanel
+    if ($null -eq $panel) { return }
+    $panel.Children.Clear()
+    $sp = New-Object System.Windows.Controls.StackPanel
+    $sp.Margin = New-Thick 0 28 0 0
+    $t1 = New-TextBlock -Text '还没扫描' -Size 15 -Color '#4A4842'
+    $sp.Children.Add($t1) | Out-Null
+    $t2 = New-TextBlock -Wrap $true -Size 13 -Color '#66635B' -Text '点上面的盘符开始。扫描期间可以切到别的页干活，结果出来会留在这儿。'
+    $t2.Margin = New-Thick 0 6 0 0
+    $sp.Children.Add($t2) | Out-Null
+    $t3 = New-TextBlock -Wrap $true -Size 13 -Color '#66635B' -Text '扫的是「超过 300MB 的文件」，最大的 40 个。WinSxS、回收站、系统卷信息这三处跳过 —— 它们的大小是假的（硬链接），或者有专门的清理入口。'
+    $t3.Margin = New-Thick 0 14 0 0
+    $sp.Children.Add($t3) | Out-Null
+    $panel.Children.Add($sp) | Out-Null
 }
 
 function Invoke-BigFileScan {
     param([string]$Root)
     $panel = $Script:UI.BigFilePanel
     $panel.Children.Clear()
-    $panel.Children.Add((New-TextBlock -Text '正在扫描，请稍候…' -Size 12 -Color '#7A6B45')) | Out-Null
+    $panel.Children.Add((New-TextBlock -Text '正在扫描，请稍候…' -Size 13.5 -Color '#66635B')) | Out-Null
     Sync-UI
 
     $progress = {
@@ -4444,32 +4603,64 @@ function Invoke-BigFileScan {
 
     $panel.Children.Clear()
     if ($files.Count -eq 0) {
-        $panel.Children.Add((New-TextBlock -Text ("{0} 里没有找到超过 300MB 的文件。" -f $Root) -Size 12 -Color '#66635B' -Wrap $true)) | Out-Null
+        $panel.Children.Add((New-TextBlock -Text ("{0} 里没有找到超过 300MB 的文件。" -f $Root) -Size 13.5 -Color '#66635B' -Wrap $true)) | Out-Null
         Set-Status '扫描完成'
         return
     }
 
-    $hint = New-TextBlock -Size 11.5 -Color '#66635B' -Wrap $true -Text '点任意一项会在资源管理器里定位到它。删之前想清楚：大文件里有很多是系统必需的（pagefile.sys 虚拟内存、hiberfil.sys 休眠文件、install.wim 等），别乱删。游戏安装包、下载的视频、旧的备份文件才是该清的。'
-    $hint.Margin = New-Thick 0 0 0 10
+    $hint = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text '点任意一行会在资源管理器里定位到它。删之前想清楚：大文件里有很多是系统必需的（pagefile.sys 虚拟内存、hiberfil.sys 休眠文件、install.wim 等），别乱删。游戏安装包、下载的视频、旧的备份文件才是该清的。'
+    $hint.Margin = New-Thick 0 0 0 12
     $panel.Children.Add($hint) | Out-Null
+
+    # 列名 + 表头线。四十个文件是一张表，不是四十张卡片 ——
+    # 卡片会让每个文件看起来都是一件独立的事，而用户要做的是**比大小**。
+    Add-ColHeader -Panel $panel -First '文件' -Cols @(@{ T = '大小'; W = 96 }) -Indent 0
 
     foreach ($f in $files) {
         $b = New-Object System.Windows.Controls.Border
-        $b.Background = Get-Brush '#FBFAF8'
-        $b.CornerRadius = New-Object System.Windows.CornerRadius 4
-        $b.Padding = New-Thick 10 7 10 7
-        $b.Margin = New-Thick 0 0 0 5
+        $b.Background = [System.Windows.Media.Brushes]::Transparent
+        $b.BorderBrush = Get-Brush $Script:CARD_BORDER
+        $b.BorderThickness = New-Thick 0 0 0 1
+        $b.Padding = New-Thick 0 9 0 9
         $b.Cursor = 'Hand'
         $b.Tag = $f.Path
         $b.Add_MouseLeftButtonUp({
                 try { Start-Process explorer.exe -ArgumentList ('/select,"{0}"' -f $this.Tag) } catch { }
             })
+        # 底色给的是右栏面板自己的底色（= 看着透明），悬停才浮出一层。
+        # -NoLift：表格行不该上下浮动，那是卡片的语汇。
+        Add-Interactive -Border $b -BgNormal '#FBFAF8' -BgHover '#F0EFEB' -NoLift
+
+        $g = New-Object System.Windows.Controls.Grid
+        $cdA = New-Object System.Windows.Controls.ColumnDefinition
+        $cdA.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        $g.ColumnDefinitions.Add($cdA)
+        $cdB = New-Object System.Windows.Controls.ColumnDefinition
+        $cdB.Width = New-Object System.Windows.GridLength 96.0
+        $g.ColumnDefinitions.Add($cdB)
+
         $sp = New-Object System.Windows.Controls.StackPanel
-        $sp.Children.Add((New-TextBlock -Text (Format-Size $f.Size) -Size 12.5 -Bold $true -Color '#7A6B45')) | Out-Null
-        $t = New-TextBlock -Text $f.Path -Size 11.5 -Color '#565349' -Wrap $true
-        $t.Margin = New-Thick 0 2 0 0
-        $sp.Children.Add($t) | Out-Null
-        $b.Child = $sp
+        $leaf = try { [System.IO.Path]::GetFileName($f.Path) } catch { $f.Path }
+        if (-not $leaf) { $leaf = $f.Path }
+        $sp.Children.Add((New-TextBlock -Text $leaf -Size 14 -Color '#2B2A26' -Wrap $true)) | Out-Null
+        $dir = try { [System.IO.Path]::GetDirectoryName($f.Path) } catch { '' }
+        if ($dir) {
+            $t = New-TextBlock -Text $dir -Size 12.5 -Color '#66635B' -Wrap $true
+            $t.Margin = New-Thick 0 2 0 0
+            $sp.Children.Add($t) | Out-Null
+        }
+        $g.Children.Add($sp) | Out-Null
+
+        # ★ 表格数位 ★ 不加的话 1 比 8 窄，整列大小对不齐，比大小就费劲
+        $sz = New-TextBlock -Text (Format-Size $f.Size) -Size 14.5 -Color '#2B2A26'
+        $sz.FontWeight = 'SemiBold'
+        $sz.TextAlignment = 'Right'
+        $sz.VerticalAlignment = 'Center'
+        [System.Windows.Documents.Typography]::SetNumeralAlignment($sz, 'Tabular')
+        [System.Windows.Controls.Grid]::SetColumn($sz, 1)
+        $g.Children.Add($sz) | Out-Null
+
+        $b.Child = $g
         $panel.Children.Add($b) | Out-Null
     }
     Set-Status ("扫描完成，列出了 {0} 个大文件" -f $files.Count)
@@ -5252,7 +5443,7 @@ $Script:Window.Add_ContentRendered({
         Start-DashTimer
         if (Test-ProcAuditEnabled) { $Script:UI.BtnProcAudit.Content = '关闭持续记录' }
         Build-HealthUI
-        Set-Status '报告已出 —— 超出参考范围的项列在「检验结论」里；要动手去「性能优化」页'
+        Set-Status '报告已出 —— 超出安全范围的项列在「检验结论」里；要动手去「性能优化」页'
     })
 
 # ---------------------------------------------------------------------
@@ -5300,7 +5491,7 @@ if ($SelfTest) {
     Build-VendorUI
     $vendorCards = $Script:UI.AdvicePanel.Children.Count
     Build-HealthUI
-    Write-Host ('自检通过：优化项 {0} / 预设 {1} / 清理项 {2} / 启动项 {3} / 维护卡片 {4} / 盘符 {5} / 排查结果 {6} / 运行记录 {7} / 体检卡片 {8} / 帧数诊断 {9} / 自带应用 {10} / 皮肤 {11} / 超频陪练 {12} / 厂商建议 {13}' -f `
+    Write-Host ('自检通过：优化项 {0} / 预设 {1} / 清理项 {2} / 启动项 {3} / 维护项 {4} / 盘符 {5} / 排查结果 {6} / 运行记录 {7} / 体检卡片 {8} / 帧数诊断 {9} / 自带应用 {10} / 皮肤 {11} / 超频陪练 {12} / 厂商建议 {13}' -f `
             $Script:UI.TweakPanel.Children.Count, $Script:Presets.Count,
         $Script:UI.CleanPanel.Children.Count, $Script:UI.StartupPanel.Children.Count,
         $Script:UI.MaintainPanel.Children.Count, $Script:UI.BigFileDrives.Children.Count,
@@ -5323,4 +5514,69 @@ try {
 
 $Script:Window.Add_Closed({ try { if ($Script:WatchTimer) { $Script:WatchTimer.Stop() }; Stop-ProcWatch } catch { } })
 $Script:Window.Add_Closed({ try { Stop-DashTimer; Close-Dash } catch { } })
+
+# ---------------------------------------------------------------------
+#  出图模式
+#
+#  ★ 为什么不用外面的截图脚本 ★
+#    程序自己提权。Windows 的 UIPI 不让低权限进程往高权限窗口发合成的
+#    鼠标键盘事件，PrintWindow 拍提权窗口也只出一张白图。
+#    所以想按页出图，只能让程序自己拍自己。
+#
+#  ★ RenderTargetBitmap 拍的是绘制结果，拍不到 RenderTransform ★
+#    缩放、位移这类合成阶段的效果在图里看不见 —— 那些只能在程序内读属性验。
+#    这里拍的是排版和配色，够用。
+# ---------------------------------------------------------------------
+if ($Shot) {
+    try { if (-not (Test-Path $Shot)) { New-Item -ItemType Directory -Path $Shot -Force | Out-Null } } catch { }
+
+    $Script:Window.Add_ContentRendered({
+            if ($ShotH -gt 0) {
+                $Script:Window.Height = $ShotH
+                $Script:Window.Top = 0
+                Sync-UI
+            }
+            $tabs = $Script:UI.Tabs
+            $idx = if ($ShotTab -ge 0) { @($ShotTab) } else { 0..($tabs.Items.Count - 1) }
+            foreach ($i in $idx) {
+                if ($i -lt 0 -or $i -ge $tabs.Items.Count) { continue }
+                $tabs.SelectedIndex = $i
+                # 让这一页把自己排完、数据填完再拍。
+                # Sync-UI 把队列里排到 Background 的活全跑一遍，页面淡入也跑完。
+                Sync-UI
+                Start-Sleep -Milliseconds 700
+                Sync-UI
+
+                if ($ShotScroll -gt 0) {
+                    # 把这一页里所有滚动区都往下滚 —— 长页面拍下半截用
+                    foreach ($sv in (Find-Descendants $tabs.SelectedContent ([System.Windows.Controls.ScrollViewer]))) {
+                        try { $sv.ScrollToVerticalOffset([double]$ShotScroll) } catch { }
+                    }
+                    Sync-UI
+                    Start-Sleep -Milliseconds 400
+                    Sync-UI
+                }
+
+                $name = ('{0}-{1}' -f $i, "$($tabs.Items[$i].Header)")
+                $file = Join-Path $Shot ($name + '.png')
+                try {
+                    $w = [int]$Script:Window.ActualWidth
+                    $h = [int]$Script:Window.ActualHeight
+                    $rtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap `
+                        $w, $h, 96, 96, ([System.Windows.Media.PixelFormats]::Pbgra32)
+                    $rtb.Render($Script:Window)
+                    $enc = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+                    $enc.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($rtb)) | Out-Null
+                    $fs = [System.IO.File]::Create($file)
+                    $enc.Save($fs)
+                    $fs.Close()
+                    Write-Host ("出图：{0}" -f $file)
+                } catch {
+                    Write-Host ("出图失败 {0} —— {1}" -f $name, $_.Exception.Message)
+                }
+            }
+            $Script:Window.Close()
+        })
+}
+
 $Script:Window.ShowDialog() | Out-Null
