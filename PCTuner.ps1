@@ -619,6 +619,29 @@ function Start-PageEnter {
     return ([math]::Min($blocks.Count, $Script:StaggerMax) * $Script:Dur.Stagger)
 }
 
+function Start-ListEnter {
+    <#
+      页面内的内容换了（刷新列表、扫描出结果、体检右栏切换）：面板里的前 6 项依次进场，
+      行程 8px（比切页的 12px 小一档 —— 这是页面内的小变化，不是换页）。
+      第 7 项以后直接出现：它们多半在可视区外，错开下去只会让最后一行等半天。
+
+      ★ 只在用户操作触发时调 ★ 启动时建表、换肤重画都不调 —— 那不是「内容刚换了」，
+        而且会和切页过场撞在一起（design.md 5.3：同一时刻只有一个主角在动）。
+    #>
+    param($Panel)
+    if ($null -eq $Panel) { return }
+    $kids = @($Panel.Children | Where-Object { $_.Visibility -eq 'Visible' })
+    if ($kids.Count -eq 0) { return }
+    $head = @($kids | Select-Object -First $Script:StaggerMax)
+    foreach ($k in $head) { $k.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null); $k.Opacity = 0 }
+    $Script:PendingList = $head
+    $null = $Script:Window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Loaded, [action] {
+            $l = $Script:PendingList
+            $Script:PendingList = $null
+            if ($l) { Start-StaggerIn $l 8 }
+        })
+}
+
 function Start-FadeSlideIn {
     <#
       内容换新时的进场：淡入（ease-out）+ 从下方 8px 弹到位（弹簧）。
@@ -4794,6 +4817,7 @@ function Build-BigFileDrives {
         $root = $d.DeviceID + '\'
         $bar.Children.Add((New-ToolButton -Text ("扫描 " + $d.DeviceID) -Tag $root -OnClick {
                     Invoke-BigFileScan $this.Tag
+                    Start-ListEnter $Script:UI.BigFilePanel
                 })) | Out-Null
     }
     # 结果区还空着就摆上空状态（换肤重建时也会走这儿，不会覆盖已有结果）
@@ -5575,15 +5599,15 @@ $Script:UI.BtnPickCleanNone.Add_Click({
         Update-CleanSelCount
     })
 
-$Script:UI.BtnRefreshStartup.Add_Click({ Build-StartupUI })
+$Script:UI.BtnRefreshStartup.Add_Click({ Build-StartupUI; Start-ListEnter $Script:UI.StartupPanel })
 
-$Script:UI.BtnInspect.Add_Click({ Invoke-Inspect })
+$Script:UI.BtnInspect.Add_Click({ Invoke-Inspect; Start-ListEnter $Script:UI.InspectPanel })
 $Script:UI.BtnInspectFilter.Add_Click({
         $Script:InspectFilterOn = -not $Script:InspectFilterOn
         $this.Content = if ($Script:InspectFilterOn) { '显示全部' } else { '只看会弹黑框的' }
-        if ($Script:Findings.Count -gt 0) { Show-Findings }
+        if ($Script:Findings.Count -gt 0) { Show-Findings; Start-ListEnter $Script:UI.InspectPanel }
     })
-$Script:UI.BtnRecentRuns.Add_Click({ Build-RecentRuns; Set-Status '任务运行记录已刷新' })
+$Script:UI.BtnRecentRuns.Add_Click({ Build-RecentRuns; Start-ListEnter $Script:UI.RecentRunPanel; Set-Status '任务运行记录已刷新' })
 $Script:UI.BtnCopyLog.Add_Click({
         # 表格不像 TextBox 能直接框选复制，所以给一个「全拿走」的出口
         try {
@@ -5593,7 +5617,7 @@ $Script:UI.BtnCopyLog.Add_Click({
     })
 $Script:UI.BtnWatchStart.Add_Click({ Start-LiveWatch })
 $Script:UI.BtnWatchStop.Add_Click({ Stop-LiveWatch })
-$Script:UI.BtnProcLog.Add_Click({ Show-ProcLog })
+$Script:UI.BtnProcLog.Add_Click({ Show-ProcLog; Start-ListEnter $Script:UI.RecentRunPanel })
 $Script:UI.BtnProcAudit.Add_Click({
         if (Test-ProcAuditEnabled) {
             $r = Show-Msg -Text ("「持续记录」当前是开启的。`r`n`r`n要关掉吗？`r`n（排查完建议关掉——开着的时候每创建一个进程都会写一条安全日志，量很大。）") -Title '持续记录' -Kind Ask
@@ -5637,11 +5661,12 @@ $Script:UI.BtnEnableTaskLog.Add_Click({
             Show-Msg -Text '开启失败，详见日志页。' | Out-Null
         }
     })
-$Script:UI.BtnHealthScan.Add_Click({ Build-HealthUI })
-$Script:UI.BtnFpsDiag.Add_Click({ Build-FpsDiagUI })
-$Script:UI.BtnOcCoach.Add_Click({ Build-OcCoachUI })
-$Script:UI.BtnVendor.Add_Click({ Build-VendorUI })
-$Script:UI.BtnRefreshAppx.Add_Click({ Build-AppxUI })
+# 体检页右栏在「体检结论 / 帧数诊断 / 超频陪练 / 厂商工具」之间切换 = 页面内的区块切换，卡片依次进场
+$Script:UI.BtnHealthScan.Add_Click({ Build-HealthUI; Start-ListEnter $Script:UI.AdvicePanel })
+$Script:UI.BtnFpsDiag.Add_Click({ Build-FpsDiagUI; Start-ListEnter $Script:UI.AdvicePanel })
+$Script:UI.BtnOcCoach.Add_Click({ Build-OcCoachUI; Start-ListEnter $Script:UI.AdvicePanel })
+$Script:UI.BtnVendor.Add_Click({ Build-VendorUI; Start-ListEnter $Script:UI.AdvicePanel })
+$Script:UI.BtnRefreshAppx.Add_Click({ Build-AppxUI; Start-ListEnter $Script:UI.AppxPanel })
 $Script:UI.BtnUninstallAppx.Add_Click({ Invoke-AppxUninstall })
 $Script:UI.BtnCheckAppxSafe.Add_Click({
         # 只勾「可以删」那一档；「看情况」的要用户自己看完说明再决定
