@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
     生成 app.ico —— 和界面左上角那个「调」徽标同一套配色。
 

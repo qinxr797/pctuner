@@ -32,7 +32,7 @@ $ErrorActionPreference = 'Continue'
 
 # ===== 版本号 =====
 # 改版本号只改这一处，标题栏 / 副标题 / 诊断报告都从这里取。
-$Script:AppVersion     = '4.1'
+$Script:AppVersion     = '4.2'
 $Script:AppVersionDate = '2026-09-27'
 
 # ---------------------------------------------------------------------
@@ -100,7 +100,7 @@ if (-not $SelfTest -and -not $AutoClean -and -not $principal.IsInRole([Security.
 # ---------------------------------------------------------------------
 $Script:AppRoot = Split-Path -Parent $PSCommandPath
 # 载入顺序有依赖：Engine 提供日志和注册表底座，其余模块都用得到，必须第一个
-$Script:ModuleNames = @('Engine', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme', 'Dash')
+$Script:ModuleNames = @('Engine', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme', 'Dash', 'Overclock')
 
 # ---------- 1.1 先查文件齐不齐 ----------
 # 为什么要专门查一遍：通过微信/QQ 传「文件夹」过去经常会漏文件
@@ -234,6 +234,32 @@ function Get-FileTrouble {
 "@
     }
 
+    # .ps1 少了 UTF-8 BOM —— 报出来的错是「Unexpected token '淇℃伅'」这种
+    # 完全看不懂的东西，不单独判一下的话，谁都想不到是编码问题
+    if ($fi -and $fi.Extension -eq '.ps1') {
+        try {
+            $head = [byte[]]::new(3)
+            $hs = [IO.File]::OpenRead($Path)
+            $null = $hs.Read($head, 0, 3)
+            $hs.Close()
+            if (-not ($head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF)) {
+                return @"
+【原因】这个 .ps1 文件没有 UTF-8 BOM 标记。
+
+PowerShell 5.1 读不带 BOM 的 UTF-8 文件时，会把中文当成
+另一种编码来解析，于是满文件乱码、语法直接报错。
+（报出来的是「Unexpected token '淇℃伅'」这种看不懂的东西。）
+
+【怎么办】如果你没改过代码，说明文件在传输中被某个工具
+「顺手转码」了（有些解压软件和同步网盘会干这事）。
+重新下载一份原始的 zip 包，解压后直接用。
+
+如果你改过代码：把这个文件另存为「UTF-8 with BOM」即可。
+"@
+            }
+        } catch { }
+    }
+
     # 真正去读一下，看是不是读得动
     $readErr = $null
     try {
@@ -287,6 +313,38 @@ function Get-FileTrouble {
     }
 
     return $null   # 文件本身没问题，那就是脚本内容的问题
+}
+
+# ---------- 1.2.9 编码自检（只在 -SelfTest 时做）----------
+#
+# ★ 这个坑踩过两次，所以做成自检的第一项 ★
+#   .ps1 必须存成 UTF-8 **带 BOM**。少了 BOM，PowerShell 5.1 会把
+#   文件当 ANSI 解析，中文全变乱码 —— 报出来的错是
+#   「Unexpected token '淇℃伅'」这种完全看不懂的东西。
+#
+#   最坑的地方：用 PowerShell 7 单独 dot-source 那个文件是好的，
+#   因为 7 默认按 UTF-8 读。只有正式启动（走 powershell.exe 5.1）才炸。
+#   所以必须在这里查，不能等「反正我试过没问题」。
+#
+#   必须排在载入模块**之前** —— 排后面的话，模块自己先崩了，
+#   这个检查根本轮不到跑。
+if ($SelfTest) {
+    $noBom = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $Script:AppRoot -Recurse -Filter *.ps1 -File -ErrorAction SilentlyContinue)) {
+        try {
+            $head = [byte[]]::new(3)
+            $hs = [IO.File]::OpenRead($f.FullName)
+            $null = $hs.Read($head, 0, 3)
+            $hs.Close()
+            if (-not ($head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF)) {
+                $noBom += $f.FullName.Substring($Script:AppRoot.Length + 1)
+            }
+        } catch { }
+    }
+    if ($noBom.Count -gt 0) {
+        Write-Host ("自检失败：下面这些 .ps1 没有 UTF-8 BOM，PowerShell 5.1 会读成乱码" + [Environment]::NewLine + '  ' + ($noBom -join ([Environment]::NewLine + '  '))) -ForegroundColor Red
+        exit 3
+    }
 }
 
 # ---------- 1.3 逐个载入，出错时能说清是哪个模块、为什么 ----------
@@ -1299,6 +1357,8 @@ $xamlText = @'
           <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
             <Button x:Name="BtnHealthScan" Content="重新体检" Style="{DynamicResource ButtonPrimary}"/>
             <Button x:Name="BtnFpsDiag" Content="★ 为什么我帧数没变？" Style="{DynamicResource ButtonPrimary}"/>
+            <Button x:Name="BtnOcCoach" Content="我能超频吗？"/>
+            <Button x:Name="BtnVendor" Content="该装哪个厂商工具"/>
             <Button x:Name="BtnAddExclusion" Content="把游戏文件夹加入杀毒白名单"/>
             <Button x:Name="BtnSfc" Content="检查系统文件完整性"/>
             <Button x:Name="BtnCopyReport" Content="复制体检报告"/>
@@ -1389,7 +1449,7 @@ foreach ($n in @(
         'InspectPanel', 'BtnInspect', 'BtnInspectFilter', 'InspectSummary',
         'RecentRunPanel', 'BtnRecentRuns', 'BtnEnableTaskLog',
         'BtnWatchStart', 'BtnWatchStop', 'BtnProcAudit', 'BtnProcLog', 'WatchStatus',
-        'InfoPanel', 'AdvicePanel', 'BtnHealthScan', 'BtnFpsDiag', 'BtnAddExclusion', 'BtnSfc', 'BtnCopyReport', 'BtnExportReport',
+        'InfoPanel', 'AdvicePanel', 'BtnHealthScan', 'BtnFpsDiag', 'BtnOcCoach', 'BtnVendor', 'BtnAddExclusion', 'BtnSfc', 'BtnCopyReport', 'BtnExportReport',
         'LogBox', 'BtnOpenBackup', 'StatusText', 'BusyBar')) {
     $Script:UI[$n] = $Script:Window.FindName($n)
 }
@@ -3906,6 +3966,87 @@ function Build-FpsDiagUI {
     else          { Set-Status '帧数诊断完成 —— 没发现硬件层面的瓶颈，看「已到顶」那几条的说明' }
 }
 
+function Build-AdviceCards {
+    <#
+      把一串 @{ Kind; Title; Text } 画成右边那一列卡片。
+      超频陪练和厂商软件两页共用这个 —— 卡片长相和帧数诊断保持一致，
+      用户不用再学一套新的看法。
+    #>
+    param([string]$Head, [string]$Sub, $Items)
+
+    $ap = $Script:UI.AdvicePanel
+    $ap.Children.Clear()
+
+    $t = New-TextBlock -Text $Head -Size 15 -Bold $true
+    $t.Margin = New-Thick 0 0 0 4
+    $ap.Children.Add($t) | Out-Null
+    if ($Sub) {
+        $s = New-TextBlock -Text $Sub -Size 12.5 -Color '#565349' -Wrap $true
+        $s.Margin = New-Thick 0 0 0 12
+        $ap.Children.Add($s) | Out-Null
+    }
+
+    foreach ($d in @($Items)) {
+        # 颜色沿用全局那套语义色：红=当心、卡其=要动手、蓝=背景、绿=流程
+        $c = switch ($d.Kind) {
+            '当心' { @{ Line = '#8A5750'; Bg = '#EFE3E0' } }
+            '动手' { @{ Line = '#7A6B45'; Bg = '#F0EADC' } }
+            '步骤' { @{ Line = '#556B54'; Bg = '#E7EBE4' } }
+            default { @{ Line = '#55606F'; Bg = '#E4E7EC' } }
+        }
+        $card = New-Object System.Windows.Controls.Border
+        $card.Background      = Get-Brush $c.Bg
+        $card.BorderBrush     = Get-Brush $c.Line
+        $card.BorderThickness = New-Thick 4 0 0 0
+        $card.CornerRadius    = New-Object System.Windows.CornerRadius 6
+        $card.Padding         = New-Thick 14 12 14 12
+        $card.Margin          = New-Thick 0 0 0 10
+
+        $sp = New-Object System.Windows.Controls.StackPanel
+        $h = New-Object System.Windows.Controls.StackPanel
+        $h.Orientation = 'Horizontal'
+        $h.Children.Add((New-Badge -Text $d.Kind -Fg $c.Line -Bg (Get-TintBg $c.Line))) | Out-Null
+        $sp.Children.Add($h) | Out-Null
+        $ttl = New-TextBlock -Text $d.Title -Size 14 -Bold $true -Wrap $true
+        $ttl.Margin = New-Thick 0 4 0 6
+        $sp.Children.Add($ttl) | Out-Null
+        $sp.Children.Add((New-TextBlock -Text (Format-Reflow $d.Text) -Size 12.5 -Color '#565349' -Wrap $true)) | Out-Null
+        $card.Child = $sp
+        $ap.Children.Add($card) | Out-Null
+    }
+}
+
+function Build-OcCoachUI {
+    <#
+      超频陪练。
+
+      ★ 这一页不改任何东西 ★ 它只认卡、讲清每个滑块是干什么的、
+        给出一步步的试法。真正的调节交给 Afterburner / AMD 驱动面板。
+        理由写在 Modules\Overclock.ps1 开头。
+    #>
+    Set-Busy $true
+    Set-Status '正在认显卡…'
+    Sync-UI
+    Build-AdviceCards -Head '超频陪练' -Items (Get-OcPlan) -Sub (
+        '这一页不会动你的显卡 —— 它只告诉你每个滑块是干什么的、从多少起步、' +
+        '怎么一步步试、崩了怎么办。真正的调节在 Afterburner / 显卡驱动面板里做。')
+    Set-Busy $false
+    Set-Status '超频陪练 —— 一次只动一个滑块，每动一次就测一次；先看「步骤」那一条'
+    Write-Log '打开了超频陪练页（只读，未修改任何设置）' '信息'
+}
+
+function Build-VendorUI {
+    <# 厂商软件识别：认出机器品牌，告诉用户该装哪个厂商工具、它管什么 #>
+    Set-Busy $true
+    Set-Status '正在识别机器品牌…'
+    Sync-UI
+    Build-AdviceCards -Head '该装哪个厂商工具' -Items (Get-VendorSoftware) -Sub (
+        '这个工具动的是 Windows 这一层；风扇转速、功耗墙、充电上限这些在硬件那一层，' +
+        '得靠厂商自己的工具。两边分工清楚了，效果才不打折。')
+    Set-Busy $false
+    Set-Status '厂商工具建议 —— 笔记本尤其要看最后一条「分工」'
+}
+
 # ---------------------------------------------------------------------
 #  9. 按钮事件
 # ---------------------------------------------------------------------
@@ -4015,6 +4156,8 @@ $Script:UI.BtnEnableTaskLog.Add_Click({
     })
 $Script:UI.BtnHealthScan.Add_Click({ Build-HealthUI })
 $Script:UI.BtnFpsDiag.Add_Click({ Build-FpsDiagUI })
+$Script:UI.BtnOcCoach.Add_Click({ Build-OcCoachUI })
+$Script:UI.BtnVendor.Add_Click({ Build-VendorUI })
 $Script:UI.BtnRefreshAppx.Add_Click({ Build-AppxUI })
 $Script:UI.BtnUninstallAppx.Add_Click({ Invoke-AppxUninstall })
 $Script:UI.BtnCheckAppxSafe.Add_Click({
@@ -4183,13 +4326,17 @@ if ($SelfTest) {
     Build-AppxUI
     Build-FpsDiagUI
     $fpsCards = $Script:UI.AdvicePanel.Children.Count
+    Build-OcCoachUI
+    $ocCards = $Script:UI.AdvicePanel.Children.Count
+    Build-VendorUI
+    $vendorCards = $Script:UI.AdvicePanel.Children.Count
     Build-HealthUI
-    Write-Host ('自检通过：优化项 {0} / 预设 {1} / 清理项 {2} / 启动项 {3} / 维护卡片 {4} / 盘符 {5} / 排查结果 {6} / 运行记录 {7} / 体检卡片 {8} / 帧数诊断 {9} / 自带应用 {10} / 皮肤 {11}' -f `
+    Write-Host ('自检通过：优化项 {0} / 预设 {1} / 清理项 {2} / 启动项 {3} / 维护卡片 {4} / 盘符 {5} / 排查结果 {6} / 运行记录 {7} / 体检卡片 {8} / 帧数诊断 {9} / 自带应用 {10} / 皮肤 {11} / 超频陪练 {12} / 厂商建议 {13}' -f `
             $Script:UI.TweakPanel.Children.Count, $Script:Presets.Count,
         $Script:UI.CleanPanel.Children.Count, $Script:UI.StartupPanel.Children.Count,
         $Script:UI.MaintainPanel.Children.Count, $Script:UI.BigFileDrives.Children.Count,
         $Script:UI.InspectPanel.Children.Count, $Script:UI.RecentRunPanel.Children.Count,
-        $Script:UI.AdvicePanel.Children.Count, $fpsCards, $Script:UI.AppxPanel.Children.Count, $themeCards)
+        $Script:UI.AdvicePanel.Children.Count, $fpsCards, $Script:UI.AppxPanel.Children.Count, $themeCards, $ocCards, $vendorCards)
     exit 0
 }
 

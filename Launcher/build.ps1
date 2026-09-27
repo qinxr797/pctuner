@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
     把 Launcher.cs 编译成根目录的「电脑调优助手.exe」。
 

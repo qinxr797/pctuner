@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
     检查每套皮肤的文字对比度是否达到 WCAG AA（正文 4.5:1）。
 
