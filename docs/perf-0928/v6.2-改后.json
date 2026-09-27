@@ -1,0 +1,340 @@
+﻿{
+    "Version":  "6.1",
+    "Admin":  false,
+    "Dpi":  null,
+    "Startup":  {
+                    "Build-StartupUI":  68.6,
+                    "Build-MaintainUI":  29,
+                    "Build-BigFileDrives":  35.4,
+                    "Build-RecentRuns":  20.2,
+                    "Set-InspectEmpty":  7.5,
+                    "Build-LogUI":  27.8,
+                    "Build-ThemeUI":  274.4,
+                    "Build-DashUI":  256.9,
+                    "Start-DashTimer":  17.7,
+                    "Build-HealthUI":  87
+                },
+    "FirstFrame":  [
+                       {
+                           "Page":  "dash-idle 概览",
+                           "Ms":  47.3,
+                           "SetterMs":  45.8
+                       },
+                       {
+                           "Page":  "first-1 性能优化",
+                           "Ms":  28.8,
+                           "SetterMs":  25.9
+                       },
+                       {
+                           "Page":  "first-2 垃圾清理",
+                           "Ms":  15.6,
+                           "SetterMs":  13.2
+                       },
+                       {
+                           "Page":  "first-3 日常维护",
+                           "Ms":  10.8,
+                           "SetterMs":  9.5
+                       },
+                       {
+                           "Page":  "first-4 弹窗排查",
+                           "Ms":  15.4,
+                           "SetterMs":  14
+                       },
+                       {
+                           "Page":  "first-5 启动项管理",
+                           "Ms":  20.2,
+                           "SetterMs":  19
+                       },
+                       {
+                           "Page":  "first-6 自带软件",
+                           "Ms":  24.6,
+                           "SetterMs":  19
+                       },
+                       {
+                           "Page":  "first-7 个性化",
+                           "Ms":  16.3,
+                           "SetterMs":  15.2
+                       },
+                       {
+                           "Page":  "first-8 系统体检",
+                           "Ms":  12.4,
+                           "SetterMs":  11.2
+                       },
+                       {
+                           "Page":  "first-9 操作日志",
+                           "Ms":  9.2,
+                           "SetterMs":  8.1
+                       },
+                       {
+                           "Page":  "again-0 概览",
+                           "Ms":  9.8,
+                           "SetterMs":  9.1
+                       },
+                       {
+                           "Page":  "again-1 性能优化",
+                           "Ms":  11.1,
+                           "SetterMs":  8.9
+                       },
+                       {
+                           "Page":  "again-2 垃圾清理",
+                           "Ms":  10.7,
+                           "SetterMs":  9.8
+                       },
+                       {
+                           "Page":  "again-3 日常维护",
+                           "Ms":  12.3,
+                           "SetterMs":  11.7
+                       },
+                       {
+                           "Page":  "again-4 弹窗排查",
+                           "Ms":  8.3,
+                           "SetterMs":  7.8
+                       },
+                       {
+                           "Page":  "again-5 启动项管理",
+                           "Ms":  9.1,
+                           "SetterMs":  8.6
+                       },
+                       {
+                           "Page":  "again-6 自带软件",
+                           "Ms":  11.4,
+                           "SetterMs":  10.7
+                       },
+                       {
+                           "Page":  "again-7 个性化",
+                           "Ms":  8.7,
+                           "SetterMs":  8.1
+                       },
+                       {
+                           "Page":  "again-8 系统体检",
+                           "Ms":  9.1,
+                           "SetterMs":  8.4
+                       },
+                       {
+                           "Page":  "again-9 操作日志",
+                           "Ms":  10.3,
+                           "SetterMs":  9.8
+                       },
+                       {
+                           "Page":  "dash-idle-2 概览",
+                           "Ms":  9.3,
+                           "SetterMs":  8.7
+                       }
+                   ],
+    "FrameGaps":  {
+                      "again-0":  {
+                                      "N":  236,
+                                      "Avg":  5.1,
+                                      "P95":  15.9,
+                                      "Max":  21,
+                                      "Over33":  0
+                                  },
+                      "again-1":  {
+                                      "N":  223,
+                                      "Avg":  5.4,
+                                      "P95":  16.5,
+                                      "Max":  27.8,
+                                      "Over33":  0
+                                  },
+                      "again-2":  {
+                                      "N":  209,
+                                      "Avg":  5.7,
+                                      "P95":  19.5,
+                                      "Max":  20.5,
+                                      "Over33":  0
+                                  },
+                      "again-3":  {
+                                      "N":  204,
+                                      "Avg":  6.1,
+                                      "P95":  19.6,
+                                      "Max":  21.5,
+                                      "Over33":  0
+                                  },
+                      "again-4":  {
+                                      "N":  206,
+                                      "Avg":  6,
+                                      "P95":  20,
+                                      "Max":  20.9,
+                                      "Over33":  0
+                                  },
+                      "again-5":  {
+                                      "N":  210,
+                                      "Avg":  5.7,
+                                      "P95":  16.7,
+                                      "Max":  21.1,
+                                      "Over33":  0
+                                  },
+                      "again-6":  {
+                                      "N":  215,
+                                      "Avg":  6,
+                                      "P95":  20,
+                                      "Max":  21.1,
+                                      "Over33":  0
+                                  },
+                      "again-7":  {
+                                      "N":  204,
+                                      "Avg":  6,
+                                      "P95":  19.7,
+                                      "Max":  20.6,
+                                      "Over33":  0
+                                  },
+                      "again-8":  {
+                                      "N":  205,
+                                      "Avg":  5.8,
+                                      "P95":  19.8,
+                                      "Max":  21.1,
+                                      "Over33":  0
+                                  },
+                      "again-9":  {
+                                      "N":  207,
+                                      "Avg":  6.2,
+                                      "P95":  20,
+                                      "Max":  20.6,
+                                      "Over33":  0
+                                  },
+                      "boot":  {
+                                   "N":  252,
+                                   "Avg":  5.9,
+                                   "P95":  5.8,
+                                   "Max":  294.5,
+                                   "Over33":  3
+                               },
+                      "dash-idle":  {
+                                        "N":  798,
+                                        "Avg":  7.6,
+                                        "P95":  20.3,
+                                        "Max":  112.9,
+                                        "Over33":  2
+                                    },
+                      "dash-idle-2":  {
+                                          "N":  577,
+                                          "Avg":  10.5,
+                                          "P95":  20.6,
+                                          "Max":  28.3,
+                                          "Over33":  0
+                                      },
+                      "first-1":  {
+                                      "N":  240,
+                                      "Avg":  6.3,
+                                      "P95":  20,
+                                      "Max":  28.8,
+                                      "Over33":  0
+                                  },
+                      "first-2":  {
+                                      "N":  237,
+                                      "Avg":  6.5,
+                                      "P95":  20.2,
+                                      "Max":  27.6,
+                                      "Over33":  0
+                                  },
+                      "first-3":  {
+                                      "N":  218,
+                                      "Avg":  6.9,
+                                      "P95":  20,
+                                      "Max":  20.7,
+                                      "Over33":  0
+                                  },
+                      "first-4":  {
+                                      "N":  225,
+                                      "Avg":  6.7,
+                                      "P95":  20.1,
+                                      "Max":  21.1,
+                                      "Over33":  0
+                                  },
+                      "first-5":  {
+                                      "N":  229,
+                                      "Avg":  6.8,
+                                      "P95":  20.3,
+                                      "Max":  21.1,
+                                      "Over33":  0
+                                  },
+                      "first-6":  {
+                                      "N":  233,
+                                      "Avg":  6.6,
+                                      "P95":  20.2,
+                                      "Max":  24.9,
+                                      "Over33":  0
+                                  },
+                      "first-7":  {
+                                      "N":  219,
+                                      "Avg":  7.2,
+                                      "P95":  20.1,
+                                      "Max":  27.9,
+                                      "Over33":  0
+                                  },
+                      "first-8":  {
+                                      "N":  229,
+                                      "Avg":  6.7,
+                                      "P95":  20.1,
+                                      "Max":  21,
+                                      "Over33":  0
+                                  },
+                      "first-9":  {
+                                      "N":  218,
+                                      "Avg":  7,
+                                      "P95":  20.1,
+                                      "Max":  28.2,
+                                      "Over33":  0
+                                  }
+                  },
+    "Ticks":  {
+                  "CountUpTick":  {
+                                      "N":  141,
+                                      "Avg":  0.2,
+                                      "P95":  0.1,
+                                      "Max":  16.3,
+                                      "Over33":  0
+                                  },
+                  "DashTick":  {
+                                   "N":  14,
+                                   "Avg":  13.3,
+                                   "P95":  101.8,
+                                   "Max":  101.8,
+                                   "Over33":  1
+                               },
+                  "PageEnter":  {
+                                    "N":  21,
+                                    "Avg":  8.8,
+                                    "P95":  15.3,
+                                    "Max":  76.9,
+                                    "Over33":  1
+                                },
+                  "SensorRead(后台)":  {
+                                         "N":  14,
+                                         "Avg":  116.9,
+                                         "P95":  221,
+                                         "Max":  221,
+                                         "Over33":  13
+                                     },
+                  "Warmup(空闲时)":  {
+                                      "N":  10,
+                                      "Avg":  39.6,
+                                      "P95":  229.1,
+                                      "Max":  229.1,
+                                      "Over33":  2
+                                  }
+              },
+    "CpuPct":  {
+                   "dash-idle":  51,
+                   "first-1":  31.4,
+                   "first-2":  30,
+                   "first-3":  14.4,
+                   "first-4":  20.6,
+                   "first-5":  9.9,
+                   "first-6":  30.2,
+                   "first-7":  32.4,
+                   "first-8":  14.1,
+                   "first-9":  11.2,
+                   "again-0":  37.4,
+                   "again-1":  33.4,
+                   "again-2":  31,
+                   "again-3":  14.9,
+                   "again-4":  30.3,
+                   "again-5":  12.8,
+                   "again-6":  9.7,
+                   "again-7":  20.3,
+                   "again-8":  11.7,
+                   "again-9":  9.6,
+                   "dash-idle-2":  21.8
+               }
+}

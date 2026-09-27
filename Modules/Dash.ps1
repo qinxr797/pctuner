@@ -288,7 +288,10 @@ function Get-DashScore {
         界面上可以展开看明细。
 
       返回 @{ Score; Items = @(@{ Name; Minus; Why }) }
+
+      Snap：传感器线的现成读数（v6.2 起算分在后台跑，温度 / 内存 / 系统盘直接用它，不再各读一遍）。
     #>
+    param($Snap = $null)
     $items = New-Object System.Collections.ArrayList
     $score = 100
 
@@ -309,7 +312,7 @@ function Get-DashScore {
     } catch { }
 
     try {
-        $d = Get-DashDisk
+        $d = if ($Snap) { $Snap.D } else { Get-DashDisk }
         if ($d) {
             if ($d.FreeGB -lt 10) { $score -= 15; [void]$items.Add(@{ Name = "系统盘只剩 $($d.FreeGB) GB"; Minus = 15; Why = '低于 10 GB，Windows 会开始出各种毛病。' }) }
             elseif ($d.FreeGB -lt 30) { $score -= 8; [void]$items.Add(@{ Name = "系统盘只剩 $($d.FreeGB) GB"; Minus = 8; Why = '低于 30 GB，更新和游戏读图会受影响。' }) }
@@ -317,7 +320,7 @@ function Get-DashScore {
     } catch { }
 
     try {
-        $r = Get-DashRam
+        $r = if ($Snap) { $Snap.R } else { Get-DashRam }
         if ($r -and $r.Percent -ge 85) {
             $score -= 10
             [void]$items.Add(@{ Name = "内存已用 $($r.Percent)%"; Minus = 10; Why = '超过 85% 系统开始往硬盘倒数据，那一下就是明显卡顿。' })
@@ -326,7 +329,7 @@ function Get-DashScore {
 
     # 温度：这一项只有读得到温度时才参与打分
     try {
-        $c = Get-DashCpu
+        $c = if ($Snap) { $Snap.C } else { Get-DashCpu }
         if ($null -ne $c.Temp) {
             if ($c.Temp -ge 95) { $score -= 15; [void]$items.Add(@{ Name = "CPU 温度 $($c.Temp)°C"; Minus = 15; Why = '已经在撞温度墙了，性能被硬压。清灰换硅脂比任何软件优化都管用。' }) }
             elseif ($c.Temp -ge 85) { $score -= 7; [void]$items.Add(@{ Name = "CPU 温度 $($c.Temp)°C"; Minus = 7; Why = '偏高。满载时容易触发降频，该考虑清灰了。' }) }

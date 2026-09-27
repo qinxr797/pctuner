@@ -48,7 +48,12 @@ param(
     # 出图时把窗口留在屏幕上、不自动关。
     # 悬停、按下这些状态 RenderTargetBitmap 拍不到，
     # 得真把鼠标放上去拍屏幕才算验过。
-    [switch]$ShotLive
+    [switch]$ShotLive,
+
+    # 测卡顿模式：自动把每一页切两遍、在概览页停几秒，记下每一帧的间隔、
+    # 切页到出第一帧的时间、每次定时刷新在界面线程上占了多久，写成 JSON 后退出。
+    # 和出图模式一样不提权、窗口放在屏幕外。改性能前后各跑一次，拿数字对比。
+    [string]$Perf = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -165,7 +170,7 @@ $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 #   为了拍张图弹一次 UAC 让人点「是」，那是拿打扰换方便。
 #   代价：SMART、传感器温度这些要管理员才读得到的会显示「—」。
 #   要拍带真实读数的图，从管理员终端里跑。
-if (-not $SelfTest -and -not $AutoClean -and -not $Shot -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+if (-not $SelfTest -and -not $AutoClean -and -not $Shot -and -not $Perf -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     try {
         $exe = (Get-Process -Id $PID).Path
         $argv = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
@@ -472,6 +477,159 @@ if ($AutoClean) {
     exit 0
 }
 
+# =====================================================================
+#  后台干活（v6.2）
+# ---------------------------------------------------------------------
+#  ★ 为什么要有这一节 ★
+#    v6.1 之前所有读数都在界面线程上跑：概览页每秒一次的传感器刷新实测 130~210ms，
+#    窗口出来之后还有一串体检 / 维护 / 硬件监控初始化要十几秒 —— 这段时间界面是死的，
+#    朋友说的「运行起来一卡一卡的」就是它（测量方法见 -Perf）。
+#
+#  ★ 两条后台线 ★
+#    · 传感器线：常驻，一秒读一次写进 $Script:Sensor（同步哈希表），界面只取现成的读数。
+#      只在概览页可见时读 —— 切走就歇着，和原来「切走立刻停表」一个意思。
+#    · 干活线：体检、硬盘健康、自带软件列表这类一次性的慢查询，读完回界面线程再画。
+#  ★ 后台只读数据，不碰任何界面对象 ★ WPF 控件只能在建它的线程上动。
+#  ★ 自检模式照旧同步跑 ★ 自检要数「建出来多少行」，异步回来之前它早就数完了。
+# =====================================================================
+$Script:BgLog = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
+$Script:BgJobs = New-Object System.Collections.ArrayList
+$Script:BgPool = $null
+$Script:BgPoll = $null
+$Script:BgModules = @('Engine', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme', 'Dash', 'Overclock')
+
+# 每条后台线开头都跑这一段：载入模块（每个后台线程只载一次），日志转回界面线程
+$Script:BgBoot = @'
+param($Root, $LogQ, $Mods, $WorkText, $Arg)
+if (-not $Global:PctBgReady) {
+    foreach ($m in $Mods) { . (Join-Path $Root "Modules\$m.ps1") }
+    Initialize-Engine -RootPath $Root
+    $Script:LogSink = { param($t, $l, $m) [void]$LogQ.Add(@($t, $l, $m)) }.GetNewClosure()
+    $Global:PctBgReady = $true
+}
+if ($WorkText) { & ([scriptblock]::Create($WorkText)) $Arg }
+'@
+
+function Start-BgWork {
+    <#
+      在后台跑 $Work（纯读数据，别碰界面），跑完在界面线程上调 $OnDone，参数是 $Work 的返回值。
+      自检模式下直接同步跑 —— 结果一样，只是不异步。
+    #>
+    param([string]$Name, [scriptblock]$Work, $Arg = $null, [scriptblock]$OnDone)
+    if ($SelfTest) {
+        $r = & $Work $Arg
+        & $OnDone $r
+        return
+    }
+    if (-not $Script:BgPool) {
+        $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+        $Script:BgPool = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspacePool(1, 2, $iss, $Host)
+        $Script:BgPool.ApartmentState = 'STA'     # 有些 COM 查询（快捷方式、计划任务）要 STA
+        $Script:BgPool.Open()
+    }
+    $ps = [PowerShell]::Create()
+    $ps.RunspacePool = $Script:BgPool
+    [void]$ps.AddScript($Script:BgBoot).AddArgument($Script:AppRoot).AddArgument($Script:BgLog).AddArgument($Script:BgModules).AddArgument($Work.ToString()).AddArgument($Arg)
+    [void]$Script:BgJobs.Add(@{ Name = $Name; PS = $ps; H = $ps.BeginInvoke(); OnDone = $OnDone })
+    Start-BgPoll
+}
+
+function Start-BgPoll {
+    <# 60ms 看一眼后台有没有干完、有没有新日志。什么都不等了就停表。 #>
+    if (-not $Script:BgPoll) {
+        $t = New-Object System.Windows.Threading.DispatcherTimer
+        $t.Interval = [TimeSpan]::FromMilliseconds(80)
+        $t.Add_Tick({
+                Receive-BgLog
+                foreach ($j in @($Script:BgJobs)) {
+                    if (-not $j.H.IsCompleted) { continue }
+                    [void]$Script:BgJobs.Remove($j)
+                    $out = $null
+                    try {
+                        $res = $j.PS.EndInvoke($j.H)
+                        if ($res.Count -gt 0) { $out = $res[$res.Count - 1] }
+                        # ★ 别写 $out.BaseObject ★ 结果多半是哈希表，对哈希表点属性名 = 按这个名字取键，取出来是 $null
+                        if ($out -is [System.Management.Automation.PSObject]) { $out = $out.psobject.BaseObject }
+                        foreach ($e in $j.PS.Streams.Error) { Write-Log "后台任务「$($j.Name)」报错：$($e.Exception.Message)" '警告' }
+                    } catch { Write-Log "后台任务「$($j.Name)」失败：$($_.Exception.Message)" '警告' }
+                    try { $j.PS.Dispose() } catch { }
+                    try { & $j.OnDone $out } catch { Write-Log "后台任务「$($j.Name)」回填界面失败：$($_.Exception.Message)" '警告' }
+                }
+                if ($Script:BgJobs.Count -eq 0 -and (-not $Script:SensorPs -or $Script:Sensor.Ready)) { Receive-BgLog; $this.Stop() }
+            })
+        $Script:BgPoll = $t
+    }
+    $Script:BgPoll.Start()
+}
+
+function Receive-BgLog {
+    <# 后台线写的日志搬到界面的日志页（文件那边后台自己已经写过了，这里不重复写） #>
+    while ($Script:BgLog.Count -gt 0) {
+        $e = $Script:BgLog[0]
+        $Script:BgLog.RemoveAt(0)
+        [void]$Script:LogLines.Add(('[{0}] [{1}] {2}' -f $e[0], $e[1], $e[2]))
+        [void]$Script:LogEntries.Add([PSCustomObject]@{ Time = $e[0]; Level = $e[1]; Message = $e[2] })
+        if ($Script:LogSink) { try { & $Script:LogSink $e[0] $e[1] $e[2] } catch { } }
+    }
+}
+
+# ---------------------------------------------------------------------
+#  传感器线
+# ---------------------------------------------------------------------
+$Script:Sensor = [hashtable]::Synchronized(@{ Active = $false; Stop = $false; Ready = $false; LhmReady = $false; LhmError = $null; Snap = $null; Seq = 0; Ms = 0.0 })
+$Script:SensorPs = $null
+
+$Script:SensorLoop = @'
+param($St)
+Initialize-Dash
+$St.LhmReady = [bool]$Script:LhmReady
+$St.LhmError = $Script:LhmError
+$St.Ready = $true
+$tick = 0
+while (-not $St.Stop) {
+    if ($St.Active) {
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $Script:DashTick = $tick
+        Update-DashSensors
+        $St.Snap = @{ C = (Get-DashCpu); G = (Get-DashGpu); R = (Get-DashRam); D = (Get-DashDisk) }
+        $St.Ms = $sw.Elapsed.TotalMilliseconds
+        $St.Seq++
+        $tick++
+        $wait = 1000 - [int]$sw.ElapsedMilliseconds
+        if ($wait -lt 100) { $wait = 100 }
+    } else { $wait = 150 }
+    Start-Sleep -Milliseconds $wait
+}
+Close-Dash
+'@
+
+function Start-SensorLoop {
+    if ($Script:SensorPs) { return }
+    if ($SelfTest) {
+        # 自检不起线程：同步读一次，填一个快照就行
+        Initialize-Dash
+        Update-DashSensors
+        $Script:Sensor.LhmReady = [bool]$Script:LhmReady
+        $Script:Sensor.Ready = $true
+        $Script:Sensor.Snap = @{ C = (Get-DashCpu); G = (Get-DashGpu); R = (Get-DashRam); D = (Get-DashDisk) }
+        $Script:Sensor.Seq++
+        return
+    }
+    $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($Host)
+    $rs.Open()
+    $ps = [PowerShell]::Create()
+    $ps.Runspace = $rs
+    [void]$ps.AddScript($Script:BgBoot).AddArgument($Script:AppRoot).AddArgument($Script:BgLog).AddArgument($Script:BgModules).AddArgument($Script:SensorLoop).AddArgument($Script:Sensor)
+    $Script:SensorPs = $ps
+    $Script:SensorH = $ps.BeginInvoke()
+    Start-BgPoll
+}
+
+function Stop-SensorLoop {
+    $Script:Sensor.Stop = $true
+    # 不等它：后台线最多再睡 1 秒就自己退出；窗口关了进程就结束了
+}
+
 # ---------------------------------------------------------------------
 #  3. 界面小工具
 # ---------------------------------------------------------------------
@@ -483,10 +641,22 @@ function Get-Brush {
       色槽按当前皮肤取值；语义色按当前皮肤只换明暗、不换色相 ——「高危」永远是红的。
       换肤之后 Redraw-AllPages 会把代码画的页面整个重画，所以这里返回的是一支普通画笔就够了。
     #>
+    #  v6.2：按「实际色号」缓存冻结的画笔。原来每次都新 new 一支 —— 概览页每秒刷新时
+    #  每张读数卡都换一支新画笔，WPF 就得重画那一块，哪怕颜色根本没变。
+    #  按实际色号（不是色槽名）做键，换肤之后色槽指向别的色号，自然取到别的画笔。
+    #  冻结的画笔不能做动画 —— 要做颜色过渡的地方（Start-ColorFade）自己会另建一支。
     param([string]$Hex)
     if ($Hex -eq 'Transparent') { return [System.Windows.Media.Brushes]::Transparent }
-    return (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString((Get-ThemeHex $Hex))))
+    $real = Get-ThemeHex $Hex
+    $b = $Script:BrushCache[$real]
+    if ($null -eq $b) {
+        $b = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($real))
+        $b.Freeze()
+        $Script:BrushCache[$real] = $b
+    }
+    return $b
 }
+$Script:BrushCache = @{}
 function New-Thick {
     param($L, $T, $R, $B)
     if ($null -eq $T) { return (New-Object System.Windows.Thickness $L) }
@@ -515,6 +685,22 @@ function Sync-UI {
         [System.Windows.Threading.DispatcherPriority]::Background, $cb, $frame) | Out-Null
     [System.Windows.Threading.Dispatcher]::PushFrame($frame)
 }
+# --- 测卡顿用的计数（-Perf 模式才记，平时一个判断就返回）---
+$Script:PerfOn = [bool]$Perf
+$Script:PerfTicks = @{}
+$Script:PerfSteps = [ordered]@{}
+function Add-PerfTick {
+    param([string]$K, [double]$Ms)
+    if (-not $Script:PerfOn) { return }
+    if (-not $Script:PerfTicks.ContainsKey($K)) { $Script:PerfTicks[$K] = New-Object System.Collections.Generic.List[double] }
+    $Script:PerfTicks[$K].Add($Ms)
+}
+function Invoke-Step {
+    <# 跑一步并记下耗时（启动那一串 Build-* 用）。平时也记，开销就是一个秒表。 #>
+    param([string]$Name, [scriptblock]$Do)
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    try { . $Do } finally { $Script:PerfSteps[$Name] = [math]::Round($sw.Elapsed.TotalMilliseconds, 1) }
+}
 function Set-Status {
     param([string]$Text)
     if ($Script:UI -and $Script:UI.StatusText) { $Script:UI.StatusText.Text = $Text }
@@ -525,6 +711,9 @@ function Set-Busy {
     param([bool]$On)
     if ($Script:UI -and $Script:UI.BusyBar) {
         $Script:UI.BusyBar.Visibility = if ($On) { 'Visible' } else { 'Collapsed' }
+        # v6.2：不忙的时候连动画一起停 —— 收起来的不确定进度条，它那条循环动画照样在跑，
+        # 界面线程就一直按 60 帧在画一个看不见的东西
+        $Script:UI.BusyBar.IsIndeterminate = $On
     }
     Sync-UI
 }
@@ -614,9 +803,40 @@ function Start-PageEnter {
     $null = $Script:Window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Loaded, [action] {
             $bl = $Script:PendingEnter
             $Script:PendingEnter = $null
+            $sw = [Diagnostics.Stopwatch]::StartNew()
             if ($bl) { Start-StaggerIn $bl 12 }
+            Add-PerfTick 'PageEnter' $sw.Elapsed.TotalMilliseconds
         })
     return ([math]::Min($blocks.Count, $Script:StaggerMax) * $Script:Dur.Stagger)
+}
+
+function Start-PageWarmup {
+    <#
+      v6.2：启动后趁空闲把没打开过的页面「预排一遍版」。
+      ★ 为什么 ★ TabControl 只在第一次切到某页时才给它套模板、排版 ——
+        「性能优化」页 65 行，第一次点进去界面线程要卡 230ms 左右（实测），之后再进只要 10ms。
+        这笔账省不掉，但可以挪到用户没在操作的空闲时间里付：每次空闲排一页。
+      ★ 用逻辑树量 ★ 页面还没挂到可视树上，但它的逻辑父级（TabItem）在，样式和资源都找得到。
+    #>
+    $q = New-Object System.Collections.Queue
+    foreach ($ti in $Script:UI.Tabs.Items) { if ($ti -ne $Script:UI.Tabs.SelectedItem -and $ti.Content) { $q.Enqueue($ti.Content) } }
+    $Script:WarmQueue = $q
+    $t = New-Object System.Windows.Threading.DispatcherTimer ([System.Windows.Threading.DispatcherPriority]::ApplicationIdle)
+    $t.Interval = [TimeSpan]::FromMilliseconds(120)
+    $t.Add_Tick({
+            if ($Script:WarmQueue.Count -eq 0) { $this.Stop(); return }
+            $pg = $Script:WarmQueue.Dequeue()
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            try {
+                $w = [math]::Max(600, $Script:UI.Tabs.ActualWidth); $h = [math]::Max(400, $Script:UI.Tabs.ActualHeight)
+                $pg.Measure((New-Object System.Windows.Size $w, $h))
+                # Arrange 也要做：勾选框 / 开关首次排版时要对齐一次外观（Install-ToggleMotion 挂在 SizeChanged 上），
+                # 65 个勾选框在第一次切进来时一起对齐，本身就要几十毫秒
+                $pg.Arrange((New-Object System.Windows.Rect 0, 0, $w, $h))
+            } catch { }
+            Add-PerfTick 'Warmup(空闲时)' $sw.Elapsed.TotalMilliseconds
+        })
+    $t.Start()
 }
 
 function Start-ListEnter {
@@ -1137,6 +1357,10 @@ function Set-Gauge {
         [int]$Decimals = 0, [string]$Unit = '', [string]$Sub = '')
     if ($null -eq $G) { return }
     if ($Max -le 0) { $Max = 100 }
+    # v6.2：和上一秒一模一样就不动 —— 温度、内存大多数秒是不变的，没必要重画、重跑数字滚动
+    $sig = "$Value|$Max|$Unit|$Sub"
+    if ($G.Last -eq $sig) { return }
+    $G.Last = $sig
     $G.Unit.Text = $Unit
     $G.Sub.Text = $Sub
     $mark = if ($null -ne $Hi) { [double]$Hi } elseif ($null -ne $Lo) { [double]$Lo } else { $null }
@@ -2357,7 +2581,7 @@ $xamlText = @'
           </Grid.ColumnDefinitions>
           <TextBlock Grid.Column="0" x:Name="StatusText" Text="就绪" Foreground="{DynamicResource TextDim}" FontSize="12"
                      TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-          <ProgressBar Grid.Column="1" x:Name="BusyBar" Width="160" Height="4" IsIndeterminate="True"
+          <ProgressBar Grid.Column="1" x:Name="BusyBar" Width="160" Height="4" IsIndeterminate="False"
                        Visibility="Collapsed" VerticalAlignment="Center" Margin="16,0,0,0"/>
         </Grid>
       </Border>
@@ -2633,16 +2857,34 @@ $Script:DashScoreCache = $null
 
 
 
+$Script:DashSeq = -1
 function Start-DashTimer {
+    <#
+      v6.2：读传感器挪到后台线（Start-SensorLoop），这里 200ms 看一眼有没有新读数，
+      有才刷界面。界面线程上只剩「写数字、挪量程条」这点活。
+    #>
+    $Script:Sensor.Active = $true
+    Start-SensorLoop
     if ($Script:DashTimer) { $Script:DashTimer.Start(); return }
     $t = New-Object System.Windows.Threading.DispatcherTimer
-    $t.Interval = [TimeSpan]::FromSeconds(1)
-    $t.Add_Tick({ try { Update-DashUI } catch { } })
+    $t.Interval = [TimeSpan]::FromMilliseconds(200)
+    $t.Add_Tick({
+            $seq = $Script:Sensor.Seq
+            if ($seq -eq $Script:DashSeq) { return }
+            $Script:DashSeq = $seq
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            try { Update-DashUI } catch { }
+            Add-PerfTick 'DashTick' $sw.Elapsed.TotalMilliseconds
+            Add-PerfTick 'SensorRead(后台)' $Script:Sensor.Ms
+            # 第一份读数到了、健康度还没算：现在算（温度那一项要等传感器）
+            if ($null -eq $Script:DashScoreCache -and -not $Script:DashScoreBusy) { Update-DashScore }
+        })
     $Script:DashTimer = $t
     $t.Start()
 }
 
 function Stop-DashTimer {
+    $Script:Sensor.Active = $false
     if ($Script:DashTimer) { $Script:DashTimer.Stop() }
 }
 
@@ -2757,6 +2999,7 @@ function Build-DashUI {
     # 画安全线就等于编一个不存在的标准。所以只报数、只画填充。
     $Script:DashPlain = @{}
     $Script:DashLoadMeters = @{}
+    $Script:DashLoadLast = @{}
     $box = New-Object System.Windows.Controls.StackPanel
     $head = New-Object System.Windows.Controls.StackPanel
     $head.Orientation = 'Horizontal'
@@ -2859,7 +3102,7 @@ function Build-DashHero {
         右边  圆环    分数在 0~100 里画到哪（D4：和数字共用一个时钟，一起滚、一起画满）
       $S 是 Get-DashScore 的结果；$null = 还没算出来，数字写「—」、圆环空着。
     #>
-    param($S)
+    param($S, [switch]$NoCount)
     $h = $Script:UI.DashHero
     if ($null -eq $h) { return }
     $root = New-Object System.Windows.Controls.Grid     # 外层留给光斑（C2）叠一层
@@ -2986,7 +3229,8 @@ function Build-DashHero {
                 $Script:HeroSpot.Brush.GradientOrigin = $pt
             })
     }
-    if ($S) { Start-HeroScore 0 }
+    if ($S -and $NoCount) { $num.Text = "$([int]$S.Score)"; Set-HeroRing ([double]$S.Score) }
+    elseif ($S) { Start-HeroScore 0 }
 }
 
 function Set-HeroRing {
@@ -3033,9 +3277,24 @@ function Update-DashScore {
         结论卡：每一条扣分写清楚扣在哪、扣了几分、为什么 ——
                 「一键体检 98 分」那种黑箱分数是先吓人再卖服务，这里每一分都摊开
     #>
-    $s = Get-DashScore
-    $Script:DashScoreCache = $s
-    Build-DashHero $s
+    #  v6.2：算分要读注册表、启动项、查系统盘是不是固态，实测 370ms —— 挪到后台。
+    #  温度那一项用传感器线的现成读数，所以要等第一份读数到了再算（Start-DashTimer 里接力）。
+    param([switch]$Redraw)
+    if ($Redraw -and $Script:DashScoreCache) { Show-DashScore $Script:DashScoreCache $false; return }
+    if ($Script:DashScoreBusy) { return }
+    $Script:DashScoreBusy = $true
+    Start-BgWork 'score' { param($snap) Get-DashScore -Snap $snap } -Arg $Script:Sensor.Snap -OnDone {
+        param($s)
+        $Script:DashScoreBusy = $false
+        if ($null -eq $s) { return }
+        $Script:DashScoreCache = $s
+        Show-DashScore $s $true
+    }
+}
+
+function Show-DashScore {
+    param($s, [bool]$Animate)
+    Build-DashHero $s -NoCount:(-not $Animate)
 
     $box = $Script:UI.DashVerdict
     $box.Children.Clear()
@@ -3131,27 +3390,27 @@ function Set-RptReading {
 function Update-DashUI {
     <# 每秒刷一次仪表。这里绝不做耗时的事 #>
     if (-not $Script:DashGauges -or $Script:DashGauges.Count -eq 0) { return }
-    $Script:DashTick++
-    Update-DashSensors
+    $snap = $Script:Sensor.Snap
+    if ($null -eq $snap) { return }       # 传感器线还在初始化（首次约 3~7 秒），读数卡先显示「—」
 
-    $c = Get-DashCpu
+    $c = $snap.C
     $rg = Get-RptRange 'CpuTemp'
     Set-Gauge $Script:DashGauges['CpuTemp'] $c.Temp $rg.Max $rg.Lo $rg.Hi 0 '°C' $(
-        if ($null -eq $c.Temp) { '读不到（需管理员权限）' } else { '合格 ' + $rg.Text + ' °C' })
+        if ($null -eq $c.Temp) { $(if ($Script:IsAdmin -and $Script:Sensor.LhmReady) { '这台机器不报告' } else { '读不到（需管理员权限）' }) } else { '合格 ' + $rg.Text + ' °C' })
 
-    $g = Get-DashGpu
+    $g = $snap.G
     $rg = Get-RptRange 'GpuTemp'
     $gsub = if ($g.Name) { ($g.Name -replace 'NVIDIA GeForce |AMD |\(TM\)| Laptop GPU', '') } else { '没检测到显卡' }
     Set-Gauge $Script:DashGauges['GpuTemp'] $g.Temp $rg.Max $rg.Lo $rg.Hi 0 '°C' $gsub
 
-    $r = Get-DashRam
+    $r = $snap.R
     $rg = Get-RptRange 'Ram'
     if ($r) {
         Set-Gauge $Script:DashGauges['Ram'] $r.Percent $rg.Max $rg.Lo $rg.Hi 0 '%' (
             "已用 $($r.UsedGB) / 共 $($r.TotalGB) GB")
     }
 
-    $d = Get-DashDisk
+    $d = $snap.D
     if ($d) {
         # 系统盘的满量程就是这块盘的实际容量 —— 用 100 当量程是错的
         Set-Gauge $Script:DashGauges['Disk'] $d.FreeGB ([double]$d.TotalGB) 20 $null 1 'GB' (
@@ -3162,6 +3421,8 @@ function Update-DashUI {
     foreach ($p in @(@{ K = 'CpuLoad'; V = $c.Load }, @{ K = 'GpuLoad'; V = $g.Load })) {
         $t = $Script:DashPlain[$p.K]
         if ($null -eq $t) { continue }
+        if ($Script:DashLoadLast[$p.K] -eq "$($p.V)") { continue }
+        $Script:DashLoadLast[$p.K] = "$($p.V)"
         Set-Meter $Script:DashLoadMeters[$p.K] $p.V 100 $null
         if ($null -eq $p.V) { $t.Text = [string][char]0x2014; continue }
         Start-CountUp -Target $t -To ([double]$p.V) -Decimals 0 -Ms $Script:Dur.Draw
@@ -4381,7 +4642,7 @@ function Redraw-AllPages {
     try { Build-PresetUI } catch { }
     # ★ 概览页也必须重建 ★ 漏了它的话换皮肤之后读数卡还是旧配色
     #   （v5.1 这里判断的是一个永远为空的表，概览页换肤后其实从没重画过）
-    try { if ($Script:DashGauges -and $Script:DashGauges.Count -gt 0) { Build-DashUI; Update-DashScore; Update-DashUI } } catch { }
+    try { if ($Script:DashGauges -and $Script:DashGauges.Count -gt 0) { Build-DashUI; Update-DashScore -Redraw; $Script:DashSeq = -1; Update-DashUI } } catch { }
     try { Build-CleanUI; foreach ($k in $keepClean.Keys) { if ($Script:CleanRows[$k]) { $Script:CleanRows[$k].Check.IsChecked = $keepClean[$k] } }; Update-CleanSelCount } catch { }
     try { Build-ThemeUI } catch { }
     try { if ($Script:UI.StartupPanel.Children.Count -gt 0) { Build-StartupUI } } catch { }
@@ -4417,14 +4678,38 @@ function Update-AppxCounter {
 }
 
 function Build-AppxUI {
+    <#
+      v6.2：Get-AppxPackage 在后台跑（首次进这一页原来会卡半秒以上），读完再画。
+      -Refresh 重新读（按钮 / 卸载之后）；换肤重画不带参数。
+    #>
+    param([switch]$Refresh, [switch]$Enter)
     $panel = $Script:UI.AppxPanel
+    if ($Refresh -or $null -eq $Script:AppxData) {
+        if ($Script:AppxBusy) { return }
+        $Script:AppxBusy = $true
+        $Script:AppxEnter = [bool]$Enter
+        $panel.Children.Clear()
+        $panel.Children.Add((New-TextBlock -Text '正在读取自带应用列表…' -Size 13 -Color 'TextDim')) | Out-Null
+        Set-Status '正在读取自带应用列表…'
+        Start-BgWork 'appx' {
+            $Script:AppxFailReason = $null
+            $items = @(Get-AppxCatalog)
+            @{ Items = $items; Why = $Script:AppxFailReason }
+        } -OnDone {
+            param($r)
+            $Script:AppxBusy = $false
+            if ($null -eq $r) { Set-Status '读取自带应用列表失败，详见日志页'; return }
+            $Script:AppxData = $r
+            Build-AppxUI
+            if ($Script:AppxEnter) { Start-ListEnter $Script:UI.AppxPanel }
+        }
+        return
+    }
     $panel.Children.Clear()
     $Script:AppxRows = @{}
-    Set-Status '正在读取自带应用列表…'
-    Sync-UI
 
-    $Script:AppxFailReason = $null
-    $items = @(Get-AppxCatalog)
+    $Script:AppxFailReason = $Script:AppxData.Why
+    $items = @($Script:AppxData.Items)
     if ($items.Count -eq 0) {
         $why = '常见原因：这台机器是精简版系统，自带应用已经被处理过了 —— 那就不用管这一页。'
         if ($Script:AppxFailReason -eq 'pwsh') {
@@ -4545,15 +4830,38 @@ function Invoke-AppxUninstall {
         if (Remove-AppxSafe -Name $n) { $ok++ } else { $fail++ }
     }
     Set-Busy $false
-    Build-AppxUI
+    Build-AppxUI -Refresh
     Show-Msg -Text (("卸载完成：成功 {0} 个，失败 {1} 个。`r`n`r`n失败的多半是系统保护的包，日志页有具体原因。" -f $ok, $fail)) -Title '电脑调优助手' -Kind Info | Out-Null
 }
 
 function Build-StartupUI {
+    <#
+      v6.2：读启动项（注册表 + 启动文件夹 + 解析快捷方式，实测 150~460ms）在后台跑，读完再画。
+      -Refresh 重新读（按钮 / F5）；换肤重画不带参数。
+    #>
+    param([switch]$Refresh, [switch]$Enter)
     $panel = $Script:UI.StartupPanel
+    if ($Refresh -or $null -eq $Script:StartupData) {
+        if ($Script:StartupBusy) { return }
+        $Script:StartupBusy = $true
+        $Script:StartupEnter = [bool]$Enter
+        if ($null -eq $Script:StartupData) {
+            $panel.Children.Clear()
+            $panel.Children.Add((New-TextBlock -Text '正在读取开机启动项…' -Size 13 -Color 'TextDim')) | Out-Null
+        }
+        Set-Status '正在读取开机启动项…'
+        Start-BgWork 'startup' { @{ Items = @(Get-StartupItems) } } -OnDone {
+            param($r)
+            $Script:StartupBusy = $false
+            if ($null -eq $r) { Set-Status '读取开机启动项失败，详见日志页'; return }
+            $Script:StartupData = $r
+            Build-StartupUI
+            if ($Script:StartupEnter) { Start-ListEnter $Script:UI.StartupPanel }
+        }
+        return
+    }
     $panel.Children.Clear()
-    Set-Status '正在读取开机启动项…'
-    $items = @(Get-StartupItems)
+    $items = @($Script:StartupData.Items)
     if ($items.Count -eq 0) {
         $panel.Children.Add((New-TextBlock -Text '没有发现任何开机启动项，很干净。' -Color 'TextDim')) | Out-Null
         Set-Status '就绪'
@@ -4594,6 +4902,7 @@ function Build-StartupUI {
         $cb.Add_Click({
                 $item = $this.Tag
                 Set-StartupItemEnabled -Item $item -Enabled ([bool]$this.IsChecked) | Out-Null
+                try { $item.Enabled = [bool]$this.IsChecked } catch { }   # 换肤重画用的是缓存，跟着改
                 Set-Status ("启动项「{0}」已{1}" -f $item.Name, $(if ($this.IsChecked) { '启用' } else { '禁用' }))
             })
         [System.Windows.Controls.Grid]::SetColumn($cb, 0)
@@ -4777,7 +5086,7 @@ function Invoke-SetRefresh {
         Set-DisplayRefreshRate -Hz $before.Hz | Out-Null
         Set-Status ("已切回 {0} Hz" -f $before.Hz)
     }
-    Build-MaintainUI   # 重建这一页，按钮上的「当前」标记要跟着更新
+    Build-MaintainUI -Refresh   # 重新读一遍再重建，按钮上的「当前」标记要跟着更新
 }
 
 function Export-DiagnosticReport {
@@ -4793,10 +5102,12 @@ function Export-DiagnosticReport {
     [void]$sb.AppendLine(('生成时间：{0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')))
     [void]$sb.AppendLine()
     [void]$sb.AppendLine('---------- 硬件信息 ----------')
-    foreach ($r in (Get-SystemReport)) { [void]$sb.AppendLine(('{0}：{1}' -f $r.Key, $r.Value)) }
+    # 体检页后台跑过就用它的结果，没跑完才现读（v6.2）
+    $hd = $Script:HealthData
+    foreach ($r in $(if ($hd) { @($hd.Report) } else { Get-SystemReport })) { [void]$sb.AppendLine(('{0}：{1}' -f $r.Key, $r.Value)) }
     [void]$sb.AppendLine()
     [void]$sb.AppendLine('---------- 体检结论 ----------')
-    foreach ($a in (Get-HealthAdvice)) {
+    foreach ($a in $(if ($hd) { @($hd.Advice) } else { Get-HealthAdvice })) {
         [void]$sb.AppendLine(('[{0}] {1}' -f $a.Level, $a.Title))
         [void]$sb.AppendLine($a.Text)
         [void]$sb.AppendLine()
@@ -4848,7 +5159,30 @@ function Build-MaintainUI {
         New-ActRow  —— 只有动作的项（一键维护、开关、打开某个设置）
       每一节是一张卡（design.md 4.4），节里的行用细线分开。
     #>
+    #  v6.2：显示器模式、硬盘 SMART、分区列表、计划任务在后台读（实测 1.2 秒），读完再画。
+    #  -Refresh 重新读（改完刷新率之后）；换肤重画不带参数，用上次读到的。
+    param([switch]$Refresh)
     $root = $Script:UI.MaintainPanel
+    if ($Refresh -or $null -eq $Script:MaintData) {
+        if ($Script:MaintBusy) { return }
+        $Script:MaintBusy = $true
+        if ($null -eq $Script:MaintData) {
+            $root.Children.Clear()
+            $root.Children.Add((New-TextBlock -Text '正在读取显示器和硬盘信息…' -Size 13 -Color 'TextDim')) | Out-Null
+        }
+        Start-BgWork 'maintain' {
+            @{ Cur = (Get-CurrentDisplayMode); Opts = @(Get-DisplayRefreshOptions); Disks = @(Get-DiskHealthReport)
+               Vols = @(Get-VolumesToOptimize); Auto = [bool](Test-AutoCleanEnabled) }
+        } -OnDone {
+            param($r)
+            $Script:MaintBusy = $false
+            if ($null -eq $r) { return }
+            $Script:MaintData = $r
+            Build-MaintainUI
+        }
+        return
+    }
+    $md = $Script:MaintData
     $root.Children.Clear()
     $p = $root
 
@@ -4882,14 +5216,15 @@ function Build-MaintainUI {
     $cbAuto.Content = '开启'
     $cbAuto.FontSize = 13
     $cbAuto.VerticalAlignment = 'Center'
-    $cbAuto.IsChecked = (Test-AutoCleanEnabled)
+    $cbAuto.IsChecked = [bool]$md.Auto
     $cbAuto.Add_Click({
             if ($this.IsChecked) {
                 $ok = Enable-AutoClean -ScriptPath $PSCommandPath
-                if ($ok) { Set-Status '已开启每周自动清理（每周日 12:00）' }
+                if ($ok) { $Script:MaintData.Auto = $true; Set-Status '已开启每周自动清理（每周日 12:00）' }
                 else { $this.IsChecked = $false; Show-Msg -Text '创建计划任务失败，详见日志页。' | Out-Null }
             } else {
                 Disable-AutoClean | Out-Null
+                $Script:MaintData.Auto = $false
                 Set-Status '已关闭每周自动清理'
             }
         })
@@ -4899,8 +5234,8 @@ function Build-MaintainUI {
     # ==================== 显示器 ====================
     # 买了高刷屏却还跑在 60Hz 非常常见（换线、重装驱动、接新屏都会退回去）。
     # 对 FPS 玩家来说这个差距比任何注册表优化都大，所以排在第二位。
-    $cur = Get-CurrentDisplayMode
-    $opts = @(Get-DisplayRefreshOptions)
+    $cur = $md.Cur
+    $opts = @($md.Opts)
     if ($cur -and $opts.Count -gt 0) {
         $maxHz = $opts[0]
         Add-Sec -Title '显示器' -Aside ("{0} × {1}" -f $cur.Width, $cur.Height) -Icon 'Monitor'
@@ -4936,7 +5271,7 @@ function Build-MaintainUI {
     }
 
     # ==================== 硬盘健康 ====================
-    $disks = @(Get-DiskHealthReport)
+    $disks = @($md.Disks)
     if ($disks.Count -gt 0) {
         Add-Sec -Title '硬盘健康' -Aside '读 SMART 数据' -Icon 'Harddisk'
         $p.Children.Add((New-RptHeader -First '硬盘')) | Out-Null
@@ -4971,7 +5306,7 @@ function Build-MaintainUI {
     }
 
     # ==================== 磁盘优化 ====================
-    $vols = @(Get-VolumesToOptimize)
+    $vols = @($md.Vols)
     if ($vols.Count -gt 0) {
         Add-Sec -Title '磁盘优化' -Aside '半年一次' -Icon 'Speedometer'
         $sd = New-TextBlock -Size 13 -Color 'TextDim' -Wrap $true -Text '自动认介质：固态做 TRIM（恢复写入速度），机械做碎片整理。不会对固态盘做碎片整理 —— 那只会白白消耗寿命。'
@@ -5554,8 +5889,37 @@ function Build-RecentRuns {
 $Script:LastReportText = ''
 
 function Build-HealthUI {
-    Set-Busy $true
-    Set-Status '正在收集硬件信息…'
+    <#
+      v6.2：收集硬件信息 + 体检在后台跑（实测 4~5 秒，原来这段时间界面是死的），跑完再画。
+        -Refresh  重新体检（按钮 / F5）
+        -Enter    画完之后右栏依次进场（用户点了才播）
+      换肤重画时不带参数 —— 用上次的结果重画，不重新体检。
+    #>
+    param([switch]$Refresh, [switch]$Enter)
+    if ($Refresh -or $null -eq $Script:HealthData) {
+        if ($Script:HealthBusy) { return }
+        $Script:HealthBusy = $true
+        $Script:HealthEnter = [bool]$Enter
+        Set-Busy $true
+        Set-Status '正在收集硬件信息、做系统体检…（在后台做，界面照常能用）'
+        if ($null -eq $Script:HealthData) {
+            foreach ($pn in @($Script:UI.InfoPanel, $Script:UI.AdvicePanel)) {
+                $pn.Children.Clear()
+                $pn.Children.Add((New-TextBlock -Text '正在读取…' -Size 13 -Color 'TextDim')) | Out-Null
+            }
+        }
+        Start-BgWork 'health' { @{ Report = @(Get-SystemReport); Advice = @(Get-HealthAdvice) } } -OnDone {
+            param($r)
+            $Script:HealthBusy = $false
+            Set-Busy $false
+            if ($null -eq $r) { Set-Status '体检没做完，详见日志页'; return }
+            $Script:HealthData = $r
+            Build-HealthUI
+            # 启动时那次是自己跑的，不抢状态栏（状态栏那时写着「报告已出」）；用户点的才报
+            if ($Script:HealthEnter) { Start-ListEnter $Script:UI.AdvicePanel; Set-Status '体检完成' }
+        }
+        return
+    }
     $info = $Script:UI.InfoPanel
     $info.Children.Clear()
     $sb = New-Object System.Text.StringBuilder
@@ -5565,7 +5929,7 @@ function Build-HealthUI {
     #   两列对齐（标签 | 值），细线分隔 —— 这样才扫得快。
     $info.Children.Add((New-RptSection -Title '受检机器' -Icon 'Laptop')) | Out-Null
 
-    foreach ($row in (Get-SystemReport)) {
+    foreach ($row in @($Script:HealthData.Report)) {
         $b = New-Object System.Windows.Controls.Border
         $b.BorderBrush = Get-Brush $Script:CARD_BORDER
         $b.BorderThickness = New-Thick 0 0 0 1
@@ -5594,8 +5958,6 @@ function Build-HealthUI {
     }
 
     # ==================== 体检结论 ====================
-    Set-Status '正在做系统体检…'
-    Sync-UI
     $apRoot = $Script:UI.AdvicePanel
     $apRoot.Children.Clear()
     $adviceCard = New-Card -Title '检验结论' -Aside '按性价比从高到低排' -Icon 'ClipboardCheckOutline'
@@ -5604,7 +5966,7 @@ function Build-HealthUI {
     [void]$sb.AppendLine()
     [void]$sb.AppendLine('===== 体检结论 =====')
 
-    foreach ($a in (Get-HealthAdvice)) {
+    foreach ($a in @($Script:HealthData.Advice)) {
         # ★ 判读标记，不是彩色药丸 ★
         #   上一版每条是「圆角卡 + 整块底色 + 4px 彩色左边条 + 彩色标签」，
         #   三档各一种颜色，满屏都是色块 —— 真正「严重」的那条反而不跳。
@@ -5660,8 +6022,6 @@ function Build-HealthUI {
     }
     Close-CardRows $ap
     $Script:LastReportText = $sb.ToString()
-    Set-Busy $false
-    Set-Status '体检完成'
 }
 
 # ---------------------------------------------------------------------
@@ -5858,7 +6218,7 @@ $Script:UI.BtnPickCleanNone.Add_Click({
         Update-CleanSelCount
     })
 
-$Script:UI.BtnRefreshStartup.Add_Click({ Build-StartupUI; Start-ListEnter $Script:UI.StartupPanel })
+$Script:UI.BtnRefreshStartup.Add_Click({ Build-StartupUI -Refresh -Enter })
 
 $Script:UI.BtnInspect.Add_Click({ Invoke-Inspect; Start-ListEnter $Script:UI.InspectPanel })
 $Script:UI.BtnInspectFilter.Add_Click({
@@ -5921,11 +6281,11 @@ $Script:UI.BtnEnableTaskLog.Add_Click({
         }
     })
 # 体检页右栏在「体检结论 / 帧数诊断 / 超频陪练 / 厂商工具」之间切换 = 页面内的区块切换，卡片依次进场
-$Script:UI.BtnHealthScan.Add_Click({ Build-HealthUI; Start-ListEnter $Script:UI.AdvicePanel })
+$Script:UI.BtnHealthScan.Add_Click({ Build-HealthUI -Refresh -Enter })
 $Script:UI.BtnFpsDiag.Add_Click({ Build-FpsDiagUI; Start-ListEnter $Script:UI.AdvicePanel })
 $Script:UI.BtnOcCoach.Add_Click({ Build-OcCoachUI; Start-ListEnter $Script:UI.AdvicePanel })
 $Script:UI.BtnVendor.Add_Click({ Build-VendorUI; Start-ListEnter $Script:UI.AdvicePanel })
-$Script:UI.BtnRefreshAppx.Add_Click({ Build-AppxUI; Start-ListEnter $Script:UI.AppxPanel })
+$Script:UI.BtnRefreshAppx.Add_Click({ Build-AppxUI -Refresh -Enter })
 $Script:UI.BtnUninstallAppx.Add_Click({ Invoke-AppxUninstall })
 $Script:UI.BtnCheckAppxSafe.Add_Click({
         # 只勾「可以删」那一档；「看情况」的要用户自己看完说明再决定
@@ -5961,7 +6321,10 @@ $Script:UI.BtnSfc.Add_Click({
     })
 
 $Script:UI.BtnCopyReport.Add_Click({
-        if ([string]::IsNullOrWhiteSpace($Script:LastReportText)) { Build-HealthUI }
+        if ([string]::IsNullOrWhiteSpace($Script:LastReportText)) {
+            Show-Msg -Text '体检还在后台进行，等「系统体检」页出结果之后再点一次。' | Out-Null
+            return
+        }
         try {
             Set-Clipboard -Value $Script:LastReportText
             Show-Msg -Text '体检报告已复制到剪贴板，可以直接粘贴发给别人看。' | Out-Null
@@ -5997,8 +6360,8 @@ $Script:Window.Add_PreviewKeyDown({
                 '性能优化' { Update-TweakStates }
                 '垃圾清理' { Invoke-ScanJunk }
                 '弹窗排查' { Invoke-Inspect }
-                '启动项管理' { Build-StartupUI }
-                '系统体检' { Build-HealthUI }
+                '启动项管理' { Build-StartupUI -Refresh -Enter }
+                '系统体检' { Build-HealthUI -Refresh -Enter }
             }
             $_.Handled = $true
         } elseif ($_.Key -eq 'Escape') {
@@ -6075,22 +6438,22 @@ Update-TweakStates -PreselectRecommended $true
 
 # 启动项和体检比较慢，等窗口显示出来之后再在后台补上
 $Script:Window.Add_ContentRendered({
-        Build-StartupUI
-        Build-MaintainUI
-        Build-BigFileDrives
-        Build-RecentRuns
-        Set-InspectEmpty        # 弹窗排查页扫描前的空状态
-        Build-LogUI             # 把窗口出来之前记下的那几条日志补画出来
-        Build-ThemeUI
+        Invoke-Step 'Build-StartupUI' { Build-StartupUI }
+        Invoke-Step 'Build-MaintainUI' { Build-MaintainUI }
+        Invoke-Step 'Build-BigFileDrives' { Build-BigFileDrives }
+        Invoke-Step 'Build-RecentRuns' { Build-RecentRuns }
+        Invoke-Step 'Set-InspectEmpty' { Set-InspectEmpty }        # 弹窗排查页扫描前的空状态
+        Invoke-Step 'Build-LogUI' { Build-LogUI }             # 把窗口出来之前记下的那几条日志补画出来
+        Invoke-Step 'Build-ThemeUI' { Build-ThemeUI }
         # 概览页：先建壳子再开硬件监控。
         # Initialize-Dash 要枚举全部硬件，实测约 3 秒，所以放在
         # 窗口已经显示出来之后做 —— 不然用户会觉得「双击了半天不出来」。
-        Build-DashUI
-        Initialize-Dash
-        Update-DashScore
-        Start-DashTimer
+        Invoke-Step 'Build-DashUI' { Build-DashUI }
+        # 硬件监控初始化（枚举全部硬件，3~7 秒）在传感器线里做，界面不等它
+        Invoke-Step 'Start-DashTimer' { Start-DashTimer }
         if (Test-ProcAuditEnabled) { $Script:UI.BtnProcAudit.Content = '关闭持续记录' }
-        Build-HealthUI
+        Invoke-Step 'Build-HealthUI' { Build-HealthUI }
+        Start-PageWarmup
         Set-Status '报告已出 —— 超出安全范围的项列在「检验结论」里；要动手去「性能优化」页'
     })
 
@@ -6234,7 +6597,9 @@ if ($SelfTest) {
     $vendorCards = $Script:UI.AdvicePanel.Children.Count
     Build-HealthUI
     Build-DashUI
+    Start-SensorLoop
     Update-DashScore
+    Update-DashUI
     # v6 把「维护 / 体检 / 个性化」的条目装进了卡片 —— 数卡片里面的条目，口径才和 v5.1 对得上
     $inCards = { param($panel) $n = 0; foreach ($c in $panel.Children) { if ($c -is [System.Windows.Controls.Border] -and $c.Child -is [System.Windows.Controls.StackPanel]) { $n += $c.Child.Children.Count } else { $n++ } }; $n }
     Write-Host ('自检通过：优化项 {0} / 预设 {1} / 清理项 {2} / 启动项 {3} / 维护项 {4} / 盘符 {5} / 排查结果 {6} / 运行记录 {7} / 体检卡片 {8} / 帧数诊断 {9} / 自带应用 {10} / 皮肤 {11} / 超频陪练 {12} / 厂商建议 {13} / 导航 {14} / 读数卡 {15}' -f `
@@ -6261,7 +6626,127 @@ try {
 
 # 窗口一拉伸，整排页签就挪位置了，指示条得跟着走（不动画，跟手才对）
 $Script:Window.Add_Closed({ try { if ($Script:WatchTimer) { $Script:WatchTimer.Stop() }; Stop-ProcWatch } catch { } })
-$Script:Window.Add_Closed({ try { Stop-DashTimer; Close-Dash } catch { } })
+$Script:Window.Add_Closed({ try { Stop-DashTimer; Stop-SensorLoop } catch { } })
+
+# ---------------------------------------------------------------------
+#  测卡顿模式（-Perf 文件路径）
+#
+#  ★ 量什么 ★
+#    · 每一帧的间隔 —— 订阅 CompositionTarget.Rendering 之后 WPF 每帧都会回调一次，
+#      两次回调的间隔就是界面线程能不能按时出帧。60Hz 下正常是 16.7ms，
+#      超过 33ms 就是掉了一帧以上，人眼看得出「卡一下」。
+#    · 切页首帧 —— 从设 SelectedIndex 到下一帧回调，也就是「点了之后多久看到东西」
+#    · 每次定时刷新（概览页的传感器轮询等）在界面线程上占了多少毫秒
+#    · 启动时窗口出来之后那一串 Build-* 各花了多久
+#  ★ 不提权 ★ 和出图模式一样；传感器在非管理员下读得少，数字是下限 —— 汇报时要说明。
+# ---------------------------------------------------------------------
+if ($Perf) {
+    $Script:Window.WindowStartupLocation = 'Manual'
+    $Script:Window.Left = -4000
+    $Script:Window.Top = 0
+    $Script:Window.ShowInTaskbar = $false
+
+    $Script:PerfClock = [Diagnostics.Stopwatch]::StartNew()
+    $Script:PerfPhase = 'boot'
+    $Script:PerfGaps = @{}                  # 阶段 -> 帧间隔列表
+    $Script:PerfLastFrame = -1.0
+    $Script:PerfFirstFrame = New-Object System.Collections.ArrayList   # 切页首帧
+    $Script:PerfSwitchAt = $null
+    $Script:PerfSwitchName = ''
+    $Script:PerfCpu = [ordered]@{}
+    $Script:PerfCpuAt = $null
+
+    $Script:PerfOnFrame = [EventHandler] {
+        $now = $Script:PerfClock.Elapsed.TotalMilliseconds
+        if ($null -ne $Script:PerfSwitchAt) {
+            [void]$Script:PerfFirstFrame.Add([pscustomobject]@{ Page = $Script:PerfSwitchName; Ms = [math]::Round($now - $Script:PerfSwitchAt, 1); SetterMs = $Script:PerfSetterMs })
+            $Script:PerfSwitchAt = $null
+            $Script:PerfLastFrame = $now      # 切页那一下的空档单独算在首帧里，不混进帧间隔
+            return
+        }
+        if ($Script:PerfLastFrame -ge 0) {
+            $ph = $Script:PerfPhase
+            if (-not $Script:PerfGaps.ContainsKey($ph)) { $Script:PerfGaps[$ph] = New-Object System.Collections.Generic.List[double] }
+            $Script:PerfGaps[$ph].Add($now - $Script:PerfLastFrame)
+        }
+        $Script:PerfLastFrame = $now
+    }
+
+    $Script:Window.Add_ContentRendered({
+            # 排在主 ContentRendered（建页面、开传感器）之后跑
+            [System.Windows.Media.CompositionTarget]::add_Rendering($Script:PerfOnFrame)
+            $n = $Script:UI.Tabs.Items.Count
+            $plan = New-Object System.Collections.ArrayList
+            [void]$plan.Add(@{ Tab = 0; Ms = 6000; Ph = 'dash-idle' })
+            foreach ($i in 1..($n - 1)) { [void]$plan.Add(@{ Tab = $i; Ms = 1500; Ph = "first-$i" }) }
+            foreach ($i in 0..($n - 1)) { [void]$plan.Add(@{ Tab = $i; Ms = 1200; Ph = "again-$i" }) }
+            [void]$plan.Add(@{ Tab = 0; Ms = 6000; Ph = 'dash-idle-2' })
+            $Script:PerfPlan = $plan
+            $Script:PerfStep = -1
+            $drv = New-Object System.Windows.Threading.DispatcherTimer
+            $drv.Interval = [TimeSpan]::FromMilliseconds(1500)   # 先让启动那一串动画落完
+            $drv.Add_Tick({
+                    $Script:PerfStep++
+                    if ($Script:PerfStep -ge $Script:PerfPlan.Count) {
+                        $this.Stop()
+                        $Script:PerfCpu[$Script:PerfPhase] = [math]::Round(100 * ([Diagnostics.Process]::GetCurrentProcess().TotalProcessorTime.TotalMilliseconds - $Script:PerfCpuAt) / [math]::Max(1, $Script:PerfClock.Elapsed.TotalMilliseconds - $Script:PerfWallAt), 1)
+                        [System.Windows.Media.CompositionTarget]::remove_Rendering($Script:PerfOnFrame)
+                        Save-PerfReport
+                        $Script:Window.Close()
+                        return
+                    }
+                    $st = $Script:PerfPlan[$Script:PerfStep]
+                    # 上一阶段整个进程（含后台线）吃了多少 CPU，折算成「一个核心的百分之几」
+                    $cpuNow = [Diagnostics.Process]::GetCurrentProcess().TotalProcessorTime.TotalMilliseconds
+                    $wallNow = $Script:PerfClock.Elapsed.TotalMilliseconds
+                    if ($null -ne $Script:PerfCpuAt) {
+                        $Script:PerfCpu[$Script:PerfPhase] = [math]::Round(100 * ($cpuNow - $Script:PerfCpuAt) / [math]::Max(1, $wallNow - $Script:PerfWallAt), 1)
+                    }
+                    $Script:PerfCpuAt = $cpuNow; $Script:PerfWallAt = $wallNow
+                    $this.Interval = [TimeSpan]::FromMilliseconds($st.Ms)
+                    $Script:PerfPhase = $st.Ph
+                    $Script:PerfSwitchName = "$($st.Ph) $($Script:UI.Tabs.Items[$st.Tab].Header)"
+                    if ($Script:UI.Tabs.SelectedIndex -ne $st.Tab) {
+                        $Script:PerfSwitchAt = $Script:PerfClock.Elapsed.TotalMilliseconds
+                        $sw = [Diagnostics.Stopwatch]::StartNew()
+                        $Script:UI.Tabs.SelectedIndex = $st.Tab
+                        $Script:PerfSetterMs = [math]::Round($sw.Elapsed.TotalMilliseconds, 1)
+                    }
+                })
+            $drv.Start()
+        })
+}
+
+function Save-PerfReport {
+    $stat = {
+        param($list)
+        $a = @($list | Sort-Object)
+        if ($a.Count -eq 0) { return $null }
+        [pscustomobject]@{
+            N      = $a.Count
+            Avg    = [math]::Round(($a | Measure-Object -Average).Average, 1)
+            P95    = [math]::Round($a[[math]::Min($a.Count - 1, [int][math]::Floor($a.Count * 0.95))], 1)
+            Max    = [math]::Round($a[$a.Count - 1], 1)
+            Over33 = @($a | Where-Object { $_ -gt 33.4 }).Count
+        }
+    }
+    $frames = [ordered]@{}
+    foreach ($k in ($Script:PerfGaps.Keys | Sort-Object)) { $frames[$k] = & $stat $Script:PerfGaps[$k] }
+    $ticks = [ordered]@{}
+    foreach ($k in ($Script:PerfTicks.Keys | Sort-Object)) { $ticks[$k] = & $stat $Script:PerfTicks[$k] }
+    $rep = [ordered]@{
+        Version    = $Script:AppVersion
+        Admin      = [bool]$Script:IsAdmin
+        Dpi        = $Script:PerfDpiInfo
+        Startup    = $Script:PerfSteps
+        FirstFrame = $Script:PerfFirstFrame
+        FrameGaps  = $frames
+        Ticks      = $ticks
+        CpuPct     = $Script:PerfCpu
+    }
+    $rep | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $Perf -Encoding UTF8
+    Write-Host "测卡顿：结果写到 $Perf"
+}
 
 # ---------------------------------------------------------------------
 #  出图模式
@@ -6288,6 +6773,13 @@ if ($Shot) {
     }
 
     $Script:Window.Add_ContentRendered({
+            # v6.2：体检、维护、启动项这些页的数据在后台读 —— 等它们读完、传感器出第一份读数再拍
+            $wait = [Diagnostics.Stopwatch]::StartNew()
+            while ($wait.Elapsed.TotalSeconds -lt 30 -and ($Script:BgJobs.Count -gt 0 -or -not $Script:Sensor.Snap -or $null -eq $Script:DashScoreCache)) {
+                Sync-UI
+                Start-Sleep -Milliseconds 100
+            }
+            Sync-UI
             if ($ShotH -gt 0) {
                 $Script:Window.Height = $ShotH
                 Sync-UI

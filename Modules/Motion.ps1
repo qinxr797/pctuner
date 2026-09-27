@@ -79,9 +79,21 @@ function Get-SpringCurve {
     return $pts
 }
 
+# ★ v6.2：动画对象按（起点, 终点, 延迟）缓存成冻结对象，反复用 ★
+#   一条弹簧 40 个关键帧，在 PowerShell 里 new 一遍要 5~10ms。切页时 6 个区块 × (弹簧 + 淡入)，
+#   实测光是「造动画」就占了界面线程 40~100ms —— 进场动画的前几帧就这么被吃掉了。
+#   冻结的动画可以同时挂在任意多个元素上（WPF 每次挂都会生成自己的时钟）。
+#   起点取两位小数做键：0.005 个像素 / 0.5% 的缩放差别肉眼看不出来，缓存却能命中。
+$Script:AnimCache = @{}
+$Script:AnimCacheMax = 600
+
 function New-SpringAnim {
     <# 一条从 From 弹到 To 的关键帧动画（DoubleAnimationUsingKeyFrames） #>
     param([double]$From, [double]$To, [double]$DelayMs = 0)
+    $From = [math]::Round($From, 2)
+    $key = "S|$From|$To|$DelayMs"
+    $hit = $Script:AnimCache[$key]
+    if ($hit) { return $hit }
     $a = New-Object System.Windows.Media.Animation.DoubleAnimationUsingKeyFrames
     $a.Duration = [Windows.Duration]::new([TimeSpan]::FromMilliseconds($Script:Dur.Spring + $DelayMs))
     $a.KeyFrames.Add((New-Object System.Windows.Media.Animation.DiscreteDoubleKeyFrame (
@@ -95,6 +107,8 @@ function New-SpringAnim {
         $a.KeyFrames.Add((New-Object System.Windows.Media.Animation.LinearDoubleKeyFrame (
                     ($From + $d * $p[1]), [Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::FromMilliseconds($p[0] + $DelayMs))))) | Out-Null
     }
+    $a.Freeze()
+    if ($Script:AnimCache.Count -lt $Script:AnimCacheMax) { $Script:AnimCache[$key] = $a }
     return $a
 }
 
@@ -136,6 +150,10 @@ function New-DoubleTween {
     <# 一条 ease-out（或指定曲线）补间。From 为 $null 时从当前值起步 —— 可打断。 #>
     param($From, [double]$To, [double]$Ms, [double[]]$Curve = $null, [double]$DelayMs = 0)
     if (-not $Curve) { $Curve = $Script:Ease.Out }
+    if ($null -ne $From) { $From = [math]::Round([double]$From, 2) }
+    $key = "T|$From|$To|$Ms|$($Curve -join ',')|$DelayMs"
+    $hit = $Script:AnimCache[$key]
+    if ($hit) { return $hit }
     $a = New-Object System.Windows.Media.Animation.DoubleAnimationUsingKeyFrames
     $a.Duration = [Windows.Duration]::new([TimeSpan]::FromMilliseconds($Ms + $DelayMs))
     if ($null -ne $From) {
@@ -149,6 +167,8 @@ function New-DoubleTween {
     $a.KeyFrames.Add((New-Object System.Windows.Media.Animation.SplineDoubleKeyFrame (
                 $To, [Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::FromMilliseconds($Ms + $DelayMs)),
                 (New-Spline $Curve)))) | Out-Null
+    $a.Freeze()
+    if ($Script:AnimCache.Count -lt $Script:AnimCacheMax) { $Script:AnimCache[$key] = $a }
     return $a
 }
 
@@ -251,11 +271,13 @@ function Start-CountUp {
         Sw = [Diagnostics.Stopwatch]::StartNew(); Sp = (New-Spline $Script:Ease.Out) }
     $timer.Add_Tick({
             $st = $this.Tag
+            if ($Script:PerfOn) { $pw = [Diagnostics.Stopwatch]::StartNew() }
             $p = [math]::Min(1.0, $st.Sw.Elapsed.TotalMilliseconds / $st.Ms)
             $v = $st.From + ($st.To - $st.From) * $st.Sp.GetSplineProgress($p)
             $st.T.Text = $v.ToString($st.Fmt) + $st.Suffix
             if ($st.F) { try { & $st.F $v } catch { } }
             if ($p -ge 1) { $st.T.Text = $st.To.ToString($st.Fmt) + $st.Suffix; $this.Stop() }
+            if ($Script:PerfOn) { Add-PerfTick 'CountUpTick' $pw.Elapsed.TotalMilliseconds }
         })
     $Target.Tag = $timer
     $timer.Start()
@@ -266,12 +288,15 @@ function Start-ValueFlash {
     param($Element)
     if (-not (Test-MotionOn) -or $null -eq $Element) { return }
     try {
+        if ($Script:FlashAnim) { $Element.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $Script:FlashAnim); return }
         $a = New-Object System.Windows.Media.Animation.DoubleAnimationUsingKeyFrames
         $a.Duration = [Windows.Duration]::new([TimeSpan]::FromMilliseconds($Script:Dur.Draw))
         $a.KeyFrames.Add((New-Object System.Windows.Media.Animation.SplineDoubleKeyFrame (
                     0.72, [Windows.Media.Animation.KeyTime]::FromPercent(0.2), (New-Spline $Script:Ease.Out)))) | Out-Null
         $a.KeyFrames.Add((New-Object System.Windows.Media.Animation.SplineDoubleKeyFrame (
                     1.0, [Windows.Media.Animation.KeyTime]::FromPercent(1.0), (New-Spline $Script:Ease.Out)))) | Out-Null
+        $a.Freeze()
+        $Script:FlashAnim = $a
         $Element.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $a)
     } catch { }
 }
