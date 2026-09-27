@@ -5910,8 +5910,9 @@ if ($SelfTest) {
     Build-BigFileDrives
     Build-RecentRuns
     Invoke-Inspect
+    $inCards = { param($panel) $n = 0; foreach ($c in $panel.Children) { if ($c -is [System.Windows.Controls.Border] -and $c.Child -is [System.Windows.Controls.StackPanel]) { $n += $c.Child.Children.Count } else { $n++ } }; $n }
     Build-ThemeUI
-    $themeCards = $Script:UI.ThemePanel.Children.Count
+    $themeCards = & $inCards $Script:UI.ThemePanel
     Build-AppxUI
     Build-FpsDiagUI
     $fpsCards = $Script:UI.AdvicePanel.Children.Count
@@ -5922,12 +5923,14 @@ if ($SelfTest) {
     Build-HealthUI
     Build-DashUI
     Update-DashScore
+    # v6 把「维护 / 体检 / 个性化」的条目装进了卡片 —— 数卡片里面的条目，口径才和 v5.1 对得上
+    $inCards = { param($panel) $n = 0; foreach ($c in $panel.Children) { if ($c -is [System.Windows.Controls.Border] -and $c.Child -is [System.Windows.Controls.StackPanel]) { $n += $c.Child.Children.Count } else { $n++ } }; $n }
     Write-Host ('自检通过：优化项 {0} / 预设 {1} / 清理项 {2} / 启动项 {3} / 维护项 {4} / 盘符 {5} / 排查结果 {6} / 运行记录 {7} / 体检卡片 {8} / 帧数诊断 {9} / 自带应用 {10} / 皮肤 {11} / 超频陪练 {12} / 厂商建议 {13} / 导航 {14} / 读数卡 {15}' -f `
             $Script:UI.TweakPanel.Children.Count, $Script:Presets.Count,
         $Script:UI.CleanPanel.Children.Count, $Script:UI.StartupPanel.Children.Count,
-        $Script:UI.MaintainPanel.Children.Count, $Script:UI.BigFileDrives.Children.Count,
+        (& $inCards $Script:UI.MaintainPanel), $Script:UI.BigFileDrives.Children.Count,
         $Script:UI.InspectPanel.Children.Count, $Script:UI.RecentRunPanel.Children.Count,
-        $Script:UI.AdvicePanel.Children.Count, $fpsCards, $Script:UI.AppxPanel.Children.Count, $themeCards, $ocCards, $vendorCards,
+        (& $inCards $Script:UI.AdvicePanel), $fpsCards, $Script:UI.AppxPanel.Children.Count, $themeCards, $ocCards, $vendorCards,
         $Script:NavItems.Count, $Script:DashGauges.Count)
     exit 0
 }
