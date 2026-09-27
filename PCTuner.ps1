@@ -43,7 +43,12 @@ param(
     [int]$ShotScroll = 0,
 
     # 出图前先把需要扫描才有内容的页扫一遍（弹窗排查）。
-    [switch]$ShotScan
+    [switch]$ShotScan,
+
+    # 出图时把窗口留在屏幕上、不自动关。
+    # 悬停、按下这些状态 RenderTargetBitmap 拍不到，
+    # 得真把鼠标放上去拍屏幕才算验过。
+    [switch]$ShotLive
 )
 
 $ErrorActionPreference = 'Continue'
@@ -157,6 +162,7 @@ if (-not $SelfTest -and -not $AutoClean -and -not $Shot -and -not $principal.IsI
         if ($ShotH -gt 0) { $argv += @('-ShotH', "$ShotH") }
         if ($ShotScroll -gt 0) { $argv += @('-ShotScroll', "$ShotScroll") }
         if ($ShotScan) { $argv += '-ShotScan' }
+        if ($ShotLive) { $argv += '-ShotLive' }
         Start-Process -FilePath $exe -Verb RunAs -ArgumentList $argv
     } catch {
         [System.Windows.Forms.MessageBox]::Show(
@@ -1821,6 +1827,101 @@ $xamlText = @'
          一排页签在报告单上就是一排栏目名，选中的那个字重一些、墨深一些，
          剩下交给下面那条会滑动的线。
          ================================================================ -->
+    <!-- ================================================================
+         主按钮 —— ★ 这个键盖掉了 HandyControl 的同名键 ★
+
+         窗口自己的资源字典优先于它合并进来的库字典，所以所有写
+         {DynamicResource ButtonPrimary} 和 FindResource('ButtonPrimary')
+         的地方会自动拿到这一个，一处调用点都不用改。
+
+         两件事让它比一块平色高级：
+           1. 一层几乎看不见的竖向渐变（白 7% -> 透明）。纯平色看着像贴纸，
+              有一点点由上到下的光就有了厚度。
+           2. 悬停时一道高光斜着扫过，520ms，一次，不循环。
+              循环的光是广告牌；扫一次是回应 —— 它在说「我收到你的鼠标了」。
+
+         禁用态不上色，只掉到下沉面 + 灰字 ——「禁用即未上墨」。
+         ================================================================ -->
+    <Style x:Key="ButtonPrimary" TargetType="Button">
+      <Setter Property="Foreground" Value="{DynamicResource OnAccent}"/>
+      <Setter Property="Background" Value="{DynamicResource Accent}"/>
+      <Setter Property="FontSize" Value="13.5"/>
+      <Setter Property="Padding" Value="18,8,18,9"/>
+      <Setter Property="Margin" Value="0,0,8,0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="SnapsToDevicePixels" Value="True"/>
+      <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" CornerRadius="3" Background="{TemplateBinding Background}"
+                    ClipToBounds="True" SnapsToDevicePixels="True">
+              <Grid>
+                <!-- 厚度：一层极淡的竖向渐变 -->
+                <Rectangle x:Name="Sheen" RadiusX="3" RadiusY="3">
+                  <Rectangle.Fill>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                      <GradientStop Color="#12FFFFFF" Offset="0"/>
+                      <GradientStop Color="#00FFFFFF" Offset="0.62"/>
+                      <GradientStop Color="#0C000000" Offset="1"/>
+                    </LinearGradientBrush>
+                  </Rectangle.Fill>
+                </Rectangle>
+
+                <!-- 高光。斜着放，扫过去比横着有速度感 -->
+                <Rectangle x:Name="Glare" Width="70" HorizontalAlignment="Left" Opacity="0">
+                  <Rectangle.Fill>
+                    <LinearGradientBrush StartPoint="0,1" EndPoint="1,0">
+                      <GradientStop Color="#00FFFFFF" Offset="0"/>
+                      <GradientStop Color="#3DFFFFFF" Offset="0.5"/>
+                      <GradientStop Color="#00FFFFFF" Offset="1"/>
+                    </LinearGradientBrush>
+                  </Rectangle.Fill>
+                  <Rectangle.RenderTransform>
+                    <TranslateTransform x:Name="GlareT" X="-90"/>
+                  </Rectangle.RenderTransform>
+                </Rectangle>
+
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  Margin="{TemplateBinding Padding}"
+                                  RecognizesAccessKey="True"/>
+              </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentLight}"/>
+                <Trigger.EnterActions>
+                  <BeginStoryboard>
+                    <Storyboard>
+                      <DoubleAnimation Storyboard.TargetName="GlareT" Storyboard.TargetProperty="X"
+                                       From="-90" To="340" Duration="0:0:0.52">
+                        <DoubleAnimation.EasingFunction>
+                          <CubicEase EasingMode="EaseOut"/>
+                        </DoubleAnimation.EasingFunction>
+                      </DoubleAnimation>
+                      <DoubleAnimation Storyboard.TargetName="Glare" Storyboard.TargetProperty="Opacity"
+                                       From="0" To="1" Duration="0:0:0.10"/>
+                      <DoubleAnimation Storyboard.TargetName="Glare" Storyboard.TargetProperty="Opacity"
+                                       To="0" BeginTime="0:0:0.26" Duration="0:0:0.26"/>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.EnterActions>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentDark}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceSunken}"/>
+                <Setter TargetName="Sheen" Property="Opacity" Value="0"/>
+                <Setter Property="Foreground" Value="{DynamicResource TextDim}"/>
+                <Setter Property="Cursor" Value="Arrow"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style TargetType="TabItem" x:Key="ReportTab">
       <Setter Property="Foreground" Value="{DynamicResource TextDim}"/>
       <Setter Property="FontSize" Value="14.5"/>
@@ -1882,7 +1983,7 @@ $xamlText = @'
 
         <Grid Grid.Row="0">
           <StackPanel>
-            <TextBlock Text="系统检验报告" FontSize="20" FontWeight="SemiBold"
+            <TextBlock x:Name="RptTitle" Text="系统检验报告" FontSize="20" FontWeight="SemiBold"
                        Foreground="{DynamicResource TextMain}"/>
             <TextBlock x:Name="SubTitle" Text="" FontSize="12" Foreground="{DynamicResource TextDim}" Margin="0,3,0,0"/>
           </StackPanel>
@@ -2407,7 +2508,7 @@ foreach ($n in @(
         'BtnWatchStart', 'BtnWatchStop', 'BtnProcAudit', 'BtnProcLog', 'WatchStatus',
         'InfoPanel', 'AdvicePanel', 'BtnHealthScan', 'BtnFpsDiag', 'BtnOcCoach', 'BtnVendor', 'BtnAddExclusion', 'BtnSfc', 'BtnCopyReport', 'BtnExportReport',
         'LogPanel', 'LogScroll', 'BtnOpenBackup', 'BtnCopyLog', 'StatusText', 'BusyBar',
-        'TabInkLayer', 'TabInk')) {
+        'TabInkLayer', 'TabInk', 'RptTitle')) {
     $Script:UI[$n] = $Script:Window.FindName($n)
 }
 # ---------------------------------------------------------------------
@@ -5754,6 +5855,7 @@ $Script:Window.Add_ContentRendered({
         Set-InspectEmpty        # 弹窗排查页扫描前的空状态
         Build-LogUI             # 把窗口出来之前记下的那几条日志补画出来
         try { Update-TabInk $false } catch { }
+        try { Start-TitleReveal } catch { }
         Build-ThemeUI
         # 概览页：先建壳子再开硬件监控。
         # Initialize-Dash 要枚举全部硬件，实测约 3 秒，所以放在
@@ -5779,6 +5881,71 @@ $Script:Window.Add_ContentRendered({
 #    页面里任何一个下拉框、列表变了选择都会触发到这里，
 #    所以必须判断事件源是不是 TabControl 本身，否则会反复重扫。
 # ---------------------------------------------------------------------
+# ---------------------------------------------------------------------
+#  头部标题逐字淡入
+# ---------------------------------------------------------------------
+function Start-TitleReveal {
+    <#
+      「系统检验报告」六个字逐个淡入 + 上移，每字错开 38ms。
+      照 React Bits 的 SplitText 做的克制版。
+
+      ★ 只在程序启动时跑这一次 ★
+        每切一次页都演一遍就成了表演。开场演一次是「报告正在出」，
+        演第二次就是在耽误人干活。
+
+      ★ 做法是把整块标题换成一串单字 ★
+        换完之后每个字自带同一个隐式 TextBlock 样式，
+        换肤时照样跟着 DynamicResource 走，不会留旧配色。
+    #>
+    if ($Script:TitleRevealed) { return }
+    $Script:TitleRevealed = $true
+    $old = $Script:UI.RptTitle
+    if ($null -eq $old) { return }
+    $parent = $old.Parent -as [System.Windows.Controls.StackPanel]
+    if ($null -eq $parent) { return }
+    $text = "$($old.Text)"
+    if (-not $text) { return }
+
+    $strip = New-Object System.Windows.Controls.StackPanel
+    $strip.Orientation = 'Horizontal'
+    $idx = $parent.Children.IndexOf($old)
+    $parent.Children.Remove($old)
+    $parent.Children.Insert($idx, $strip)
+
+    $anim = [bool]$Script:AnimEnabled
+    $i = 0
+    foreach ($ch in $text.ToCharArray()) {
+        $t = New-Object System.Windows.Controls.TextBlock
+        $t.Text = "$ch"
+        $t.FontSize = $old.FontSize
+        $t.FontWeight = $old.FontWeight
+        $t.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'TextMain')
+        $strip.Children.Add($t) | Out-Null
+
+        if (-not $anim) { $i++; continue }
+
+        $t.Opacity = 0
+        $tt = New-Object System.Windows.Media.TranslateTransform 0, 10
+        $t.RenderTransform = $tt
+
+        $ease = New-Object System.Windows.Media.Animation.CubicEase
+        $ease.EasingMode = 'EaseOut'
+        $begin = [TimeSpan]::FromMilliseconds(38 * $i)
+        $dur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(300))
+
+        $fa = New-Object System.Windows.Media.Animation.DoubleAnimation
+        $fa.From = 0; $fa.To = 1; $fa.Duration = $dur; $fa.BeginTime = $begin
+        $t.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fa)
+
+        $ya = New-Object System.Windows.Media.Animation.DoubleAnimation
+        $ya.From = 10; $ya.To = 0; $ya.Duration = $dur; $ya.BeginTime = $begin
+        $ya.EasingFunction = $ease
+        $tt.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $ya)
+
+        $i++
+    }
+}
+
 # ---------------------------------------------------------------------
 #  页签指示条：滑过去，不是跳过去
 # ---------------------------------------------------------------------
@@ -5872,8 +6039,36 @@ $Script:UI.Tabs.Add_SelectionChanged({
         }
     })
 
-# 自检模式：把剩下两页也构建一遍，报告结果后退出，不显示窗口
+# ---------------------------------------------------------------------
+#  自检：我们自己的控件样式有没有真的生效
+#
+#  ★ 为什么需要这一项 ★
+#    页签选中那条线曾经一直是 HandyControl 的默认蓝 #326CF3，
+#    完全在色板外、换皮肤也不变，而三个自检都查不出来 ——
+#    对比度脚本只查我们自己写的色号，库模板里的颜色不在它视野里。
+#    根因是库的样式把我们的盖了，而这种覆盖不报错。
+#    所以直接查「我们的模板在不在位」。
+# ---------------------------------------------------------------------
 if ($SelfTest) {
+    $styleBad = @()
+    try {
+        $bp = $Script:Window.FindResource('ButtonPrimary')
+        $tpl = ($bp.Setters | Where-Object { $_.Property.Name -eq 'Template' }).Value
+        if (-not $tpl) { $styleBad += 'ButtonPrimary 没有 Template' }
+        else {
+            $hit = @($tpl.Triggers | Where-Object { "$($_.Property)" -eq 'IsMouseOver' -and $_.EnterActions.Count -gt 0 })
+            if ($hit.Count -eq 0) { $styleBad += 'ButtonPrimary 的悬停高光没挂上（可能又被库的同名键盖了）' }
+        }
+    } catch { $styleBad += "ButtonPrimary 解不出来：$($_.Exception.Message)" }
+    try {
+        $ics = $Script:UI.Tabs.ItemContainerStyle
+        if ($null -eq $ics) { $styleBad += '页签没有用我们的 ItemContainerStyle，会退回库的默认蓝下划线' }
+    } catch { $styleBad += '页签容器样式查不了' }
+    if ($styleBad.Count -gt 0) {
+        Write-Host ('自检失败：控件样式' + [Environment]::NewLine + '  ' + ($styleBad -join ([Environment]::NewLine + '  '))) -ForegroundColor Red
+        exit 5
+    }
+
     Build-StartupUI
     Build-MaintainUI
     Build-BigFileDrives
@@ -5932,10 +6127,12 @@ if ($Shot) {
 
     # 窗口挪到屏幕外：RenderTargetBitmap 画的是可视树，
     # 不需要窗口真的显示在屏幕上 —— 不必在人眼前一直闪。
-    $Script:Window.WindowStartupLocation = 'Manual'
-    $Script:Window.Left = -4000
-    $Script:Window.Top = 0
-    $Script:Window.ShowInTaskbar = $false
+    if (-not $ShotLive) {
+        $Script:Window.WindowStartupLocation = 'Manual'
+        $Script:Window.Left = -4000
+        $Script:Window.Top = 0
+        $Script:Window.ShowInTaskbar = $false
+    }
 
     $Script:Window.Add_ContentRendered({
             if ($ShotH -gt 0) {
@@ -5986,7 +6183,7 @@ if ($Shot) {
                     Write-Host ("出图失败 {0} —— {1}" -f $name, $_.Exception.Message)
                 }
             }
-            $Script:Window.Close()
+            if (-not $ShotLive) { $Script:Window.Close() }
         })
 }
 
