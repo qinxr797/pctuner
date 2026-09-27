@@ -2212,10 +2212,10 @@ $xamlText = @'
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
-          <Border Grid.Row="0" Background="{DynamicResource AccentTint}" CornerRadius="6" Padding="12,9" Margin="0,0,0,12">
-            <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextMid}"
-                       Text="换肤只改界面的底色、卡片和主色。绿/黄/红那几个状态标签的颜色是故意不跟着变的 —— 「高危」永远是红的，不能因为换了皮肤看错。选好立刻生效，下次打开自动记住。"/>
-          </Border>
+          <!-- 这里以前是一个带底色的圆角提示条。底色条是「这句话比别的话重要」的意思，
+               而它只是一句背景说明 —— 抬得比内容还高。改成普通正文。 -->
+          <TextBlock Grid.Row="0" TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextMid}" Margin="0,0,10,14"
+                     Text="换肤只改界面的底色、卡片和主色。表示危险程度的那一种墨色是故意不跟着变的 —— 「高危」永远是红的，不能因为换了皮肤看错。选好立刻生效，下次打开自动记住。"/>
           <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel x:Name="ThemePanel" Margin="0,0,10,0"/>
           </ScrollViewer>
@@ -3660,27 +3660,39 @@ function Invoke-CleanSelected {
 # ---------------------------------------------------------------------
 #  个性化（换肤）页
 # ---------------------------------------------------------------------
-function New-ThemeSwatchRow {
-    <# 一套皮肤的三个色块预览 #>
-    param([string[]]$Colors)
-    $sp = New-Object System.Windows.Controls.StackPanel
-    $sp.Orientation = 'Horizontal'
-    $sp.Margin = New-Thick 0 8 0 0
-    foreach ($c in $Colors) {
-        $b = New-Object System.Windows.Controls.Border
-        # ★ 这里必须直接 ConvertFromString，不能走 Get-Brush ★
-        #   Get-Brush 会按当前皮肤做重映射，
-        #   那样每个预览块都会被改成当前皮肤的颜色，六套皮肤长得一模一样。
-        $b.Background = New-Object System.Windows.Media.SolidColorBrush (
-            [System.Windows.Media.ColorConverter]::ConvertFromString($c))
-        $b.Width = 46; $b.Height = 22
-        $b.CornerRadius = New-Object System.Windows.CornerRadius 4
-        $b.Margin = New-Thick 0 0 6 0
-        $b.BorderBrush = Get-Brush '#DDDBD5'
-        $b.BorderThickness = New-Thick 1
-        $sp.Children.Add($b) | Out-Null
+function New-ThemeSwatchBar {
+    <#
+      一套皮肤的色带：窗口底 / 面板底 / 主色三段拼成一条，满格宽。
+
+      ★ 必须直接 ConvertFromString，不能走 Get-Brush ★
+        Get-Brush 会按当前皮肤做重映射，那样每条预览都会被改成
+        当前皮肤的颜色，十二套皮肤长得一模一样。（踩过。）
+
+      ★ 方角，不是圆角小块 ★
+        圆角小色块是「标签」的样子；这里要的是一段真实的界面剖面，
+        像油漆色卡那样三段贴在一起，边界清楚才好比。
+    #>
+    param([string[]]$Colors, [double]$H = 44)
+    $g = New-Object System.Windows.Controls.Grid
+    $g.Height = $H
+    for ($i = 0; $i -lt $Colors.Count; $i++) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        $g.ColumnDefinitions.Add($cd)
+        $r = New-Object System.Windows.Shapes.Rectangle
+        $r.Fill = New-Object System.Windows.Media.SolidColorBrush (
+            [System.Windows.Media.ColorConverter]::ConvertFromString($Colors[$i]))
+        [System.Windows.Controls.Grid]::SetColumn($r, $i)
+        $g.Children.Add($r) | Out-Null
     }
-    return $sp
+    # 浅色皮肤的色带贴在浅色纸上会糊掉边界，描一条细线圈住
+    $frame = New-Object System.Windows.Shapes.Rectangle
+    $frame.Stroke = Get-Brush '#D2D0C9'
+    $frame.StrokeThickness = 1
+    $frame.Fill = [System.Windows.Media.Brushes]::Transparent
+    [System.Windows.Controls.Grid]::SetColumnSpan($frame, $Colors.Count)
+    $g.Children.Add($frame) | Out-Null
+    return $g
 }
 
 function Build-ThemeUI {
@@ -3688,78 +3700,105 @@ function Build-ThemeUI {
     $panel.Children.Clear()
     $cur = Get-ThemeSetting
 
-    # ---------- 纯色皮肤 ----------
-    $t1 = New-TextBlock -Text '纯色皮肤' -Size 15 -Bold $true
-    $t1.Margin = New-Thick 0 0 0 10
-    $panel.Children.Add($t1) | Out-Null
+    # ==================== 纯色皮肤 ====================
+    #   ★ 三列网格，不是十二张竖排的卡 ★
+    #     选皮肤要做的是「一眼比完」。上一版一行一张卡、一屏只看得见五张，
+    #     等于逼用户滚着比色差 —— 比色最忌讳的就是不能并排看。
+    $panel.Children.Add((New-RptSection -Title '皮肤' -Aside '点一下立刻生效，下次打开自动记住')) | Out-Null
 
     $themes = Get-BuiltinThemes
-    foreach ($name in $themes.Keys) {
-        $th = $themes[$name]
+    $names = @($themes.Keys)
+    $cols = 3
+    $grid = New-Object System.Windows.Controls.Grid
+    $grid.Margin = New-Thick 0 4 0 0
+    for ($c = 0; $c -lt $cols; $c++) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        $grid.ColumnDefinitions.Add($cd)
+    }
+    $rows = [math]::Ceiling($names.Count / [double]$cols)
+    for ($r = 0; $r -lt $rows; $r++) {
+        $rd = New-Object System.Windows.Controls.RowDefinition
+        $rd.Height = New-Object System.Windows.GridLength -1, ([System.Windows.GridUnitType]::Auto)
+        $grid.RowDefinitions.Add($rd)
+    }
 
-        $card = New-Object System.Windows.Controls.Border
-        $card.Background = Get-Brush '#F6F5F2'
-        $card.BorderBrush = if ($name -eq $cur.Name) { Get-Brush '#55606F' } else { Get-Brush '#E0DED8' }
-        $card.BorderThickness = if ($name -eq $cur.Name) { New-Thick 2 } else { New-Thick 1 }
-        $card.CornerRadius = New-Object System.Windows.CornerRadius 8
-        $card.Padding = New-Thick 14 11 14 12
-        $card.Margin = New-Thick 0 0 0 8
-        $card.Cursor = 'Hand'
-        $card.Tag = $name
-        $card.Add_MouseLeftButtonUp({
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        $name = $names[$i]
+        $th = $themes[$name]
+        $on = ($name -eq $cur.Name)
+
+        $cell = New-Object System.Windows.Controls.Border
+        $cell.Background = [System.Windows.Media.Brushes]::Transparent
+        $cell.Padding = New-Thick 0 0 0 16
+        $cell.Margin = New-Thick $(if ($i % $cols -eq 0) { 0 } else { 14 }) 0 0 0
+        $cell.Cursor = 'Hand'
+        $cell.Tag = $name
+        $cell.Add_MouseLeftButtonUp({
                 Set-AppTheme -Name $this.Tag -Image $Script:ThemeImage -Opacity $Script:ThemeOpacity
                 Redraw-AllPages
                 Set-Status "皮肤已换成「$($this.Tag)」"
             })
+        Add-Interactive -Border $cell -BgNormal '#E4E3DE' -BgHover '#EDECE8' -NoLift
 
         $sp = New-Object System.Windows.Controls.StackPanel
+        $sp.Children.Add((New-ThemeSwatchBar -Colors $th.Swatch)) | Out-Null
+
+        # 选中就在色带底下压一条实线 —— 不用彩色描边，
+        # 那会和「法定墨只有一种含义」打架。
+        $ul = New-Object System.Windows.Shapes.Rectangle
+        $ul.Height = 3
+        $ul.Fill = Get-Brush $(if ($on) { '#2B2A26' } else { '#00000000' })
+        if (-not $on) { $ul.Visibility = 'Hidden' }
+        $sp.Children.Add($ul) | Out-Null
+
         $head = New-Object System.Windows.Controls.StackPanel
         $head.Orientation = 'Horizontal'
-        $head.Children.Add((New-TextBlock -Text $name -Size 13.5 -Bold $true)) | Out-Null
-        if ($name -eq $cur.Name) {
-            $bd = New-Badge -Text '使用中' -Fg '#55606F' -Bg '#E4E7EC'
-            $bd.Margin = New-Thick 8 0 0 0
-            $head.Children.Add($bd) | Out-Null
-        }
-        if (Test-ThemeIsDark $name) {
-            $dk = New-Badge -Text '深色' -Fg '#66635B' -Bg '#E8E7E2'
-            $dk.Margin = New-Thick 4 0 0 0
-            $head.Children.Add($dk) | Out-Null
+        $head.Margin = New-Thick 0 8 0 0
+        $nm = New-TextBlock -Text $name -Size 15 -Color '#2B2A26'
+        if ($on) { $nm.FontWeight = 'SemiBold' }
+        $head.Children.Add($nm) | Out-Null
+        $tagBits = @()
+        if ($on) { $tagBits += '使用中' }
+        if (Test-ThemeIsDark $name) { $tagBits += '深色' }
+        if ($tagBits.Count -gt 0) {
+            $tg = New-TextBlock -Text ($tagBits -join ' · ') -Size 13 -Color '#66635B'
+            $tg.VerticalAlignment = 'Center'
+            $tg.Margin = New-Thick 8 0 0 0
+            $head.Children.Add($tg) | Out-Null
         }
         $sp.Children.Add($head) | Out-Null
-        $sp.Children.Add((New-TextBlock -Text $th.Desc -Size 12 -Color '#66635B' -Wrap $true)) | Out-Null
-        $sp.Children.Add((New-ThemeSwatchRow -Colors $th.Swatch)) | Out-Null
 
-        $card.Child = $sp
-        $panel.Children.Add($card) | Out-Null
+        $ds = New-TextBlock -Text $th.Desc -Size 13 -Color '#66635B' -Wrap $true
+        $ds.Margin = New-Thick 0 3 0 0
+        $sp.Children.Add($ds) | Out-Null
+
+        $cell.Child = $sp
+        [System.Windows.Controls.Grid]::SetColumn($cell, $i % $cols)
+        [System.Windows.Controls.Grid]::SetRow($cell, [math]::Floor($i / $cols))
+        $grid.Children.Add($cell) | Out-Null
     }
+    $panel.Children.Add($grid) | Out-Null
 
-    # ---------- 自定义背景图 ----------
-    $t2 = New-TextBlock -Text '用自己的图片当背景' -Size 15 -Bold $true
-    $t2.Margin = New-Thick 0 18 0 8
-    $panel.Children.Add($t2) | Out-Null
+    # ==================== 背景图 ====================
+    $sec2 = New-RptSection -Title '背景图' -Aside '可选'
+    $sec2.Margin = New-Thick 0 22 0 8
+    $panel.Children.Add($sec2) | Out-Null
 
-    $ic = New-Object System.Windows.Controls.Border
-    $ic.Background = Get-Brush '#F6F5F2'
-    $ic.BorderBrush = Get-Brush '#E0DED8'
-    $ic.BorderThickness = New-Thick 1
-    $ic.CornerRadius = New-Object System.Windows.CornerRadius 8
-    $ic.Padding = New-Thick 14 12 14 14
-    $isp = New-Object System.Windows.Controls.StackPanel
-
-    $tip = New-TextBlock -Size 12 -Color '#66635B' -Wrap $true -Text (
+    $tip = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text (
         '选一张图铺在窗口背景上。图片会被复制到工具自己的文件夹里保存，' +
         '所以选完之后原图删掉、U 盘拔掉都不影响。' + "`r`n" +
         '建议选颜色比较淡、内容不太花的图 —— 太花的图会让上面的字看不清。' +
         '下面的「面板不透明度」就是用来调这个的：拉低一点图更明显，拉高一点字更清楚。')
-    $tip.Margin = New-Thick 0 0 0 10
-    $isp.Children.Add($tip) | Out-Null
+    $panel.Children.Add($tip) | Out-Null
 
     $row = New-Object System.Windows.Controls.StackPanel
     $row.Orientation = 'Horizontal'
+    $row.Margin = New-Thick 0 10 0 0
 
     $btnPick = New-Object System.Windows.Controls.Button
     $btnPick.Content = '选择图片…'
+    $btnPick.Margin = New-Thick 0 0 8 0
     $btnPick.Add_Click({
             $dlg = New-Object Microsoft.Win32.OpenFileDialog
             $dlg.Title = '选一张背景图'
@@ -3775,6 +3814,7 @@ function Build-ThemeUI {
 
     $btnClear = New-Object System.Windows.Controls.Button
     $btnClear.Content = '取消背景图'
+    $btnClear.Margin = New-Thick 0
     $btnClear.Add_Click({
             $st = Get-ThemeSetting
             Set-AppTheme -Name $st.Name -Image '' -Opacity $st.Opacity
@@ -3782,22 +3822,20 @@ function Build-ThemeUI {
             Set-Status '已恢复纯色背景'
         })
     $row.Children.Add($btnClear) | Out-Null
-    $isp.Children.Add($row) | Out-Null
+    $panel.Children.Add($row) | Out-Null
 
-    # 当前用的是哪张图
     # ★ PowerShell 5.1 里 if 不能当表达式用在参数位置上 ★
     #   写成 -Text (if (...) {...} else {...}) 会静默传进去一个 $null，
     #   然后在下一行 .Margin 上炸掉。先算到变量里再传。
     $nowText = '当前没有使用背景图'
     if ($cur.Image) { $nowText = "当前背景图：$($cur.Image)" }
-    $now = New-TextBlock -Size 11.5 -Color '#66635B' -Wrap $true -Text $nowText
+    $now = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text $nowText
     $now.Margin = New-Thick 0 10 0 0
-    $isp.Children.Add($now) | Out-Null
+    $panel.Children.Add($now) | Out-Null
 
-    # 不透明度滑块
-    $ol = New-TextBlock -Size 12.5 -Bold $true -Text ('面板不透明度：{0}%' -f [int]($cur.Opacity * 100))
-    $ol.Margin = New-Thick 0 14 0 4
-    $isp.Children.Add($ol) | Out-Null
+    $ol = New-TextBlock -Size 14 -Bold $true -Text ('面板不透明度　{0}%' -f [int]($cur.Opacity * 100))
+    $ol.Margin = New-Thick 0 16 0 6
+    $panel.Children.Add($ol) | Out-Null
 
     $sld = New-Object System.Windows.Controls.Slider
     $sld.Minimum = 0.35; $sld.Maximum = 1.0
@@ -3808,7 +3846,7 @@ function Build-ThemeUI {
     $sld.HorizontalAlignment = 'Left'
     $sld.Tag = $ol
     $sld.Add_ValueChanged({
-            $this.Tag.Text = ('面板不透明度：{0}%' -f [int]($this.Value * 100))
+            $this.Tag.Text = ('面板不透明度　{0}%' -f [int]($this.Value * 100))
         })
     # 拖完再套用 —— 拖动过程中每动一下就重绘全部页面会非常卡
     $sld.Add_PreviewMouseUp({
@@ -3817,51 +3855,37 @@ function Build-ThemeUI {
             Apply-PanelOpacity
             Set-Status ('面板不透明度已设为 {0}%' -f [int]($this.Value * 100))
         })
-    $isp.Children.Add($sld) | Out-Null
+    $panel.Children.Add($sld) | Out-Null
 
-    $on = New-TextBlock -Size 11.5 -Color '#66635B' -Wrap $true -Text (
+    $on2 = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text (
         '只在使用背景图时有效。100% = 完全挡住背景图（和纯色一样），拉低才能看见图。')
-    $on.Margin = New-Thick 0 6 0 0
-    $isp.Children.Add($on) | Out-Null
+    $on2.Margin = New-Thick 0 8 0 0
+    $panel.Children.Add($on2) | Out-Null
 
-    $ic.Child = $isp
-    $panel.Children.Add($ic) | Out-Null
-
-    # ---------- 动画开关 ----------
-    $t3 = New-TextBlock -Text '界面动画' -Size 15 -Bold $true
-    $t3.Margin = New-Thick 0 18 0 8
-    $panel.Children.Add($t3) | Out-Null
-
-    $ac = New-Object System.Windows.Controls.Border
-    $ac.Background = Get-Brush '#F6F5F2'
-    $ac.BorderBrush = Get-Brush '#E0DED8'
-    $ac.BorderThickness = New-Thick 1
-    $ac.CornerRadius = New-Object System.Windows.CornerRadius 8
-    $ac.Padding = New-Thick 14 12 14 14
-    $asp = New-Object System.Windows.Controls.StackPanel
+    # ==================== 界面动画 ====================
+    $sec3 = New-RptSection -Title '界面动画'
+    $sec3.Margin = New-Thick 0 22 0 8
+    $panel.Children.Add($sec3) | Out-Null
 
     $acb = New-Object System.Windows.Controls.CheckBox
     $acb.Content = '开启界面动画（切换页面、点开详情时淡入）'
     $acb.IsChecked = [bool]$Script:AnimEnabled
-    $acb.FontSize = 13
+    $acb.FontSize = 13.5
     $acb.Add_Click({
             $Script:AnimEnabled = [bool]$this.IsChecked
             $st = Get-ThemeSetting
             Save-ThemeSetting -Name $st.Name -Image $st.Image -Opacity $st.Opacity -Anim $Script:AnimEnabled
             Set-Status $(if ($Script:AnimEnabled) { '界面动画已开启' } else { '界面动画已关闭' })
         })
-    $asp.Children.Add($acb) | Out-Null
+    $panel.Children.Add($acb) | Out-Null
 
-    $atip = New-TextBlock -Size 12 -Color '#66635B' -Wrap $true -Text (
+    $atip = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text (
         '动画只用透明度和位移两种效果，走显卡合成，不会触发页面重排 —— ' +
         '正常机器上开销可以忽略。' + "`r`n`r`n" +
         '但这个工具本来就是给配置吃紧的机器用的：如果你的机器点哪都要等一下，' +
-        '关掉动画能让操作反馈更"干脆"。关了之后所有切换都是瞬间完成，功能一模一样。')
-    $atip.Margin = New-Thick 0 8 0 0
-    $asp.Children.Add($atip) | Out-Null
-
-    $ac.Child = $asp
-    $panel.Children.Add($ac) | Out-Null
+        '关掉动画能让操作反馈更干脆。关了之后所有切换都是瞬间完成，功能一模一样。')
+    $atip.Margin = New-Thick 0 10 0 0
+    $panel.Children.Add($atip) | Out-Null
 }
 
 function Apply-PanelOpacity {
