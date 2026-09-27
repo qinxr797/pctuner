@@ -171,7 +171,13 @@ function Get-SystemReport {
         foreach ($d in @(Get-PhysicalDisk -ErrorAction SilentlyContinue)) {
             $mt = switch ("$($d.MediaType)") { 'SSD' { '固态硬盘 SSD' } 'HDD' { '机械硬盘 HDD' } default { if ($d.SpindleSpeed -eq 0) { '固态硬盘 SSD' } else { "$($d.MediaType)" } } }
             $health = if ($d.HealthStatus -eq 'Healthy') { '健康' } else { "$($d.HealthStatus)  ← 注意！" }
-            Add-Row '物理硬盘' ("{0}   {1}   {2}   状态：{3}" -f $d.FriendlyName, (Format-Size $d.Size), $mt, $health)
+            # 剩余寿命只报盘自己日志里的（v6.2，口径同「日常维护 → 硬盘健康」）；读不到就不写，不编
+            $lifeTxt = ''
+            if ($mt -ne '机械硬盘 HDD') {
+                $nv = Get-NvmeHealth -DiskNumber ([int]$d.DeviceId)
+                if ($nv) { $lifeTxt = "   剩余寿命 {0}%" -f ([math]::Max(0, 100 - $nv.Used)) }
+            }
+            Add-Row '物理硬盘' ("{0}   {1}   {2}   状态：{3}{4}" -f $d.FriendlyName, (Format-Size $d.Size), $mt, $health, $lifeTxt)
         }
         foreach ($v in @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction SilentlyContinue)) {
             $pct = if ($v.Size -gt 0) { [math]::Round($v.FreeSpace / $v.Size * 100) } else { 0 }

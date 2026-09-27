@@ -176,13 +176,27 @@ function Get-DiskHealthReport {
     <#
       读取 SMART 里最有价值的几个数据。
       老机器最怕的就是硬盘悄悄坏掉，这一项能提前发现。
+
+      ★ v6.2：寿命统一说「剩余寿命 X%」★
+        v6.1 以前这里拿 Get-StorageReliabilityCounter 的 Wear（意思是「寿命**已用**百分之几」），
+        界面上却写成「0 % 寿命」—— 朋友一看就读成「寿命只剩 0%」。两个错叠在一起：
+          · 文案错：已用写成了寿命
+          · 数也不可信：老板的三星 PM981 显示 0，盘自己的 NVMe 日志写的是已用 6%（2026-09-28 实测）
+        现在：
+          · NVMe 盘 —— 直接读盘自己的健康日志（Get-NvmeHealth），剩余寿命 = 100 − 已用
+          · 其余固态 —— 只有系统计数器给出**非零**值才采信（0 在很多盘上是占位）；否则「—」，注明「这块盘不报告寿命」
+          · 机械盘 —— 没有「寿命百分比」这回事，看通电时长
+        对不上就不采信：盘说「已用 0%」但累计写入已经是容量的 50 倍以上，这个 0 就是假的。
+
+      返回 @{ Name; Media; Size; Health; Life; LifeWhy; Temp; Hours; WrittenTB; Verdict; Level }
+        Life = 剩余寿命百分比（0~100），读不到 / 不可信时是 $null
     #>
     $rows = @()
     foreach ($d in (Get-PhysicalDisk -ErrorAction SilentlyContinue)) {
-        $wear = $null; $temp = $null; $hours = $null; $readErr = $null
+        $cWear = $null; $temp = $null; $hours = $null; $readErr = $null
         try {
             $rc = $d | Get-StorageReliabilityCounter -ErrorAction Stop
-            $wear = $rc.Wear
+            $cWear = $rc.Wear
             $temp = $rc.Temperature
             $hours = $rc.PowerOnHours
             $readErr = $rc.ReadErrorsTotal
@@ -193,26 +207,55 @@ function Get-DiskHealthReport {
             default { if ($d.SpindleSpeed -eq 0) { '固态' } else { '未知' } }
         }
 
+        $nv = $null
+        if ($mt -ne '机械') { $nv = Get-NvmeHealth -DiskNumber ([int]$d.DeviceId) }
+        $life = $null; $lifeWhy = ''; $written = $null
+        if ($nv) {
+            if ($mt -eq '未知') { $mt = '固态' }        # 读得到 NVMe 日志的一定是固态
+            $written = $nv.WrittenTB
+            if ($null -eq $hours -or $hours -le 0) { $hours = $nv.Hours }
+            if ($null -eq $temp -or $temp -le 0) { $temp = $nv.TempC }
+            $capTB = [double]$d.Size / 1e12
+            if ($nv.Used -eq 0 -and $capTB -gt 0 -and $nv.WrittenTB -gt 50 * $capTB) {
+                $lifeWhy = "盘报「已用 0%」，但累计写入已有 $($nv.WrittenTB) TB，两者对不上，不采信"
+            } else {
+                $life = [math]::Max(0, 100 - $nv.Used)
+            }
+            if ($null -ne $cWear -and [int]$cWear -ne $nv.Used) {
+                Write-Log ("{0}：系统计数器报寿命已用 {1}%，盘自己的 NVMe 日志是 {2}%，以盘为准" -f $d.FriendlyName, $cWear, $nv.Used) '信息'
+            }
+        } elseif ($mt -eq '固态') {
+            if ($null -ne $cWear -and [int]$cWear -gt 0) { $life = [math]::Max(0, 100 - [int]$cWear) }
+            else { $lifeWhy = '这块盘不报告寿命' }
+        }
+
         # 给一句人话结论
         $verdict = '正常'
         $level = '良好'
         if ($d.HealthStatus -ne 'Healthy') { $verdict = "系统报告状态异常（$($d.HealthStatus)）—— 尽快备份重要资料"; $level = '严重' }
-        elseif ($null -ne $wear -and $wear -ge 90) { $verdict = "固态写入寿命已用 $wear%，接近上限，建议开始考虑更换"; $level = '严重' }
-        elseif ($null -ne $wear -and $wear -ge 70) { $verdict = "固态写入寿命已用 $wear%，还能用但要留意了"; $level = '建议' }
-        elseif ($null -ne $readErr -and $readErr -gt 0) { $verdict = "累计读取错误 $readErr 次 —— 有坏道迹象，建议备份重要资料"; $level = '建议' }
+        elseif ($nv -and $nv.Critical -ne 0) { $verdict = '盘自己报了严重警告（备用块不足 / 过热 / 转为只读 / 可靠性下降之一）—— 尽快备份重要资料'; $level = '严重' }
+        elseif ($nv -and $nv.SpareThreshold -gt 0 -and $nv.Spare -lt $nv.SpareThreshold) { $verdict = "备用块只剩 $($nv.Spare)%，低于盘自己定的下限 $($nv.SpareThreshold)% —— 尽快备份、考虑更换"; $level = '严重' }
+        elseif ($null -ne $life -and $life -le 10) { $verdict = "剩余寿命 $life%，快用完了，建议开始考虑更换"; $level = '严重' }
+        elseif ($null -ne $life -and $life -le 30) { $verdict = "剩余寿命 $life%，还能用但要留意了"; $level = '建议' }
+        elseif (($nv -and $nv.MediaErrors -gt 0) -or ($null -ne $readErr -and $readErr -gt 0)) {
+            $n = if ($nv -and $nv.MediaErrors -gt 0) { $nv.MediaErrors } else { $readErr }
+            $verdict = "累计出过 $n 次读写错误 —— 有坏块迹象，建议备份重要资料"; $level = '建议'
+        }
         elseif ($null -ne $hours -and $hours -gt 35000) { $verdict = "已通电 $hours 小时（约 $([math]::Round($hours/8760,1)) 年），属于高龄硬盘，注意备份"; $level = '建议' }
-        elseif ($null -ne $wear) { $verdict = "健康，固态写入寿命已用 $wear%" }
+        elseif ($null -ne $life) { $verdict = "健康，剩余寿命 $life%" }
 
         $rows += [PSCustomObject]@{
-            Name     = $d.FriendlyName
-            Media    = $mt
-            Size     = (Format-Size $d.Size)
-            Health   = $d.HealthStatus
-            Wear     = $wear
-            Temp     = $temp
-            Hours    = $hours
-            Verdict  = $verdict
-            Level    = $level
+            Name      = ("$($d.FriendlyName)" -replace '-0{3,}$', '')     # 「MZVLB1T0HBLR-00000」这种出厂后缀没信息量，还把名字挤成两行
+            Media     = $mt
+            Size      = (Format-Size $d.Size)
+            Health    = $d.HealthStatus
+            Life      = $life
+            LifeWhy   = $lifeWhy
+            Temp      = $temp
+            Hours     = $hours
+            WrittenTB = $written
+            Verdict   = $verdict
+            Level     = $level
         }
     }
     return $rows

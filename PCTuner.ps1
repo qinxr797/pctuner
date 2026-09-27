@@ -195,7 +195,7 @@ if (-not $SelfTest -and -not $AutoClean -and -not $Shot -and -not $Perf -and -no
 # ---------------------------------------------------------------------
 $Script:AppRoot = Split-Path -Parent $PSCommandPath
 # 载入顺序有依赖：Engine 提供日志和注册表底座，其余模块都用得到，必须第一个
-$Script:ModuleNames = @('Engine', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme', 'Dash', 'Overclock', 'Motion')
+$Script:ModuleNames = @('Engine', 'Native', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme', 'Dash', 'Overclock', 'Motion')
 
 # ---------- 1.1 先查文件齐不齐 ----------
 # 为什么要专门查一遍：通过微信/QQ 传「文件夹」过去经常会漏文件
@@ -496,7 +496,7 @@ $Script:BgLog = [System.Collections.ArrayList]::Synchronized((New-Object System.
 $Script:BgJobs = New-Object System.Collections.ArrayList
 $Script:BgPool = $null
 $Script:BgPoll = $null
-$Script:BgModules = @('Engine', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme', 'Dash', 'Overclock')
+$Script:BgModules = @('Engine', 'Native', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme', 'Dash', 'Overclock')
 
 # 每条后台线开头都跑这一段：载入模块（每个后台线程只载一次），日志转回界面线程
 $Script:BgBoot = @'
@@ -1465,8 +1465,8 @@ function Close-CardRows {
 }
 
 function New-RptHeader {
-    <# 表头行：项目 / 结果 / 占了多少 / 安全范围 / 单位，下面一条 StrokeMed 线 #>
-    param([string]$First = '项目')
+    <# 表头行：项目 / 结果 / 占了多少 / 安全范围 / 单位，下面一条 StrokeMed 线。Bar 是量程那一列的列名 #>
+    param([string]$First = '项目', [string]$Bar = '占了多少')
     $sp = New-Object System.Windows.Controls.StackPanel
     $sp.Margin = New-Thick 0 4 0 0
 
@@ -1475,7 +1475,7 @@ function New-RptHeader {
     $cells = @(
         @{ T = $First; Col = 0; Align = 'Left' },
         @{ T = '结果'; Col = 1; Align = 'Right' },
-        @{ T = '占了多少'; Col = 3; Align = 'Left' },
+        @{ T = $Bar; Col = 3; Align = 'Left' },
         @{ T = '安全范围'; Col = 4; Align = 'Right' },
         @{ T = '单位'; Col = 5; Align = 'Right' })
     foreach ($c in $cells) {
@@ -5273,34 +5273,43 @@ function Build-MaintainUI {
     # ==================== 硬盘健康 ====================
     $disks = @($md.Disks)
     if ($disks.Count -gt 0) {
-        Add-Sec -Title '硬盘健康' -Aside '读 SMART 数据' -Icon 'Harddisk'
-        $p.Children.Add((New-RptHeader -First '硬盘')) | Out-Null
+        Add-Sec -Title '硬盘健康' -Aside '读盘自己记的健康日志' -Icon 'Harddisk'
+        # 量程那一列画的是什么就叫什么：固态是「剩余寿命」，机械是「通电时长」 —— 别再笼统叫「占了多少」
+        $hasLife = @($disks | Where-Object { $null -ne $_.Life }).Count -gt 0
+        $hasHours = @($disks | Where-Object { $null -eq $_.Life -and $null -ne $_.Hours -and $_.Media -ne '固态' }).Count -gt 0
+        $barName = if ($hasLife -and -not $hasHours) { '剩余多少' } elseif ($hasHours -and -not $hasLife) { '用了多久' } else { '读数' }
+        $p.Children.Add((New-RptHeader -First '硬盘' -Bar $barName)) | Out-Null
         foreach ($d in $disks) {
             $abn = ($d.Level -ne '良好')
             $mark = switch ($d.Level) { '严重' { '↑↑' } '建议' { '↑' } default { '' } }
 
-            # 固态看写入寿命，机械看通电时长 —— 各有各的参考范围。
-            # 两个都读不到就只报「—」，不编数字。
-            if ($null -ne $d.Wear) {
-                $val = [double]$d.Wear; $max = 100; $hi = 70
-                $res = [string]$d.Wear; $ref = '< 70'; $unit = '% 寿命'; $nobar = $false
-            } elseif ($null -ne $d.Hours) {
+            # 固态看剩余寿命，机械看通电时长 —— 各有各的参考范围。
+            # ★ v6.2：统一说「剩余寿命」★ 以前写「0 % 寿命」，实际是「已用 0%」，朋友读成了「寿命只剩 0」。
+            # 读不到 / 对不上就只报「—」并写清原因，不编数字。
+            $lo = $null; $hi = $null
+            if ($null -ne $d.Life) {
+                $val = [double]$d.Life; $max = 100; $lo = 30
+                $res = [string]$d.Life; $ref = '> 30'; $unit = '%'; $nobar = $false
+            } elseif ($null -ne $d.Hours -and $d.Media -ne '固态') {
                 $val = [double]$d.Hours; $max = 44000; $hi = 35000
                 $res = [string]$d.Hours; $ref = '< 35000'; $unit = '小时'; $nobar = $false
             } else {
-                $val = $null; $max = 100; $hi = $null
+                $val = $null; $max = 100
                 $res = '—'; $ref = ''; $unit = ''; $nobar = $true
                 if (-not $abn) { $mark = '—' }
             }
 
             $extra = @($d.Media, $d.Size)
-            if ($null -ne $d.Hours -and $null -ne $d.Wear) { $extra += "已通电 $($d.Hours) 小时" }
+            if ($null -ne $d.Life) { $extra += "剩余寿命 $($d.Life)%" }
+            elseif ($d.LifeWhy) { $extra += $d.LifeWhy }
+            if ($null -ne $d.Hours -and $d.Hours -gt 0 -and $res -ne [string]$d.Hours) { $extra += "已通电 $($d.Hours) 小时" }
+            if ($null -ne $d.WrittenTB) { $extra += "累计写入 $($d.WrittenTB) TB" }
             if ($null -ne $d.Temp -and $d.Temp -gt 0) { $extra += "$($d.Temp) °C" }
-            $extra += $d.Verdict
+            if ($d.Verdict -ne '正常' -and $d.Verdict -notlike '健康*') { $extra += $d.Verdict }
 
             $rd = New-RptRow -Name $d.Name -Result $res -Mark $mark -Ref $ref -Unit $unit `
                 -Note ($extra -join '   ·   ') -NoBar $nobar
-            if (-not $nobar) { Set-RangeBar $rd.Bar -Value $val -Max $max -Hi $hi -Abnormal $abn }
+            if (-not $nobar) { Set-RangeBar $rd.Bar -Value $val -Max $max -Lo $lo -Hi $hi -Abnormal $abn }
             $p.Children.Add($rd.Row) | Out-Null
         }
     }
