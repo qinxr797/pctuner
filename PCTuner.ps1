@@ -3957,6 +3957,88 @@ function New-ThemeSwatchBar {
     return $g
 }
 
+function Add-SubItem {
+    <#
+      把一个控件作为「上面那一组的子项」加进面板：左缩进 + 左边一条细线。
+
+      ★ 为什么需要它 ★
+        「面板不透明度」和「磨砂」是「背景图」这一组的从属选项，
+        而「开启界面动画」是一个独立设置。上一版它们长得一模一样，
+        读者分不出哪个管上面那一摊。缩进加一条竖线是最省的说法。
+
+      ★ 每个子项各包一个 Border，但 Border 之间不留 Margin ★
+        留了的话竖线会断成好几截，看起来像三条独立的线而不是一组。
+    #>
+    param($Panel, $Element)
+    if ($null -eq $Panel -or $null -eq $Element) { return }
+    $b = New-Object System.Windows.Controls.Border
+    $b.BorderBrush = Get-Brush '#DDDBD5'
+    $b.BorderThickness = New-Thick 1 0 0 0
+    $b.Padding = New-Thick 16 0 0 0
+    $b.Child = $Element
+    $Panel.Children.Add($b) | Out-Null
+}
+
+function New-SettingCheck {
+    <#
+      一个带说明的开关。返回可以直接塞进面板的那一块（勾 + 说明）。
+
+      ★ 说明不能塞进 CheckBox.Content ★
+        试过了：HandyControl 的模板里那个方框是**垂直居中**的，内容再高它也不跟，
+        于是「标题 + 说明」两行下去，方框就对到了说明那一行 ——
+        看起来像方框是说明的、跟标题没关系。
+        所以勾里只放标题（永远一行，方框自然对齐），说明另起一行。
+
+      ★ 说明照样要能点 ★
+        它就在勾正下方、同样的视觉分组里，用户下意识就会去点。
+        点它等于点勾 —— 切完状态再把 Click 事件抛出去，走同一个处理逻辑，
+        不用把那段逻辑抄两遍。
+
+      ★ 说明写「开了会怎样、什么时候该关」，不写怎么实现的 ★
+        用这东西的人不关心它是导入时算的还是每帧算的。
+    #>
+    param(
+        [string]$Title,
+        [string]$Note = '',
+        [string]$WhyOff = '',        # 不可用时的理由，会替掉说明
+        [bool]$Checked = $false,
+        [bool]$Enabled = $true,
+        [scriptblock]$OnClick = $null
+    )
+    $wrap = New-Object System.Windows.Controls.StackPanel
+
+    $cb = New-Object System.Windows.Controls.CheckBox
+    $cb.Content = $Title
+    $cb.FontSize = 13.5
+    $cb.IsChecked = $Checked
+    $cb.IsEnabled = $Enabled
+    if ($OnClick) { $cb.Add_Click($OnClick) }
+    $wrap.Children.Add($cb) | Out-Null
+
+    $noteText = if ($Enabled) { $Note } else { $WhyOff }
+    if ($noteText) {
+        $n = New-TextBlock -Text $noteText -Size 13 -Color '#66635B' -Wrap $true
+        # 左边缩到和标题文字对齐（方框 16 + 间距 8），说明才像是这个勾的
+        $n.Margin = New-Thick 24 5 0 0
+        # 一行 90 个字没人读，压到一个正常的阅读宽度
+        $n.MaxWidth = 720
+        $n.HorizontalAlignment = 'Left'
+        if ($Enabled) {
+            $n.Cursor = 'Hand'
+            $n.Tag = $cb
+            $n.Add_MouseLeftButtonUp({
+                    $c = $this.Tag
+                    $c.IsChecked = -not [bool]$c.IsChecked
+                    # 抛一次 Click，让它走和真点勾完全一样的那条路
+                    $c.RaiseEvent((New-Object System.Windows.RoutedEventArgs (
+                                [System.Windows.Controls.Primitives.ButtonBase]::ClickEvent)))
+                })
+        }
+        $wrap.Children.Add($n) | Out-Null
+    }
+    return $wrap
+}
+
 function Build-ThemeUI {
     $panel = $Script:UI.ThemePanel
     $panel.Children.Clear()
@@ -4090,15 +4172,21 @@ function Build-ThemeUI {
     # ★ PowerShell 5.1 里 if 不能当表达式用在参数位置上 ★
     #   写成 -Text (if (...) {...} else {...}) 会静默传进去一个 $null，
     #   然后在下一行 .Margin 上炸掉。先算到变量里再传。
-    $nowText = '当前没有使用背景图'
-    if ($cur.Image) { $nowText = "当前背景图：$($cur.Image)" }
+    # ★ 这一句决定下面两项能不能用 ★
+    #   没有背景图的时候，「面板不透明度」和「磨砂」一个都不起作用。
+    #   上一版它们照样是完全可用的样子 —— 点磨砂会重绘闪一下、
+    #   状态栏报「已开磨砂」，但什么都没发生。有反应而反应是假的，
+    #   比没反应更坏。
+    $hasImg = [bool]$cur.Image -and (Test-Path -LiteralPath "$($cur.Image)")
+    $nowText = if ($hasImg) { "当前背景图：$($cur.Image)" } else { '当前是纯色背景。下面两项要选了图才用得上。' }
     $now = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text $nowText
     $now.Margin = New-Thick 0 10 0 0
     $panel.Children.Add($now) | Out-Null
 
     $ol = New-TextBlock -Size 14 -Bold $true -Text ('面板不透明度　{0}%' -f [int]($cur.Opacity * 100))
-    $ol.Margin = New-Thick 0 16 0 6
-    $panel.Children.Add($ol) | Out-Null
+    $ol.Margin = New-Thick 0 18 0 6
+    $ol.Foreground = Get-Brush $(if ($hasImg) { '#2B2A26' } else { '#66635B' })
+    Add-SubItem $panel $ol
 
     $sld = New-Object System.Windows.Controls.Slider
     $sld.Minimum = 0.35; $sld.Maximum = 1.0
@@ -4108,6 +4196,10 @@ function Build-ThemeUI {
     $sld.Width = 320
     $sld.HorizontalAlignment = 'Left'
     $sld.Tag = $ol
+    # ★ 没背景图就禁用 ★
+    #   拖一个此刻不影响任何东西的滑块，是在浪费用户的动作。
+    #   守我们自己定的「禁用即未上墨」：用不上的控件不能长得跟能用的一样。
+    $sld.IsEnabled = $hasImg
     $sld.Add_ValueChanged({
             $this.Tag.Text = ('面板不透明度　{0}%' -f [int]($this.Value * 100))
         })
@@ -4118,58 +4210,40 @@ function Build-ThemeUI {
             Apply-PanelOpacity
             Set-Status ('面板不透明度已设为 {0}%' -f [int]($this.Value * 100))
         })
-    $panel.Children.Add($sld) | Out-Null
+    Add-SubItem $panel $sld
 
     $on2 = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text (
-        '只在使用背景图时有效。100% = 完全挡住背景图（和纯色一样），拉低才能看见图。')
+        '100% = 完全挡住背景图（和纯色一样），拉低才能看见图。')
     $on2.Margin = New-Thick 0 8 0 0
-    $panel.Children.Add($on2) | Out-Null
+    Add-SubItem $panel $on2
 
-    # 磨砂开关
-    $fcb = New-Object System.Windows.Controls.CheckBox
-    $fcb.Content = '磨砂（把背景图模糊，字更清楚）'
-    $fcb.FontSize = 13.5
-    $fcb.Margin = New-Thick 0 16 0 0
-    $fcb.IsChecked = [bool]$cur.Frost
-    $fcb.Add_Click({
-            $st = Get-ThemeSetting
-            Set-AppTheme -Name $st.Name -Image $st.Image -Opacity $st.Opacity -Frost ([bool]$this.IsChecked)
-            Redraw-AllPages
-            Set-Status $(if ($this.IsChecked) { '已开磨砂' } else { '已关磨砂，背景图恢复原清晰度' })
-        })
-    $panel.Children.Add($fcb) | Out-Null
-
-    $ftip = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text (
-        '模糊是导入图片时算好存成文件的，不是每次重绘都算 —— ' +
-        '开着不吃任何额外性能。工具本来就是给配置吃紧的机器用的，' +
-        '不会为了好看去吃你的帧。')
-    $ftip.Margin = New-Thick 0 8 0 0
-    $panel.Children.Add($ftip) | Out-Null
+    # 磨砂：背景图那一组的第二个子项
+    $fcb = New-SettingCheck -Title '磨砂 —— 把背景图模糊掉' `
+        -Note '图上的细节会糊成大块的颜色，压在上面的字就清楚了。想看清自己那张图就关掉它。' `
+        -WhyOff '选了背景图才用得上。' `
+        -Checked ([bool]$cur.Frost) -Enabled $hasImg -OnClick {
+        $st = Get-ThemeSetting
+        Set-AppTheme -Name $st.Name -Image $st.Image -Opacity $st.Opacity -Frost ([bool]$this.IsChecked)
+        Redraw-AllPages
+        Set-Status $(if ($this.IsChecked) { '已开磨砂' } else { '已关磨砂，背景图恢复原清晰度' })
+    }
+    $fcb.Margin = New-Thick 0 18 0 2
+    Add-SubItem $panel $fcb
 
     # ==================== 界面动画 ====================
     $sec3 = New-RptSection -Title '界面动画'
     $sec3.Margin = New-Thick 0 22 0 8
     $panel.Children.Add($sec3) | Out-Null
 
-    $acb = New-Object System.Windows.Controls.CheckBox
-    $acb.Content = '开启界面动画（切换页面、点开详情时淡入）'
-    $acb.IsChecked = [bool]$Script:AnimEnabled
-    $acb.FontSize = 13.5
-    $acb.Add_Click({
-            $Script:AnimEnabled = [bool]$this.IsChecked
-            $st = Get-ThemeSetting
-            Save-ThemeSetting -Name $st.Name -Image $st.Image -Opacity $st.Opacity -Anim $Script:AnimEnabled
-            Set-Status $(if ($Script:AnimEnabled) { '界面动画已开启' } else { '界面动画已关闭' })
-        })
+    $acb = New-SettingCheck -Title '开启界面动画' `
+        -Note '切换页面、点开详情时淡入，页签底下那条线也会滑过去。如果你的机器点哪都要等一下，关掉它操作反馈会更干脆 —— 关了之后所有切换都是瞬间完成，功能一模一样。' `
+        -Checked ([bool]$Script:AnimEnabled) -OnClick {
+        $Script:AnimEnabled = [bool]$this.IsChecked
+        $st = Get-ThemeSetting
+        Save-ThemeSetting -Name $st.Name -Image $st.Image -Opacity $st.Opacity -Anim $Script:AnimEnabled -Frost $st.Frost
+        Set-Status $(if ($Script:AnimEnabled) { '界面动画已开启 —— 切一下页签就能看见' } else { '界面动画已关闭' })
+    }
     $panel.Children.Add($acb) | Out-Null
-
-    $atip = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text (
-        '动画只用透明度和位移两种效果，走显卡合成，不会触发页面重排 —— ' +
-        '正常机器上开销可以忽略。' + "`r`n`r`n" +
-        '但这个工具本来就是给配置吃紧的机器用的：如果你的机器点哪都要等一下，' +
-        '关掉动画能让操作反馈更干脆。关了之后所有切换都是瞬间完成，功能一模一样。')
-    $atip.Margin = New-Thick 0 10 0 0
-    $panel.Children.Add($atip) | Out-Null
 }
 
 function Apply-PanelOpacity {
@@ -6086,6 +6160,18 @@ if ($SelfTest) {
         $ics = $Script:UI.Tabs.ItemContainerStyle
         if ($null -eq $ics) { $styleBad += '页签没有用我们的 ItemContainerStyle，会退回库的默认蓝下划线' }
     } catch { $styleBad += '页签容器样式查不了' }
+    # 点「说明文字」能不能切勾。
+    # 老板点名的就是这个交互 —— 转发不生效等于根本没改。
+    try {
+        $blk = New-SettingCheck -Title '探针' -Note '点我' -Checked $false
+        $pcb = $blk.Children[0]
+        $pnt = $blk.Children[1]
+        $ev = New-Object System.Windows.Input.MouseButtonEventArgs (
+            [System.Windows.Input.Mouse]::PrimaryDevice), 0, ([System.Windows.Input.MouseButton]::Left)
+        $ev.RoutedEvent = [System.Windows.UIElement]::MouseLeftButtonUpEvent
+        $pnt.RaiseEvent($ev)
+        if (-not $pcb.IsChecked) { $styleBad += '点设置项的说明文字切不动那个勾' }
+    } catch { $styleBad += "说明文字点击转发报错：$($_.Exception.Message)" }
     # 悬停光斑：Start-Spotlight 整个包在 try/catch 里，
     # 里面出事它会静静地什么也不做 —— 这种形状必须有人盯。
     try {
