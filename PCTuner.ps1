@@ -1368,7 +1368,7 @@ function Add-ColHeader {
       ★ 宽度必须和行里的列轨完全一致 ★ 否则列名对不上下面的数。
       Indent 是第一列文字的左缩进（列表行有 12 的内边距 + 勾选框）。
     #>
-    param($Panel, [string]$First = '检验项目', $Cols = @(), [double]$Indent = 44)
+    param($Panel, [string]$First = '检验项目', $Cols = @(), [double]$Indent = 38)
     if ($null -eq $Panel) { return }
 
     $wrap = New-Object System.Windows.Controls.StackPanel
@@ -1555,11 +1555,102 @@ $appStylesXaml = @'
     <Setter Property="md:RippleAssist.Feedback" Value="{DynamicResource Accent}"/>
   </Style>
 
-  <Style TargetType="CheckBox" BasedOn="{StaticResource MaterialDesignCheckBox}">
+  <!-- ================================================================
+       勾选框（D2 画勾）：方框 18、圆角 5；勾上时底色淡入、方框从 0.85 弹回 1、对勾一笔画出。
+       动画在 Modules\Motion.ps1 的 Install-ToggleMotion 里（类级注册 Checked / Unchecked），
+       模板只管长相。对勾路径长 13px、描边 2.2 → 虚线单位 6（StrokeDashArray 按线宽计）。
+       ================================================================ -->
+  <Style TargetType="CheckBox">
     <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
     <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="VerticalContentAlignment" Value="Center"/>
     <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
-    <Setter Property="md:RippleAssist.Feedback" Value="{DynamicResource Accent}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="CheckBox">
+          <Grid Background="Transparent">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Grid x:Name="BoxHost" Width="18" Height="18" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                  RenderTransformOrigin="0.5,0.5">
+              <Grid.RenderTransform>
+                <ScaleTransform x:Name="BoxScale" ScaleX="1" ScaleY="1"/>
+              </Grid.RenderTransform>
+              <Border x:Name="Box" CornerRadius="5" BorderThickness="1.5" BorderBrush="{DynamicResource StrokeStrong}" Background="{DynamicResource Card}"/>
+              <Border x:Name="Fill" CornerRadius="5" Background="{DynamicResource Accent}" Opacity="0"/>
+              <Path x:Name="Tick" Data="M 4.5,9.2 L 7.6,12.2 L 13.5,5.8" Stroke="{DynamicResource OnAccent}" StrokeThickness="2.2"
+                    StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" StrokeDashCap="Flat"
+                    StrokeDashArray="6 6" StrokeDashOffset="6"/>
+            </Grid>
+            <ContentPresenter x:Name="Cp" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                              RecognizesAccessKey="True"/>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource TextDim}"/>
+            </Trigger>
+            <Trigger Property="Content" Value="{x:Null}">
+              <Setter TargetName="Cp" Property="Margin" Value="0"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.45"/>
+              <Setter Property="Cursor" Value="Arrow"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- ================================================================
+       开关（D1 弹簧开关）：只给「设置」性质的开关用（开 / 关一件事），
+       选东西的列表（优化项、清理项、自带软件）仍然是勾选框。
+       轨道 36×20；圆点 14，弹簧滑过去；按住时圆点拉长 4px。动画同样在 Install-ToggleMotion。
+       ================================================================ -->
+  <Style x:Key="SwitchBox" TargetType="CheckBox">
+    <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="VerticalContentAlignment" Value="Center"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="CheckBox">
+          <Grid Background="Transparent">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Grid Width="36" Height="20" VerticalAlignment="{TemplateBinding VerticalContentAlignment}">
+              <Border x:Name="Track" CornerRadius="10" Background="{DynamicResource StrokeStrong}"/>
+              <Border x:Name="TrackOn" CornerRadius="10" Background="{DynamicResource Accent}" Opacity="0"/>
+              <Border x:Name="Knob" Width="14" Height="14" CornerRadius="7" Background="#FFFFFF"
+                      HorizontalAlignment="Left" VerticalAlignment="Center" Margin="3,0,0,0">
+                <Border.RenderTransform>
+                  <TranslateTransform x:Name="KnobX" X="0"/>
+                </Border.RenderTransform>
+              </Border>
+            </Grid>
+            <ContentPresenter x:Name="Cp" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                              RecognizesAccessKey="True"/>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="Content" Value="{x:Null}">
+              <Setter TargetName="Cp" Property="Margin" Value="0"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.45"/>
+              <Setter Property="Cursor" Value="Arrow"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
   </Style>
 
   <!-- 搜索框：描边输入框，前置放大镜，占位字不浮动（design.md 4.10） -->
@@ -1799,7 +1890,7 @@ $xamlText = @'
                        TextTrimming="CharacterEllipsis"/>
           </StackPanel>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-            <CheckBox x:Name="ChkRestorePoint" Content="动手前自动创建系统还原点" IsChecked="True"
+            <CheckBox x:Name="ChkRestorePoint" Style="{DynamicResource SwitchBox}" Content="动手前自动创建系统还原点" IsChecked="True"
                       Foreground="{DynamicResource TextMid}" FontSize="12" Margin="0,0,16,0" VerticalAlignment="Center"/>
             <Button x:Name="BtnRestorePoint" Content="立即创建还原点"/>
             <Button x:Name="BtnThemeToggle" Style="{DynamicResource ButtonIcon}" ToolTip="切换浅色 / 深色" Margin="4,0,0,0">
@@ -1922,7 +2013,7 @@ $xamlText = @'
                         <ColumnDefinition Width="24"/>
                         <ColumnDefinition Width="80"/>
                       </Grid.ColumnDefinitions>
-                      <TextBlock Text="检验项目" Grid.Column="0" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="44,0,0,0"/>
+                      <TextBlock Text="检验项目" Grid.Column="0" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="38,0,0,0"/>
                       <TextBlock Text="结果" Grid.Column="1" FontSize="11" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
                       <TextBlock Text="安全范围" Grid.Column="3" FontSize="11" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
                     </Grid>
@@ -2113,7 +2204,7 @@ $xamlText = @'
               </Grid.ColumnDefinitions>
               <Button x:Name="BtnRefreshStartup" Content="刷新列表" VerticalAlignment="Top"/>
               <TextBlock Grid.Column="1" Style="{DynamicResource Hint}" VerticalAlignment="Center" Margin="8,0,0,0"
-                         Text="勾掉复选框 = 禁止开机自启（立即生效，随时能勾回来，不删除任何文件）。标「看情况」的自己判断：认得、且需要它开机就在，就留着；完全没印象的可以先关一天试试。"/>
+                         Text="关掉开关 = 禁止开机自启（立即生效，随时能勾回来，不删除任何文件）。标「看情况」的自己判断：认得、且需要它开机就在，就留着；完全没印象的可以先关一天试试。"/>
             </Grid>
             <Border Grid.Row="1" Style="{DynamicResource ListCardBorder}">
               <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -3884,6 +3975,7 @@ function New-SettingCheck {
     $wrap = New-Object System.Windows.Controls.StackPanel
 
     $cb = New-Object System.Windows.Controls.CheckBox
+    $cb.Style = $Script:Window.FindResource('SwitchBox')    # 设置项 = 开关（design.md 5.3）
     $cb.Content = $Title
     $cb.FontSize = 13
     $cb.IsChecked = $Checked
@@ -3894,8 +3986,8 @@ function New-SettingCheck {
     $noteText = if ($Enabled) { $Note } else { $WhyOff }
     if ($noteText) {
         $n = New-TextBlock -Text $noteText -Size 12 -Color 'TextDim' -Wrap $true
-        # 左边缩到和标题文字对齐（MDIX 勾选框 20 + 间距 8），说明才像是这个勾的
-        $n.Margin = New-Thick 28 4 0 0
+        # 左边缩到和标题文字对齐（开关 36 + 间距 8），说明才像是这个开关的
+        $n.Margin = New-Thick 44 4 0 0
         # 一行 90 个字没人读，压到一个正常的阅读宽度
         $n.MaxWidth = 720
         $n.HorizontalAlignment = 'Left'
@@ -4306,7 +4398,7 @@ function Build-StartupUI {
         return
     }
 
-    Add-ColHeader $panel -First '开机启动项' -Cols @(@{ T = '结果'; W = 80 }, @{ T = '安全范围'; W = 88 })
+    Add-ColHeader $panel -First '开机启动项' -Cols @(@{ T = '结果'; W = 80 }, @{ T = '安全范围'; W = 88 }) -Indent 56
     foreach ($it in $items) {
         # 行式表，和别的页一个语汇：没有圆角、没有底色、没有边框盒子，
         # 只有一条行间细线。深度靠表面阶梯，不靠盒子。
@@ -4332,6 +4424,7 @@ function Build-StartupUI {
         }
 
         $cb = New-Object System.Windows.Controls.CheckBox
+        $cb.Style = $Script:Window.FindResource('SwitchBox')    # 启用 / 禁用是开关，不是「选中」
         $cb.Margin = New-Thick 0 0 8 0
         $cb.VerticalAlignment = 'Top'
         $cb.IsChecked = [bool]$it.Enabled
@@ -4621,6 +4714,7 @@ function Build-MaintainUI {
     $r2 = New-ActRow -Name '每周自动清理' `
         -Note '建一个计划任务，每周日 12:00 在后台静默跑一遍「垃圾清理」页的推荐项。不弹窗、不影响你用电脑、不碰性能设置。人不在电脑前错过了，下次开机自动补跑。'
     $cbAuto = New-Object System.Windows.Controls.CheckBox
+    $cbAuto.Style = $Script:Window.FindResource('SwitchBox')
     $cbAuto.Content = '开启'
     $cbAuto.FontSize = 13
     $cbAuto.VerticalAlignment = 'Center'
@@ -5088,7 +5182,8 @@ function Show-Findings {
             $sp.Children.Add($b) | Out-Null
         } elseif ($f.Target.Type -ne 'None') {
             $cbx = New-Object System.Windows.Controls.CheckBox
-            $cbx.Content = '保持启用（取消勾选 = 禁用它，随时可以再勾回来）'
+            $cbx.Style = $Script:Window.FindResource('SwitchBox')
+            $cbx.Content = '保持启用（关掉 = 禁用它，随时可以再打开）'
             $cbx.FontSize = 13
             $cbx.Margin = New-Thick 0 12 0 0
             $cbx.IsChecked = [bool]$f.Enabled
@@ -5801,6 +5896,7 @@ if ($Script:FontLoaded) {
 }
 
 Install-PressFeedback      # 所有按钮按下缩 0.97、松手弹簧回弹（类级注册，切到哪页都有）
+Install-ToggleMotion       # 勾选框画勾、开关弹簧滑动（同样类级注册）
 Build-NavUI
 Build-TweakUI
 Build-PresetUI
@@ -5904,6 +6000,18 @@ if ($SelfTest) {
         if ($sa.KeyFrames.Count -lt 30) { $styleBad += "弹簧关键帧太少（$($sa.KeyFrames.Count) 个）" }
     } catch { $styleBad += "弹簧检查报错：$($_.Exception.Message)" }
     if (-not $Script:PressInstalled) { $styleBad += "按钮按下的弹簧没挂上：$Script:PressError" }
+    if (-not $Script:ToggleInstalled) { $styleBad += "勾选框 / 开关的动效没挂上：$Script:ToggleError" }
+    try {
+        $probeCb = New-Object System.Windows.Controls.CheckBox
+        # 探针不在界面树上，默认样式不会自己找上门 —— 显式指一下，查的是「默认样式是不是画勾模板」
+        $probeCb.Style = $Script:Window.FindResource([System.Windows.Controls.CheckBox])
+        $probeCb.ApplyTemplate() | Out-Null
+        if ($null -eq $probeCb.Template.FindName('Tick', $probeCb)) { $styleBad += '勾选框没用上画勾模板（Tick 不在）' }
+        $probeSw = New-Object System.Windows.Controls.CheckBox
+        $probeSw.Style = $Script:Window.FindResource('SwitchBox')
+        $probeSw.ApplyTemplate() | Out-Null
+        if ($null -eq $probeSw.Template.FindName('KnobX', $probeSw)) { $styleBad += '开关模板里没有 KnobX' }
+    } catch { $styleBad += "勾选框 / 开关模板检查报错：$($_.Exception.Message)" }
     foreach ($ti in $Script:UI.Tabs.Items) {
         $nb = @(Get-PageBlocks $ti.Content).Count
         if ($nb -lt 2) { $styleBad += "「$($ti.Header)」页只找到 $nb 个区块，切页过场会退化成整页一起出现" }

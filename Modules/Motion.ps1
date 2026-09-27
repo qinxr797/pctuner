@@ -397,3 +397,98 @@ function Install-PressFeedback {
         $Script:PressInstalled = $true
     } catch { $Script:PressError = "$($_.Exception.Message)" }
 }
+
+# =====================================================================
+#  勾选框（D2 画勾）和开关（D1 弹簧开关）
+# ---------------------------------------------------------------------
+#  两者都是 CheckBox，模板在全局样式字典里（默认勾选框 / SwitchBox）。这里只管动。
+#    勾选框 勾上：底色淡入（Base）、方框从 0.85 弹回 1（弹簧）、对勾 40ms 后一笔画出（Draw）
+#           取消：底色和对勾一起退掉（Quick），不弹 —— 取消是「收」，不值得庆祝
+#    开关   开 / 关：圆点弹簧滑到另一头，轨道颜色淡入淡出（Base）
+#           按住：圆点拉长 4px（Press），松手缩回；开着的时候往左长，右边缘不动
+#
+#  ★ 类级注册 Checked / Unchecked ★ 程序里批量改 IsChecked（「勾选推荐项」）也会播，
+#    因为那也是「状态变了」；还没显示过的控件（别的页）在首次排版时直接落到终态，不播。
+# =====================================================================
+function Get-TplPart { param($Ctrl, [string]$Name) try { return $Ctrl.Template.FindName($Name, $Ctrl) } catch { return $null } }
+
+function Set-ToggleVisual {
+    <# 把勾选框 / 开关的外观对齐到 IsChecked。Animate = $false 时瞬间到位 #>
+    param($Cb, [bool]$Animate)
+    $on = [bool]$Cb.IsChecked
+    $knob = Get-TplPart $Cb 'KnobX'
+    if ($knob) {
+        $trackOn = Get-TplPart $Cb 'TrackOn'
+        $x = if ($on) { 16.0 } else { 0.0 }
+        if ($Animate -and $Cb.IsLoaded) {
+            Start-Spring $knob ([System.Windows.Media.TranslateTransform]::XProperty) $x
+            Start-Fade $trackOn $(if ($on) { 1 } else { 0 }) $Script:Dur.Base
+        } else {
+            $knob.BeginAnimation([System.Windows.Media.TranslateTransform]::XProperty, $null); $knob.X = $x
+            $trackOn.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null); $trackOn.Opacity = $(if ($on) { 1 } else { 0 })
+        }
+        return
+    }
+    $tick = Get-TplPart $Cb 'Tick'
+    if ($null -eq $tick) { return }
+    $fill = Get-TplPart $Cb 'Fill'
+    $scale = Get-TplPart $Cb 'BoxScale'
+    $dashP = [System.Windows.Shapes.Shape]::StrokeDashOffsetProperty
+    if ($Animate -and $Cb.IsLoaded -and (Test-MotionOn)) {
+        if ($on) {
+            Start-Fade $fill 1 $Script:Dur.Base
+            foreach ($prop in @([System.Windows.Media.ScaleTransform]::ScaleXProperty, [System.Windows.Media.ScaleTransform]::ScaleYProperty)) {
+                Start-Spring $scale $prop 1.0 0 0.85
+            }
+            Start-Prop $tick $dashP $null 0 $Script:Dur.Draw $Script:Ease.Out $Script:Dur.Stagger
+        } else {
+            Start-Fade $fill 0 $Script:Dur.Quick
+            Start-Prop $tick $dashP $null 6 $Script:Dur.Quick $Script:Ease.Out
+        }
+    } else {
+        $fill.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null); $fill.Opacity = $(if ($on) { 1 } else { 0 })
+        $tick.BeginAnimation($dashP, $null); $tick.StrokeDashOffset = $(if ($on) { 0 } else { 6 })
+    }
+}
+
+function Install-ToggleMotion {
+    if ($Script:ToggleInstalled) { return }
+    try {
+        $t = [System.Windows.Controls.CheckBox]
+        $chg = [System.Windows.RoutedEventHandler] { param($s, $e) if ($e.OriginalSource -eq $s) { Set-ToggleVisual $s $true } }
+        # ★ 首次排版时对齐一次，用 SizeChanged 不用 Loaded ★
+        #   Loaded 是广播出来的，不走类级处理器 —— 注册了也收不到（实测 0 次）。
+        #   SizeChanged 是普通路由事件，首次排版必触发；每个控件只对齐一次。
+        $load = [System.Windows.SizeChangedEventHandler] {
+            param($s, $e)
+            if ($s.Resources['__tsync'] -eq $true) { return }
+            $s.Resources['__tsync'] = $true
+            Set-ToggleVisual $s $false
+        }
+        [System.Windows.EventManager]::RegisterClassHandler($t, [System.Windows.Controls.Primitives.ToggleButton]::CheckedEvent, $chg, $true)
+        [System.Windows.EventManager]::RegisterClassHandler($t, [System.Windows.Controls.Primitives.ToggleButton]::UncheckedEvent, $chg, $true)
+        [System.Windows.EventManager]::RegisterClassHandler($t, [System.Windows.FrameworkElement]::SizeChangedEvent, $load, $true)
+        # 开关按住拉长
+        $down = [System.Windows.Input.MouseButtonEventHandler] {
+            param($s, $e)
+            $k = Get-TplPart $s 'Knob'; $kx = Get-TplPart $s 'KnobX'
+            if ($null -eq $k -or -not $s.IsEnabled) { return }
+            Start-Prop $k ([System.Windows.FrameworkElement]::WidthProperty) $null 18 $Script:Dur.Press $Script:Ease.Out
+            if ($s.IsChecked) { Start-Prop $kx ([System.Windows.Media.TranslateTransform]::XProperty) $null 12 $Script:Dur.Press $Script:Ease.Out }
+        }
+        $up = [System.Windows.Input.MouseEventHandler] {
+            param($s, $e)
+            $k = Get-TplPart $s 'Knob'
+            if ($null -eq $k -or $k.ActualWidth -le 14.01) { return }
+            Start-Prop $k ([System.Windows.FrameworkElement]::WidthProperty) $null 14 $Script:Dur.Press $Script:Ease.Out
+            # 松手没切换（拖出去再松）也要回到原位
+            $kx = Get-TplPart $s 'KnobX'
+            if ($kx) { Start-Spring $kx ([System.Windows.Media.TranslateTransform]::XProperty) $(if ($s.IsChecked) { 16.0 } else { 0.0 }) }
+        }
+        [System.Windows.EventManager]::RegisterClassHandler($t, [System.Windows.UIElement]::PreviewMouseLeftButtonDownEvent, $down, $true)
+        [System.Windows.EventManager]::RegisterClassHandler($t, [System.Windows.UIElement]::MouseLeaveEvent, $up, $true)
+        [System.Windows.EventManager]::RegisterClassHandler($t, [System.Windows.UIElement]::PreviewMouseLeftButtonUpEvent,
+            [System.Windows.Input.MouseButtonEventHandler] { param($s, $e) $k = Get-TplPart $s 'Knob'; if ($k) { Start-Prop $k ([System.Windows.FrameworkElement]::WidthProperty) $null 14 $Script:Dur.Press $Script:Ease.Out } }, $true)
+        $Script:ToggleInstalled = $true
+    } catch { $Script:ToggleError = "$($_.Exception.Message)" }
+}
