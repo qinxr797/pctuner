@@ -2806,14 +2806,20 @@ function Build-DashUI {
 function Build-DashHero {
     <#
       主角卡（design.md 4.8）：整张填 HeroFill、白字。全应用只有这一张。
-        健康度  分数（hero 44）+「分」
-        量程条  分数在 0~100 里的位置
-        三个计数 已核对 / 合格 / 超差 —— 每一分扣在哪，下面「检验结论」里逐条列
-      $S 是 Get-DashScore 的结果；$null = 还没算出来，数字写「—」。
+        左边  健康度  分数（hero 44）+「分」，下面三个计数 已核对 / 合格 / 超差
+        右边  圆环    分数在 0~100 里画到哪（D4：和数字共用一个时钟，一起滚、一起画满）
+      $S 是 Get-DashScore 的结果；$null = 还没算出来，数字写「—」、圆环空着。
     #>
     param($S)
     $h = $Script:UI.DashHero
     if ($null -eq $h) { return }
+    $root = New-Object System.Windows.Controls.Grid     # 外层留给光斑（C2）叠一层
+    $content = New-Object System.Windows.Controls.Grid
+    $c0 = New-Object System.Windows.Controls.ColumnDefinition
+    $c0.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+    $c1 = New-Object System.Windows.Controls.ColumnDefinition
+    $c1.Width = [System.Windows.GridLength]::Auto
+    $content.ColumnDefinitions.Add($c0); $content.ColumnDefinitions.Add($c1)
     $sp = New-Object System.Windows.Controls.StackPanel
 
     $head = New-Object System.Windows.Controls.StackPanel
@@ -2828,8 +2834,7 @@ function Build-DashHero {
     $row = New-Object System.Windows.Controls.StackPanel
     $row.Orientation = 'Horizontal'
     $row.Margin = New-Thick 0 8 0 0
-    $prev = if ($Script:DashHeroValue) { "$($Script:DashHeroValue.Text)" } else { '' }
-    $num = New-TextBlock -Text $(if ($prev) { $prev } else { [string][char]0x2014 }) -Size 44 -Color 'OnHero' -Bold $true
+    $num = New-TextBlock -Text ([string][char]0x2014) -Size 44 -Color 'OnHero' -Bold $true
     [System.Windows.Documents.Typography]::SetNumeralAlignment($num, 'Tabular')
     $row.Children.Add($num) | Out-Null
     $un = New-TextBlock -Text '分' -Size 11 -Color 'OnHeroDim'
@@ -2838,10 +2843,6 @@ function Build-DashHero {
     $row.Children.Add($un) | Out-Null
     $sp.Children.Add($row) | Out-Null
     $Script:DashHeroValue = $num
-
-    $m = New-Meter -Track 'OnHeroTrack' -FillColor 'OnHero' -LineColor 'OnHero'
-    $m.Host.Margin = New-Thick 0 12 0 0
-    $sp.Children.Add($m.Host) | Out-Null
 
     $total = @($Script:Tweaks).Count
     $bad = if ($S) { @($S.Items).Count } else { $null }
@@ -2871,14 +2872,76 @@ function Build-DashHero {
         $ci++
     }
     $sp.Children.Add($tally) | Out-Null
-    $h.Child = $sp
+    $content.Children.Add($sp) | Out-Null
 
-    if ($S) {
-        Set-Meter $m ([double]$S.Score) 100 $null 'OnHero'
-        Start-CountUp -Target $num -To ([double]$S.Score) -Decimals 0 -Ms 240
-    } else {
-        Set-Meter $m $null 100 $null 'OnHero'
+    # ---- 圆环（D4）----
+    #   直径 88、线宽 8：半径 40，周长 251.3px。StrokeDashArray 按线宽计单位 → 一整圈 = 31.4 单位
+    #   StrokeDashOffset 从 31.4（空）走到 31.4 × (1 - 分数/100)。从 12 点钟方向顺时针画。
+    $ring = New-Object System.Windows.Controls.Grid
+    $ring.Width = 88; $ring.Height = 88
+    $ring.VerticalAlignment = 'Center'
+    $ring.Margin = New-Thick 16 0 0 0
+    [System.Windows.Controls.Grid]::SetColumn($ring, 1)
+    $track = New-Object System.Windows.Shapes.Ellipse
+    $track.Stroke = Get-Brush 'OnHeroTrack'
+    $track.StrokeThickness = 8
+    $ring.Children.Add($track) | Out-Null
+    $arc = New-Object System.Windows.Shapes.Ellipse
+    $arc.Stroke = Get-Brush 'OnHero'
+    $arc.StrokeThickness = 8
+    $arc.StrokeDashCap = 'Flat'
+    $Script:HeroRingLen = [math]::PI * (88 - 8) / 8
+    $dc = New-Object System.Windows.Media.DoubleCollection
+    $dc.Add($Script:HeroRingLen); $dc.Add($Script:HeroRingLen)
+    $arc.StrokeDashArray = $dc
+    $arc.StrokeDashOffset = $Script:HeroRingLen
+    $arc.RenderTransformOrigin = New-Object System.Windows.Point 0.5, 0.5
+    $arc.RenderTransform = New-Object System.Windows.Media.RotateTransform -90
+    $ring.Children.Add($arc) | Out-Null
+    $content.Children.Add($ring) | Out-Null
+    $Script:HeroArc = $arc
+
+    $root.Children.Add($content) | Out-Null
+    $h.Child = $root
+    $Script:HeroRoot = $root
+    if ($S) { Start-HeroScore 0 }
+}
+
+function Set-HeroRing {
+    param([double]$Value)
+    if ($null -eq $Script:HeroArc) { return }
+    $v = [math]::Max(0, [math]::Min(100, $Value))
+    $Script:HeroArc.StrokeDashOffset = $Script:HeroRingLen * (1 - $v / 100)
+}
+
+function Start-HeroScore {
+    <#
+      健康度数字从 0 滚到分数、圆环同步画满（D4，Count 900ms ease-out）。
+      DelayMs：切到概览页时等区块依次进场落位再开始 —— 同一时刻只有一个主角在动（design.md 5.3）。
+      可打断：再次调用会掐掉上一次的等待和滚动，从 0 重来。
+    #>
+    param([double]$DelayMs = 0)
+    $s = $Script:DashScoreCache
+    if ($null -eq $s -or $null -eq $Script:DashHeroValue) { return }
+    try { if ($Script:HeroDelay) { $Script:HeroDelay.Stop() } } catch { }
+    try { if ($Script:DashHeroValue.Tag -is [System.Windows.Threading.DispatcherTimer]) { $Script:DashHeroValue.Tag.Stop() } } catch { }
+    if (-not (Test-AnimOn)) {
+        $Script:DashHeroValue.Text = "$([int]$s.Score)"
+        Set-HeroRing ([double]$s.Score)
+        return
     }
+    $Script:DashHeroValue.Text = '0'
+    Set-HeroRing 0
+    $go = {
+        Start-CountUp -Target $Script:DashHeroValue -To ([double]$Script:DashScoreCache.Score) -Decimals 0 -Ms $Script:Dur.Count -From 0 -OnFrame { param($v) Set-HeroRing $v }
+    }
+    if ($DelayMs -le 0) { & $go; return }
+    $t = New-Object System.Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds($DelayMs)
+    $t.Tag = $go
+    $t.Add_Tick({ $this.Stop(); & $this.Tag })
+    $Script:HeroDelay = $t
+    $t.Start()
 }
 
 function Update-DashScore {
@@ -5960,6 +6023,8 @@ $Script:UI.Tabs.Add_SelectionChanged({
         # 切页过场：新页面的区块依次进场（design.md 5.3）
         # ★ 用 SelectedItem.Content，不用 SelectedContent ★ 这个事件触发时 SelectedContent 还是旧页面
         $Script:LastEnterMs = Start-PageEnter $Script:UI.Tabs.SelectedItem.Content
+        # 概览页：区块落位之后，健康度数字和圆环再从 0 滚上来（接力，不和进场抢）
+        if ("$($Script:UI.Tabs.SelectedItem.Header)" -eq '概览') { Start-HeroScore $Script:LastEnterMs }
         Update-NavSelection
         $header = "$($Script:UI.Tabs.SelectedItem.Header)"
         # 只有停在概览页才轮询传感器，切走立刻停 ——
