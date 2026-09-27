@@ -4001,7 +4001,8 @@ function Build-ThemeUI {
                 Redraw-AllPages
                 Set-Status "皮肤已换成「$($this.Tag)」"
             })
-        Add-Interactive -Border $cell -BgNormal '#E4E3DE' -BgHover '#EDECE8' -NoLift
+        # 色样格值得端详一下，给它光斑跟随
+        Add-Interactive -Border $cell -BgNormal '#E4E3DE' -BgHover '#EDECE8' -NoLift -Spotlight
 
         $sp = New-Object System.Windows.Controls.StackPanel
         $sp.Children.Add((New-ThemeSwatchBar -Colors $th.Swatch)) | Out-Null
@@ -6064,6 +6065,18 @@ if ($SelfTest) {
         $ics = $Script:UI.Tabs.ItemContainerStyle
         if ($null -eq $ics) { $styleBad += '页签没有用我们的 ItemContainerStyle，会退回库的默认蓝下划线' }
     } catch { $styleBad += '页签容器样式查不了' }
+    # 悬停光斑：Start-Spotlight 整个包在 try/catch 里，
+    # 里面出事它会静静地什么也不做 —— 这种形状必须有人盯。
+    try {
+        $probe = New-Object System.Windows.Controls.Border
+        Add-Interactive -Border $probe -BgNormal '#E4E3DE' -BgHover '#EDECE8' -NoLift -Spotlight
+        Start-Spotlight $probe
+        if ($probe.Background -isnot [System.Windows.Media.RadialGradientBrush]) {
+            $styleBad += '悬停光斑没生效（Start-Spotlight 里抛了异常并被吞掉）'
+        } elseif ($probe.Background.GradientStops.Count -lt 2) {
+            $styleBad += '悬停光斑的渐变停止点不对'
+        }
+    } catch { $styleBad += "悬停光斑自检报错：$($_.Exception.Message)" }
     if ($styleBad.Count -gt 0) {
         Write-Host ('自检失败：控件样式' + [Environment]::NewLine + '  ' + ($styleBad -join ([Environment]::NewLine + '  '))) -ForegroundColor Red
         exit 5

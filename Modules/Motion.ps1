@@ -267,7 +267,11 @@ function Add-Interactive {
         [string]$BgHover = $null,
         [string]$BorderNormal = $null,
         [string]$BorderHover = $null,
-        [switch]$NoLift
+        [switch]$NoLift,
+        # 悬停时在指针位置浮一小团光，跟着鼠标走。
+        # 只给「值得端详一下」的东西用（皮肤色样、预设卡），
+        # 满页的列表行都加就成了满屏乱晃。
+        [switch]$Spotlight
     )
     if ($null -eq $Border) { return }
     if (-not $BgNormal) { $BgNormal = $Script:CARD_BG }
@@ -293,13 +297,13 @@ function Add-Interactive {
     #   改用元素自带的 Resources 字典：跟着元素生命周期走，不泄漏。
     $Border.Resources['__motion'] = @{
         BgN = $BgNormal; BgH = $BgHover; BdN = $BorderNormal; BdH = $BorderHover
-        Lift = (-not $NoLift)
+        Lift = (-not $NoLift); Spot = [bool]$Spotlight
     }
 
     $Border.Add_MouseEnter({
             $m = $this.Resources['__motion']
             if ($Script:SelectedCard -eq $this -or $Script:SelectedPresetCard -eq $this) { return }
-            Start-ColorFade $this $m.BgH
+            if ($m.Spot) { Start-Spotlight $this } else { Start-ColorFade $this $m.BgH }
             try { $this.BorderBrush = Get-Brush $m.BdH } catch { }
             if ($m.Lift -and (Test-MotionOn)) {
                 Start-Prop $this.RenderTransform.Children[1] ([System.Windows.Media.TranslateTransform]::YProperty) `
@@ -309,6 +313,7 @@ function Add-Interactive {
     $Border.Add_MouseLeave({
             $m = $this.Resources['__motion']
             if ($Script:SelectedCard -eq $this -or $Script:SelectedPresetCard -eq $this) { return }
+            if ($m.Spot) { Stop-Spotlight $this }
             Start-ColorFade $this $m.BgN
             try { $this.BorderBrush = Get-Brush $m.BdN } catch { }
             if (Test-MotionOn) {
@@ -318,6 +323,24 @@ function Add-Interactive {
                 Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 0.985 1 $Script:Dur.Press $Script:Ease.Out
             }
         })
+    if ($Spotlight) {
+        $Border.Add_MouseMove({
+                $rb = $this.Resources['__spot']
+                if ($null -eq $rb) { return }
+                try {
+                    $p = [System.Windows.Input.Mouse]::GetPosition($this)
+                    $w = [math]::Max(1, $this.ActualWidth)
+                    $h = [math]::Max(1, $this.ActualHeight)
+                    $pt = New-Object System.Windows.Point ($p.X / $w), ($p.Y / $h)
+                    # ★ 直接赋值，不做动画 ★
+                    #   指针本身就在动，再给圆心加个缓动，光斑会「拖在手后面」，
+                    #   手感变黏。跟手就是最好的手感。
+                    $rb.Center = $pt
+                    $rb.GradientOrigin = $pt
+                } catch { }
+            })
+    }
+
     # ================================================================
     #  按下反馈
     # ----------------------------------------------------------------
@@ -353,6 +376,68 @@ function Add-Interactive {
             Start-Prop $this.RenderTransform.Children[1] ([System.Windows.Media.TranslateTransform]::YProperty) `
                 1 0 180 $Script:Ease.Spring
         })
+}
+
+function Start-Spotlight {
+    <#
+      把这一行的底色换成一支径向渐变：指针处亮一档，边缘落回悬停色。
+
+      ★ 为什么是换刷子，不是加一层覆盖层 ★
+        加层要多一个元素、要设 IsHitTestVisible、还得跟着换肤一起重建。
+        换刷子零结构改动 —— 而且 Background 本来就归交互引擎管。
+
+      ★ 两个渐变停止点的颜色用动画淡进去 ★
+        直接换上去会「啪」地亮一下。让它和原来的底色过渡一样柔，
+        130ms，和 Start-ColorFade 同一个时长。
+    #>
+    param($Border)
+    $m = $Border.Resources['__motion']
+    if ($null -eq $m) { return }
+    try {
+        $cN = (Get-Brush $m.BgN).Color
+        $cH = (Get-Brush $m.BgH).Color
+        # 光心：在悬停色基础上再提亮一档。提亮量按当前亮度自适应 ——
+        # 深色皮肤上 +14 就看得见，浅色皮肤上要 +10 才不过曝。
+        $lum = (0.299 * $cH.R + 0.587 * $cH.G + 0.114 * $cH.B)
+        $lift = if ($lum -lt 128) { 20 } else { 11 }
+        $cS = [System.Windows.Media.Color]::FromArgb(255,
+            [byte][math]::Min(255, $cH.R + $lift),
+            [byte][math]::Min(255, $cH.G + $lift),
+            [byte][math]::Min(255, $cH.B + $lift))
+
+        $rb = New-Object System.Windows.Media.RadialGradientBrush
+        $rb.RadiusX = 0.62
+        $rb.RadiusY = 1.05          # 行比光斑扁，横向半径小一点才圆
+        $rb.Center = New-Object System.Windows.Point 0.5, 0.5
+        $rb.GradientOrigin = $rb.Center
+        $g0 = New-Object System.Windows.Media.GradientStop $cN, 0.0
+        $g1 = New-Object System.Windows.Media.GradientStop $cN, 1.0
+        $rb.GradientStops.Add($g0)
+        $rb.GradientStops.Add($g1)
+        $Border.Background = $rb
+        $Border.Resources['__spot'] = $rb
+
+        if (-not (Test-MotionOn)) {
+            $g0.Color = $cS; $g1.Color = $cH
+            return
+        }
+        $dur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Script:Dur.Hover))
+        foreach ($pair in @(@($g0, $cS), @($g1, $cH))) {
+            $a = New-Object System.Windows.Media.Animation.ColorAnimation
+            $a.From = $cN; $a.To = $pair[1]; $a.Duration = $dur
+            $pair[0].BeginAnimation([System.Windows.Media.GradientStop]::ColorProperty, $a)
+        }
+    } catch { }
+}
+
+function Stop-Spotlight {
+    <# 指针离开：把刷子交还给普通底色过渡（Start-ColorFade 需要 SolidColorBrush） #>
+    param($Border)
+    try {
+        $Border.Resources.Remove('__spot')
+        $m = $Border.Resources['__motion']
+        if ($m) { $Border.Background = (Get-Brush $m.BgH).Clone() }
+    } catch { }
 }
 
 function Add-PressFeedback {
