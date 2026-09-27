@@ -1,10 +1,16 @@
 本目录下的第三方组件及其许可证
 ================================
 
-HandyControl.dll
-  项目: https://github.com/HandyOrg/HandyControl
-  许可: MIT  （见 HandyControl-LICENSE.txt）
-  用途: 界面控件库
+MaterialDesignThemes.Wpf.dll   v5.3.2（net462）
+MaterialDesignColors.dll       v5.3.2（net462）
+  项目: https://github.com/MaterialDesignInXAML/MaterialDesignInXamlToolkit
+  许可: MIT  （见 MaterialDesignInXamlToolkit-LICENSE.txt）
+  用途: 界面控件库（按钮、勾选框、输入框、图标、切页动画）。v6.0 起替代 HandyControl
+
+Microsoft.Xaml.Behaviors.dll   v1.1.77（net462）
+  项目: https://github.com/microsoft/XamlBehaviorsWpf
+  许可: MIT  （见 XamlBehaviorsWpf-LICENSE.txt）
+  用途: MaterialDesignThemes 的依赖
 
 LibreHardwareMonitorLib.dll   v0.9.4
   项目: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor

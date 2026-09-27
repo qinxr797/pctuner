@@ -1,283 +1,154 @@
 ﻿<#
 =====================================================================
-  Theme.ps1  ——  换肤
+  Theme.ps1  ——  换肤（v6.0：浅色默认 + 深色备选）
 ---------------------------------------------------------------------
-  一套皮肤 = 20 个「中性色 + 主色」的取值。
+  一套皮肤 = 一列色槽取值（见 design.md 1.1）。只有两列：浅色、深色。
 
-  ★ 哪些颜色参与换肤，哪些不参与 ★
-    参与：窗口底色、卡片底色、边框、文字、滚动条、主色
-    不参与：绿 / 红 / 卡其 / 玫瑰那几个**语义色**
-            —— 「高危」永远是红的，不能因为换了皮肤变成绿的。
-            这是故意的限制，别为了好看去掉。
+  ★ 换肤怎么生效的 ★
+    1. XAML 里所有中性色都写成 {DynamicResource 槽名}
+       → 改 Application.Resources['槽名'] 就整个界面（连同弹窗）跟着变
+    2. 代码里画的元素走 Get-Brush '槽名' —— 它按当前皮肤取值，
+       换肤之后 Redraw-AllPages 把代码画的页面重画一遍
+    3. MDIX（MaterialDesignInXamlToolkit）的控件用它自己的 BaseTheme 切深浅，
+       再把它的几支关键画笔（底色、卡片、前景、主色）盖成我们的色槽，
+       控件和我们自己画的东西才是同一套颜色
+    4. 图片背景额外给窗口铺一层 ImageBrush，并把内容区调成半透明让图透出来
 
-  换肤怎么生效的：
-    1. XAML 里所有中性色都写成 {DynamicResource XXX}
-       → 改 Window.Resources['XXX'] 就整个界面跟着变
-    2. 代码里的 Get-Brush '#色号' 走 $Script:ColorRemap 映射表
-       → 换肤时重建映射表，然后重绘各页
-    3. 图片皮肤额外给窗口铺一层 ImageBrush，
-       并把各个面板调成半透明让图透出来
+  ★ 哪些颜色不参与换肤 ★
+    绿 / 卡其 / 玫瑰红 / 陶那几个**语义色**只换明暗、不换色相 ——
+    「高危」永远是红的。这是故意的限制，别为了好看去掉。
 
   皮肤选择存在 Backup\theme.json，下次启动自动套用。
 =====================================================================
 #>
 
-# 默认皮肤的色号 —— 也就是代码里 Get-Brush 写死的那些值。
-# 换肤时用它当「键」，去新皮肤里查对应的新色号。
-$Script:ThemeBaseKeys = @(
-    'WindowBg', 'PanelBg', 'CardBg', 'CardHover', 'SurfaceAlt', 'SurfaceSunken', 'NeutralTint',
-    'TextMain', 'TextDim', 'TextMid', 'OnAccent',
-    'BorderSoft', 'BorderMed', 'BorderStrong',
-    'ScrollThumbBg', 'ScrollThumbHover', 'ScrollThumbDrag',
-    'Accent', 'AccentDark', 'AccentLight', 'AccentTint'
-)
+# =====================================================================
+#  色槽取值。★ 改这里之前先改 design.md 1.1 ★
+# =====================================================================
+$Script:Palettes = [ordered]@{
+    '浅色' = @{
+        Canvas = '#F4F5FA'; Sidebar = '#FFFFFF'; Card = '#FFFFFF'; CardHover = '#F7F8FC'
+        SurfaceAlt = '#F7F8FC'; SurfaceSunken = '#EEF0F6'
+        Stroke = '#ECEEF4'; StrokeMed = '#E2E5EE'; StrokeStrong = '#C9CDE0'
+        TextMain = '#1E2046'; TextMid = '#4A4E6D'; TextDim = '#666A88'
+        Accent = '#5B5FD6'; AccentHover = '#7478E0'; AccentPressed = '#4B53B8'; AccentTint = '#EEEFFC'; OnAccent = '#FFFFFF'
+        HeroFill = '#4B53B8'; OnHero = '#FFFFFF'; OnHeroDim = '#D4D6F7'; OnHeroTrack = '#6B72C9'
+    }
+    '深色' = @{
+        Canvas = '#13141C'; Sidebar = '#1B1D29'; Card = '#1B1D29'; CardHover = '#222534'
+        SurfaceAlt = '#222534'; SurfaceSunken = '#0F1017'
+        Stroke = '#2A2D3E'; StrokeMed = '#33374A'; StrokeStrong = '#4A4F68'
+        TextMain = '#ECEDF6'; TextMid = '#C3C5DA'; TextDim = '#9A9DB6'
+        Accent = '#8B8FF0'; AccentHover = '#A3A6F5'; AccentPressed = '#6F73E0'; AccentTint = '#26284A'; OnAccent = '#13141C'
+        HeroFill = '#4B53B8'; OnHero = '#FFFFFF'; OnHeroDim = '#D4D6F7'; OnHeroTrack = '#6B72C9'
+    }
+}
+
+$Script:ThemeDesc = @{
+    '浅色' = '浅灰蓝画布上放白色卡片。白天用，默认就是它。'
+    '深色' = '深蓝灰底。晚上用眼睛舒服一些，功能完全一样。'
+}
 
 # =====================================================================
-#  语义色在深色皮肤下的替身
+#  语义色：色相固定，只按皮肤换明暗（前景 / 底成对）
 # ---------------------------------------------------------------------
-#  之前的原则是「语义色一律不换肤」—— 方向对，但做得太死，
-#  结果深色皮肤下出了一批看不见的字：
-#    · 浅色的状态卡片底 + 跟着变白的标题 = 白字浅底，整行消失
-#    · 深卡其色的提示文字压在深色面板上 = 深字深底，也看不见
-#
-#  正确的做法是分清两件事：
-#    **色相**（红=危险、绿=安全、卡其=注意）必须保持，不能换
-#    **明度**（这个颜色多深多浅）必须跟着皮肤走
-#
-#  所以这里按「前景 / 背景成对」替换：深色皮肤下前景提亮、背景压暗，
-#  两边一起动，徽章（自带前景+背景）和裸文字就都还是可读的。
-#
-#  ★ 成对是关键 ★ 只换前景不换背景，或者反过来，都会炸。
+#  左边是代码里写的色号（也是 Games.ps1 的 Get-VerdictColor 返回的），
+#  右边 @(浅色, 深色)。值以 '@' 开头的表示「借一个色槽」。
+#  ★ 成对是关键 ★ 只换前景不换底，或者反过来，都会糊成一团。
 # =====================================================================
-$Script:SemanticDark = @{
-    # ★ 背景那几个值是跟着画布一起定的 ★
-    #   画布从 #191D23 压到 #0B0D10 之后，原来那批（#2E3A2F 等）显得发灰发亮，
-    #   像一块块贴上去的补丁。现在整体再压暗一档，让状态卡片是「从面板里
-    #   透出来的一块色」而不是「浮在上面的色块」。见 design.md 1.3。
-    # ---- 灰绿：良好 / 必做 / 低风险 ----
-    '#556B54' = '#9CC49D'      # 前景：提亮成浅鼠尾草
-    '#E7EBE4' = '#1B2A1D'      # 背景：压成深绿灰
-    '#E2E7E0' = '#1B2A1D'
-    '#DCE8DA' = '#1B2A1D'
-    # ---- 灰卡其：需实测 / 中风险 / 可疑 ----
-    '#7A6B45' = '#DCC68C'
-    '#EDE7D9' = '#2A2418'
-    '#F0EADC' = '#2A2418'
-    '#EDE2D6' = '#2A2418'
-    # ---- 灰玫瑰：高危 / 高风险 ----
-    '#8A5750' = '#E4A69E'
-    '#EDE0DD' = '#2D1C19'
-    '#EFE3E0' = '#2D1C19'
-    # ---- 灰陶：会弹黑框 ----
-    '#89694F' = '#D6AB85'
-}
-
-# 代码里 Get-Brush 用到的、但不在上面 20 个里的中性色，
-# 也要跟着皮肤走，否则换深色皮肤时卡片还是浅色的。
-# 左边是「默认皮肤里的色号」，右边是「它属于哪个语义槽」。
-$Script:ExtraColorSlots = @{
-    '#F6F5F2' = 'CardBg'
-    '#FBFAF8' = 'PanelBg'
-    '#66635B' = 'TextDim'
-    '#E0DED8' = 'BorderSoft'
-    '#EAE9E3' = 'SurfaceAlt'
-    '#E8E7E2' = 'NeutralTint'
-    '#DDDBD5' = 'BorderSoft'
-    '#2B2A26' = 'TextMain'
-    '#4A4842' = 'TextMid'
-    '#565349' = 'TextMid'
-    '#8A877F' = 'TextDim'
-    '#E4E3DE' = 'WindowBg'
-    '#55606F' = 'Accent'
-    '#F0EFEB' = 'CardHover'   # 卡片悬停色（$Script:CARD_HOVER）——
-    # 漏了这一条的后果：深色皮肤下鼠标一放上去，
-    # 悬停底色还是浅的、标题字却是白的 → 整行看不见
+$Script:SemanticColors = @{
+    # ---- 绿：良好 / 必做 / 低风险 ----
+    '#556B54' = @('#556B54', '#9CC49D')
+    '#E7EBE4' = @('#E7EBE4', '#1D2A20')
+    '#E2E7E0' = @('#E7EBE4', '#1D2A20')     # 旧的底色别名
+    '#DCE8DA' = @('#E7EBE4', '#1D2A20')
+    # ---- 卡其：需实测 / 中风险 / 可疑 ----
+    '#7A6B45' = @('#7A6B45', '#DCC68C')
+    '#EDE7D9' = @('#F4F0E7', '#2B2619')     # 浅色底比 v5 提亮一档：#EDE7D9 上卡其字只有 4.24:1
+    '#F0EADC' = @('#F4F0E7', '#2B2619')
+    # ---- 玫瑰红：高危 / 高风险 ----
+    '#8A5750' = @('#8A5750', '#E4A69E')
+    '#EDE0DD' = @('#EDE0DD', '#2E1E1C')
+    '#EFE3E0' = @('#EDE0DD', '#2E1E1C')
+    # ---- 陶：会弹黑框 ----
+    '#89694F' = @('#89694F', '#D6AB85')
+    '#EDE2D6' = @('#F8F4EF', '#2B2117')     # 同上：#EDE2D6 上陶色字只有 3.92:1
+    # ---- 结论里的「中性」「推荐」：不是状态，借中性色槽 ----
+    '#66635B' = @('@TextDim', '@TextDim')
+    '#55606F' = @('@TextMid', '@TextMid')
+    '#E8E7E2' = @('@SurfaceSunken', '@SurfaceSunken')
+    '#E4E7EC' = @('@SurfaceSunken', '@SurfaceSunken')
 }
 
 # =====================================================================
-#  我们的色槽 -> HandyControl 的画笔键
+#  我们的色槽 -> MDIX 的画笔键
 # ---------------------------------------------------------------------
-#  v4.0 界面建在 HandyControl 上。它的控件模板内部全是
-#  {DynamicResource RegionBrush} 这种引用，所以只要我们把这些键
-#  用自己的颜色覆盖掉，**整套控件就跟着我们的皮肤走**。
-#
-#  ★ 为什么不用 HandyControl 自带的深浅皮肤 ★
-#    它的 SkinType.Dark 在 PowerShell 环境下切不动 ——
-#    四种官方写法（构造后设 Skin / 构造前设 Skin /
-#    直接挂 SkinDark.xaml / Theme 打底再覆盖）全试过，
-#    拿到的 RegionBrush 始终是 #FFFFFFFF。
-#    原因是那些 pack:// 资源字典在 XamlReader 环境里填充不起来。
-#
-#    所以走「库出模板、我们出颜色」这条路：既绕开了这个 bug，
-#    又保住了我们自己那 6 套验过对比度的皮肤。
-#
-#  左边是我们的色槽名，右边是要覆盖的 HandyControl 键（可多个）。
+#  MDIX 控件模板里引用的是这些键。盖成我们的色，勾选框、输入框、
+#  滑块、滚动条才和我们自己画的卡片是同一套颜色。
+#  写进 Application.Resources 自己的键 —— 它优先于合并进来的 MDIX 字典。
 # =====================================================================
-$Script:HcBrushMap = @{
-    WindowBg     = @('BackgroundBrush', 'SecondaryRegionBrush')
-    PanelBg      = @('RegionBrush', 'DefaultBrush', 'ThirdlyRegionBrush')
-    TextMain     = @('PrimaryTextBrush', 'ReverseTextBrush')
-    TextMid      = @('SecondaryTextBrush')
-    TextDim      = @('ThirdlyTextBrush')
-    BorderSoft   = @('BorderBrush')
-    Accent       = @('PrimaryBrush', 'DarkPrimaryBrush')
-    OnAccent     = @('TextIconBrush')
-}
-
-# 语义色 -> HandyControl 的语义画笔。
-# 这几个键控制库里「成功/警告/危险/信息」类控件的配色，
-# 不覆盖的话会冒出一批跟我们整体不搭的鲜艳红绿。
-$Script:HcSemanticMap = @{
-    '#556B54' = @('SuccessBrush', 'DarkSuccessBrush')   # 灰绿：良好 / 必做
-    '#7A6B45' = @('WarningBrush', 'DarkWarningBrush')   # 灰卡其：需实测 / 中风险
-    '#8A5750' = @('DangerBrush', 'DarkDangerBrush')     # 灰玫瑰：高危
-    '#55606F' = @('InfoBrush', 'DarkInfoBrush')         # 灰蓝：推荐 / 主色
+$Script:MdBrushMap = @{
+    Canvas       = @('MaterialDesign.Brush.Background', 'MaterialDesignPaper', 'MaterialDesignBackground')
+    Card         = @('MaterialDesign.Brush.Card.Background', 'MaterialDesignCardBackground', 'MaterialDesign.Brush.ToolTip.Background')
+    Stroke       = @('MaterialDesign.Brush.Card.Border', 'MaterialDesign.Brush.Separator.Background', 'MaterialDesignDivider')
+    StrokeMed    = @('MaterialDesign.Brush.TextBox.OutlineInactiveBorder', 'MaterialDesign.Brush.ComboBox.OutlineInactiveBorder')
+    StrokeStrong = @('MaterialDesign.Brush.TextBox.Border', 'MaterialDesign.Brush.TextBox.OutlineBorder', 'MaterialDesign.Brush.TextBox.HoverBorder', 'MaterialDesign.Brush.ScrollBar.Foreground', 'MaterialDesignTextBoxBorder')
+    TextMain     = @('MaterialDesign.Brush.Foreground', 'MaterialDesignBody')
+    TextDim      = @('MaterialDesign.Brush.ForegroundLight', 'MaterialDesignBodyLight', 'MaterialDesign.Brush.CheckBox.Off', 'MaterialDesign.Brush.CheckBox.UncheckedBorder', 'MaterialDesignCheckBoxOff')
+    Accent       = @('MaterialDesign.Brush.Primary', 'MaterialDesign.Brush.Secondary')
+    AccentHover  = @('MaterialDesign.Brush.Primary.Light', 'MaterialDesign.Brush.Secondary.Light')
+    AccentPressed = @('MaterialDesign.Brush.Primary.Dark', 'MaterialDesign.Brush.Secondary.Dark')
+    OnAccent     = @('MaterialDesign.Brush.Primary.Foreground', 'MaterialDesign.Brush.Secondary.Foreground', 'MaterialDesign.Brush.Primary.Light.Foreground', 'MaterialDesign.Brush.Primary.Dark.Foreground')
+    CardHover    = @('MaterialDesign.Brush.TextBox.HoverBackground', 'MaterialDesign.Brush.ListView.Hover')
+    SurfaceAlt   = @('MaterialDesign.Brush.TextBox.FilledBackground')
 }
 
 function Get-BuiltinThemes {
-    <#
-      内置皮肤。每套都是自己配的低饱和度组合，
-      正文色都验过对比度（正文 ≥ 4.5:1，符合 WCAG AA）。
-    #>
-    [ordered]@{
-
-        '暖灰（默认）' = @{
-            Desc = '原来那一套。暖调中性灰，久看不累。'
-            Swatch = @('#E4E3DE', '#FBFAF8', '#55606F')
-            Colors = @{
-                WindowBg = '#E4E3DE'; PanelBg = '#FBFAF8'; CardBg = '#F6F5F2'; CardHover = '#EFEEEA'
-                SurfaceAlt = '#EDECE8'; SurfaceSunken = '#E5E3DC'; NeutralTint = '#E8E7E2'
-                TextMain = '#2B2A26'; TextDim = '#66635B'; TextMid = '#4A4842'; OnAccent = '#FFFFFF'
-                BorderSoft = '#DDDBD5'; BorderMed = '#D2D0C9'; BorderStrong = '#C6C4BC'
-                ScrollThumbBg = '#CBC9C1'; ScrollThumbHover = '#B5B2A9'; ScrollThumbDrag = '#9E9B91'
-                Accent = '#55606F'; AccentDark = '#39424E'; AccentLight = '#7F8A99'; AccentTint = '#E4E7EC'
-            }
-        }
-
-        '雾霾蓝' = @{
-            Desc = '冷调灰蓝。偏安静，适合长时间盯着看。'
-            Swatch = @('#DFE3E6', '#F8FAFB', '#4F6577')
-            Colors = @{
-                WindowBg = '#DFE3E6'; PanelBg = '#F8FAFB'; CardBg = '#F1F4F6'; CardHover = '#E9EDF0'
-                SurfaceAlt = '#E8ECEF'; SurfaceSunken = '#DFE4E8'; NeutralTint = '#E5E9EC'
-                TextMain = '#23292E'; TextDim = '#59646E'; TextMid = '#414B54'; OnAccent = '#FFFFFF'
-                BorderSoft = '#D3D9DE'; BorderMed = '#C5CCD2'; BorderStrong = '#B3BBC2'
-                ScrollThumbBg = '#C2C9CF'; ScrollThumbHover = '#ACB4BB'; ScrollThumbDrag = '#949DA5'
-                Accent = '#4F6577'; AccentDark = '#354654'; AccentLight = '#7A8D9C'; AccentTint = '#DFE7ED'
-            }
-        }
-
-        '鼠尾草绿' = @{
-            Desc = '低饱和的灰绿。柔和，不刺眼。'
-            Swatch = @('#E1E5DF', '#F9FBF8', '#566B58')
-            Colors = @{
-                WindowBg = '#E1E5DF'; PanelBg = '#F9FBF8'; CardBg = '#F2F5F0'; CardHover = '#EAEEE8'
-                SurfaceAlt = '#E9EDE7'; SurfaceSunken = '#E0E5DE'; NeutralTint = '#E6EAE4'
-                TextMain = '#242822'; TextDim = '#5E685C'; TextMid = '#414A3F'; OnAccent = '#FFFFFF'
-                BorderSoft = '#D5DAD3'; BorderMed = '#C7CDC5'; BorderStrong = '#B5BCB3'
-                ScrollThumbBg = '#C4CAC2'; ScrollThumbHover = '#AEB5AC'; ScrollThumbDrag = '#969E94'
-                Accent = '#566B58'; AccentDark = '#3A4A3C'; AccentLight = '#7F927F'; AccentTint = '#E2EAE1'
-            }
-        }
-
-        '奶茶棕' = @{
-            Desc = '暖棕米色。偏温暖，像纸。'
-            Swatch = @('#E8E2DA', '#FCFAF7', '#6B5844')
-            Colors = @{
-                WindowBg = '#E8E2DA'; PanelBg = '#FCFAF7'; CardBg = '#F7F3EE'; CardHover = '#F0ECE6'
-                SurfaceAlt = '#F0EBE4'; SurfaceSunken = '#E7E1D9'; NeutralTint = '#EDE8E1'
-                TextMain = '#2B2620'; TextDim = '#6C625A'; TextMid = '#4C443B'; OnAccent = '#FFFFFF'
-                BorderSoft = '#DED7CD'; BorderMed = '#D0C8BC'; BorderStrong = '#BEB5A8'
-                ScrollThumbBg = '#CEC6BA'; ScrollThumbHover = '#B8AFA2'; ScrollThumbDrag = '#A0978A'
-                Accent = '#6B5844'; AccentDark = '#4B3D2E'; AccentLight = '#94816C'; AccentTint = '#EDE5DA'
-            }
-        }
-
-        '检验单' = @{
-            Desc = '检验科终端上的报告单。阅读区完全消色，整套只有一种法定墨 —— 它只表示「超出安全范围」。'
-            Swatch = @('#0E0E0E', '#141414', '#E75640')
-            Colors = @{
-                # ---- 消色阶梯 ----
-                #   ★ 刻意不带任何色相 ★
-                #   Linear #08090a、Raycast #07080a、我上一版 #0B0D10 全是偏蓝的近黑 ——
-                #   那是「深色工具软件」的集体长相。纯中性灰读起来是墨和纸，不是屏幕蓝光，
-                #   而且它让下面那一种法定墨成为整个界面唯一的颜色，无处可藏。
-                WindowBg = '#0E0E0E'      # 桌面（报告单以外的地方）
-                PanelBg = '#141414'       # 报告单本体
-                SurfaceAlt = '#181818'    # 斑马行 / 表头底
-                CardBg = '#161616'        # 次级分区
-                CardHover = '#1E1E1E'     # 悬停
-                SurfaceSunken = '#080808' # 凹陷：输入框、进度槽
-                NeutralTint = '#181818'
-                # ---- 墨色（全部消色）----
-                TextMain = '#EDEDED'      # 表头、结果值
-                TextMid = '#B8B8B8'       # 正文、项目名
-                TextDim = '#8A8A8A'       # 参考范围、单位、备注
-                OnAccent = '#0E0E0E'      # 压在实心墨块（主按钮）上的字
-                # ---- 线（报告单靠线重分层，不靠卡片和阴影）----
-                BorderSoft = '#242424'    # 行间细线、表框
-                BorderMed = '#3A3A3A'     # 表头下的粗线、分区线
-                BorderStrong = '#565656'  # 选中、聚焦
-                ScrollThumbBg = '#333333'; ScrollThumbHover = '#474747'; ScrollThumbDrag = '#5E5E5E'
-                # ---- 主操作 = 反白墨块，不是彩色按钮 ----
-                #   报告单上没有「强调色按钮」这种东西，只有签章。
-                #   所以主按钮做成实心浅墨块压深底，零色相、最高对比，一眼认得出。
-                #   ★ 法定墨绝对不能用在按钮上 ★ 它只表示「超出安全范围」。
-                Accent = '#E4E4E4'; AccentDark = '#BDBDBD'; AccentLight = '#F5F5F5'; AccentTint = '#1E1E1E'
-            }
-            # ================================================================
-            #  语义色在报告单世界里要塌缩
-            # ----------------------------------------------------------------
-            #  化验单上没有「四种状态色」这种东西。只有两种情况：
-            #      在参考范围内 —— 不标色、不加粗，和别的行长得一模一样
-            #      超出安全范围 —— 一种法定墨 + ↑ / ↑↑ 标记
-            #  分级靠**标记**不靠颜色：* 需实测、↑ 慎用、↑↑ 高危、— 不适用。
-            #
-            #  所以这里把原来的四色前景塌缩成「法定墨 / 消色」两档，
-            #  四色背景全部归到纸色（等于消失）——
-            #  这就是「颜色只在边缘，阅读区永远消色」那条纪律的落地方式。
-            #
-            #  好处是一行业务代码都不用改：65 个优化项、8 种场景结论
-            #  照旧用原来的色号，映射表在这里把它们翻译过去。
-            # ================================================================
-            Semantic = @{
-                '#556B54' = '#B8B8B8'   # 良好/低风险 -> 消色（正常值不标色）
-                '#7A6B45' = '#E75640'   # 需实测/中风险 -> 法定墨
-                '#8A5750' = '#E75640'   # 高危/高风险 -> 法定墨
-                '#89694F' = '#E75640'   # 会弹黑框 -> 法定墨
-                # 四种底色一律归到纸色：阅读区不许有色块
-                '#E7EBE4' = '#141414'; '#E2E7E0' = '#141414'; '#DCE8DA' = '#141414'
-                '#EDE7D9' = '#141414'; '#F0EADC' = '#141414'; '#EDE2D6' = '#141414'
-                '#EDE0DD' = '#141414'; '#EFE3E0' = '#141414'
-            }
-        }
-
-        '石墨深色' = @{
-            Desc = '深色模式。晚上用眼睛舒服很多。'
-            Swatch = @('#22242A', '#2C2F36', '#8FA3BA')
-            Colors = @{
-                WindowBg = '#22242A'; PanelBg = '#2C2F36'; CardBg = '#31353D'; CardHover = '#3A3F48'
-                SurfaceAlt = '#383C45'; SurfaceSunken = '#1C1E23'; NeutralTint = '#3A3E47'
-                TextMain = '#E8EAED'; TextDim = '#A6ACB6'; TextMid = '#C6CAD1'; OnAccent = '#1B1D21'
-                BorderSoft = '#3D414A'; BorderMed = '#4A4F59'; BorderStrong = '#5A606B'
-                ScrollThumbBg = '#4A4F59'; ScrollThumbHover = '#5D636E'; ScrollThumbDrag = '#727986'
-                Accent = '#8FA3BA'; AccentDark = '#6E8299'; AccentLight = '#AABBCE'; AccentTint = '#343B45'
-            }
-        }
-
-        '午夜蓝' = @{
-            Desc = '偏蓝的深色。比石墨更有颜色一点。'
-            Swatch = @('#1B2230', '#242D3D', '#8AA6C8')
-            Colors = @{
-                WindowBg = '#1B2230'; PanelBg = '#242D3D'; CardBg = '#2A3447'; CardHover = '#333E52'
-                SurfaceAlt = '#313C51'; SurfaceSunken = '#161C27'; NeutralTint = '#323D52'
-                TextMain = '#E6EBF2'; TextDim = '#9FACBF'; TextMid = '#C3CCD9'; OnAccent = '#141A24'
-                BorderSoft = '#354054'; BorderMed = '#414E65'; BorderStrong = '#526178'
-                ScrollThumbBg = '#414E65'; ScrollThumbHover = '#546279'; ScrollThumbDrag = '#6B798F'
-                Accent = '#8AA6C8'; AccentDark = '#6684A8'; AccentLight = '#A6BCD6'; AccentTint = '#2C3849'
-            }
-        }
+    <# 内置皮肤。个性化页按这个顺序画色样。 #>
+    $out = [ordered]@{}
+    foreach ($n in $Script:Palettes.Keys) {
+        $c = $Script:Palettes[$n]
+        $out[$n] = @{ Desc = $Script:ThemeDesc[$n]; Swatch = @($c.Canvas, $c.Card, $c.Accent); Colors = $c }
     }
+    return $out
+}
+
+function Resolve-ThemeName {
+    <#
+      把存下来的皮肤名归到现在的两套里。
+      v5 的七套皮肤（暖灰 / 雾霾蓝 / 检验单 / 石墨深色……）升级上来时，
+      深色的归「深色」，其余归「浅色」 —— 不能因为升级让用户一打开就换了深浅。
+    #>
+    param([string]$Name)
+    if ($Script:Palettes.Contains($Name)) { return $Name }
+    if ($Name -in @('检验单', '石墨深色', '午夜蓝', '仪表灰')) { return '深色' }
+    return '浅色'
+}
+
+function Test-ThemeIsDark {
+    param([string]$Name)
+    return ((Resolve-ThemeName $Name) -eq '深色')
+}
+
+# =====================================================================
+#  取色
+# =====================================================================
+function Get-ThemeHex {
+    <#
+      一个色槽名或语义色号，在当前皮肤下的实际色号。
+      查不到的原样返回（Transparent、#00000000 这种）。
+    #>
+    param([string]$Key)
+    if ([string]::IsNullOrEmpty($Key)) { return '#00000000' }
+    $pal = $Script:Palettes[$(if ($Script:ThemeName) { $Script:ThemeName } else { '浅色' })]
+    if ($pal.ContainsKey($Key)) { return $pal[$Key] }
+    $up = $Key.ToUpper()
+    if ($Script:SemanticColors.ContainsKey($up)) {
+        $v = $Script:SemanticColors[$up][$(if ($Script:ThemeIsDark) { 1 } else { 0 })]
+        if ($v.StartsWith('@')) { return $pal[$v.Substring(1)] }
+        return $v
+    }
+    return $Key
 }
 
 # =====================================================================
@@ -287,23 +158,18 @@ function Get-ThemeFile { Join-Path $Script:BackupDir 'theme.json' }
 
 function Get-ThemeSetting {
     <# 返回 @{ Name; Image; Opacity; Anim; Frost } —— 读不到就给默认值 #>
-    # 默认皮肤是「检验单」—— 这个工具从头到尾在做的事就是如实报告你机器的状态，
-    # 所以界面的母题是检验报告单，不是仪表盘。见 .impeccable\surfaces\pctuner-ps1.md。
-    $def = @{ Name = '检验单'; Image = ''; Opacity = 0.88; Anim = $true; Frost = $true }
+    $def = @{ Name = '浅色'; Image = ''; Opacity = 0.88; Anim = $true; Frost = $true }
     try {
         $f = Get-ThemeFile
         if (-not (Test-Path -LiteralPath $f)) { return $def }
         $j = Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
         return @{
-            Name    = if ($j.Name) { "$($j.Name)" } else { $def.Name }
+            Name    = if ($j.Name) { Resolve-ThemeName "$($j.Name)" } else { $def.Name }
             Image   = if ($j.Image) { "$($j.Image)" } else { '' }
             Opacity = if ($j.Opacity) { [double]$j.Opacity } else { $def.Opacity }
-            # ★ 这里必须用 $null -eq 判断，不能写成 if ($j.Anim) ★
-            #   用户明确关掉动画时存进去的是 false，
-            #   用 if ($j.Anim) 判断的话 false 会被当成「没设置过」，
-            #   下次启动又自动变回开着 —— 用户会以为开关坏了。
+            # ★ 必须用 $null -ne 判断 ★ 用户关掉存的是 false，
+            #   写成 if ($j.Anim) 的话 false 会被当成「没设置过」，下次启动又开回来
             Anim    = if ($null -ne $j.Anim) { [bool]$j.Anim } else { $true }
-            # 同理，用户关掉磨砂存的是 false，必须用 $null -eq 判断
             Frost   = if ($null -ne $j.Frost) { [bool]$j.Frost } else { $true }
         }
     } catch { return $def }
@@ -317,209 +183,138 @@ function Save-ThemeSetting {
     } catch { Write-Log "保存皮肤设置失败：$($_.Exception.Message)" '警告' }
 }
 
+function New-FrozenBrush {
+    <#
+      ★ 必须显式转成 [Brush] 再塞进资源字典 ★
+        直接存 New-Object 的结果，进去的是 PowerShell 包了一层的 PSObject。
+        平时读 .Color 看不出毛病，WPF 解析 {DynamicResource} 的那一刻才抛
+        「无法把 PSObject 转成 Brush」—— 窗口在 ShowDialog 瞬间崩，用户看到的是「双击没反应」。
+    #>
+    param([string]$Hex)
+    $br = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($Hex))
+    $br.Freeze()
+    return [System.Windows.Media.Brush]$br
+}
+
 # =====================================================================
 #  应用皮肤
 # =====================================================================
 function Set-AppTheme {
     <#
-      把一套皮肤套到窗口上。
-      Name    —— 内置皮肤名
-      Image   —— 背景图路径，空字符串表示纯色
-      Opacity —— 有背景图时，各面板的不透明度（越小越透，图越明显）
+      Name    —— '浅色' / '深色'（旧皮肤名会被归过来）
+      Image   —— 背景图路径，空字符串 = 纯色
+      Opacity —— 有背景图时内容区的不透明度
+      Frost   —— 背景图铺模糊副本
     #>
     param(
-        [string]$Name = '暖灰（默认）',
+        [string]$Name = '浅色',
         [string]$Image = '',
-        # 磨砂：铺背景图时铺那张模糊副本。默认开 ——
-        # 工具自己的说明里就写着「太花的图会让上面的字看不清」，
-        # 模糊正好在修这个已知问题，不是加装饰。
         [bool]$Frost = $true,
-        [double]$Opacity = 0.88
+        [double]$Opacity = 0.88,
+        # 自检里切深浅验证用：只换色、不写 theme.json —— 自检不该改用户的设置
+        [switch]$NoSave
     )
+    $Name = Resolve-ThemeName $Name
+    $pal = $Script:Palettes[$Name]
+    $Script:ThemeName = $Name
+    $Script:ThemeIsDark = ($Name -eq '深色')
 
-    $themes = Get-BuiltinThemes
-    if (-not $themes.Contains($Name)) { $Name = '检验单' }
-    $colors = $themes[$Name].Colors
+    $res = $null
+    try { $res = [System.Windows.Application]::Current.Resources } catch { }
+    if ($res) {
+        # ---- 1. MDIX 自己切深浅 ----
+        #   ★ 必须用 set_BaseTheme() ★ 写成 $t.BaseTheme = … 会被 PowerShell
+        #     当成往字典里塞一个叫 BaseTheme 的键（它是 ResourceDictionary），什么都没切。
+        if ($Script:MdTheme) {
+            try {
+                $bt = if ($Script:ThemeIsDark) { [MaterialDesignThemes.Wpf.BaseTheme]::Dark } else { [MaterialDesignThemes.Wpf.BaseTheme]::Light }
+                $Script:MdTheme.set_BaseTheme($bt)
+                $Script:MdTheme.set_PrimaryColor([System.Windows.Media.ColorConverter]::ConvertFromString($pal.Accent))
+                $Script:MdTheme.set_SecondaryColor([System.Windows.Media.ColorConverter]::ConvertFromString($pal.Accent))
+            } catch { }
+        }
 
-    # ---- 1. 换掉 Window.Resources 里那 20 支画笔 ----
-    #
-    # ★★ 这里有个坑，踩过一次，代价是整个程序打不开 ★★
-    #   直接写 $Script:Window.Resources[$k] = New-Object ...SolidColorBrush(...)
-    #   存进去的是一个被 PowerShell 包了一层的 PSObject，不是真正的 Brush。
-    #   平时看不出来（读 .Color 照样能读到值），
-    #   但 WPF 真正渲染、解析 {DynamicResource} 的那一刻会抛：
-    #       Unable to cast object of type 'System.Management.Automation.PSObject'
-    #       to type 'System.Windows.Media.Brush'
-    #   结果就是窗口在 ShowDialog 的瞬间崩掉 —— 用户看到的是「双击没反应」。
-    #
-    #   显式转成 [Brush] 会强制 PowerShell 把壳扒掉，存进去真东西。
-    #   Freeze() 是顺手做的：画笔不再改动，跨线程访问和渲染都更快。
-    foreach ($k in $Script:ThemeBaseKeys) {
-        if (-not $colors.ContainsKey($k)) { continue }
+        # ---- 2. 我们自己的色槽 ----
+        foreach ($k in $pal.Keys) {
+            try { $res[$k] = New-FrozenBrush $pal[$k] } catch { }
+        }
+        # 语义色也放一份进资源（XAML 里偶尔要用），键名用 Sem 前缀
+        foreach ($pair in @(@('SemOk', '#556B54'), @('SemOkBg', '#E7EBE4'), @('SemWarn', '#7A6B45'), @('SemWarnBg', '#EDE7D9'),
+                @('SemBad', '#8A5750'), @('SemBadBg', '#EDE0DD'), @('SemFlash', '#89694F'), @('SemFlashBg', '#EDE2D6'))) {
+            try { $res[$pair[0]] = New-FrozenBrush (Get-ThemeHex $pair[1]) } catch { }
+        }
+        # 危险按钮上的字：浅色皮肤白字压深玫瑰；深色皮肤的玫瑰红是提亮版，白字压上去只有 2:1，换深字
+        try { $res['OnSemBad'] = New-FrozenBrush $(if ($Script:ThemeIsDark) { $pal.Canvas } else { '#FFFFFF' }) } catch { }
+
+        # ---- 3. 把 MDIX 的关键画笔盖成我们的色 ----
+        foreach ($slot in $Script:MdBrushMap.Keys) {
+            if (-not $pal.ContainsKey($slot)) { continue }
+            try {
+                $br = New-FrozenBrush $pal[$slot]
+                foreach ($mk in $Script:MdBrushMap[$slot]) { $res[$mk] = $br }
+            } catch { }
+        }
+        # 水波纹压淡：主按钮上是白色 18%，其余按钮上是强调色 16%
         try {
-            $br = New-Object System.Windows.Media.SolidColorBrush (
-                [System.Windows.Media.ColorConverter]::ConvertFromString($colors[$k]))
-            $br.Freeze()
-            $Script:Window.Resources[$k] = [System.Windows.Media.Brush]$br
+            $res['MaterialDesign.Brush.Button.Ripple'] = New-FrozenBrush '#2EFFFFFF'
+            $a = $pal.Accent.TrimStart('#')
+            $res['MaterialDesign.Brush.Button.FlatRipple'] = New-FrozenBrush ('#29' + $a)
+        } catch { }
+
+    }
+    if ($Script:Window) {
+        # ---- 4. 文字渲染跟着深浅走 ----
+        #   ClearType 在深底浅字时子像素会露出来，中文笔画挂一圈红绿紫边
+        try {
+            $mode = if ($Script:ThemeIsDark) { 'Grayscale' } else { 'ClearType' }
+            [System.Windows.Media.TextOptions]::SetTextRenderingMode($Script:Window, $mode)
         } catch { }
     }
 
-    # ---- 2. 重建 Get-Brush 的映射表 ----
-    # 默认皮肤的色号 -> 当前皮肤同一个语义槽的色号
-    $defaults = $themes['暖灰（默认）'].Colors
-    $remap = @{}
-    foreach ($k in $Script:ThemeBaseKeys) {
-        if (-not $defaults.ContainsKey($k) -or -not $colors.ContainsKey($k)) { continue }
-        $remap[$defaults[$k].ToUpper()] = $colors[$k]
-    }
-    # 代码里那些「不在 20 支画笔里」的中性色，按语义槽跟着换
-    foreach ($hex in $Script:ExtraColorSlots.Keys) {
-        $slot = $Script:ExtraColorSlots[$hex]
-        if ($colors.ContainsKey($slot)) { $remap[$hex.ToUpper()] = $colors[$slot] }
-    }
-
-    # 深色皮肤：语义色换成提亮版前景 + 压暗版背景（成对换，见文件开头说明）
-    # 浅色皮肤不动，语义色保持原样。
-    if (Test-ThemeIsDark $Name) {
-        # 皮肤自带 Semantic 表就用它的（「检验单」靠这个把四色塌缩成法定墨），
-        # 没带就用通用的深色版语义色。
-        $sem = if ($themes[$Name].Contains('Semantic')) { $themes[$Name].Semantic } else { $Script:SemanticDark }
-        foreach ($hex in $sem.Keys) {
-            $remap[$hex.ToUpper()] = $sem[$hex]
-        }
-    }
-
-    # 供别处判断深浅用（Add-CardShadow 靠它决定加不加阴影）
-    $Script:ThemeIsDark = [bool](Test-ThemeIsDark $Name)
-
-    # ---- 文字渲染方式跟着深浅走 ----
-    #
-    # ClearType 是拿红绿蓝三个子像素凑出来的抗锯齿。浅底深字看着很锐利，
-    # 但**深底浅字时子像素会露出来**，笔画边上挂一圈红绿紫边 ——
-    # 中文笔画密，这个现象比英文明显得多，看久了发花。
-    # 深色皮肤一律改成灰度抗锯齿：稍微软一点点，但干干净净没有彩边。
-    try {
-        $mode = if (Test-ThemeIsDark $Name) { 'Grayscale' } else { 'ClearType' }
-        [System.Windows.Media.TextOptions]::SetTextRenderingMode($Script:Window, $mode)
-    } catch { }
-    $Script:ColorRemap = $remap
-
-    # ---- 2.5 把颜色喂给 HandyControl ----
-    # 库的控件模板内部引用的是 RegionBrush / PrimaryTextBrush 这些键，
-    # 覆盖掉它们，整套控件就跟着我们的皮肤走。
-    #
-    # 注意：必须写进 Window.Resources 而不是 Application.Resources ——
-    # 资源查找是从控件往上走到 Window 再到 Application，
-    # 写在 Window 上才能盖住 Application 里 HandyControl 自己那份。
-    if ($Script:Window) {
-        foreach ($slot in $Script:HcBrushMap.Keys) {
-            if (-not $colors.ContainsKey($slot)) { continue }
-            try {
-                $br = New-Object System.Windows.Media.SolidColorBrush (
-                    [System.Windows.Media.ColorConverter]::ConvertFromString($colors[$slot]))
-                $br.Freeze()
-                foreach ($hcKey in $Script:HcBrushMap[$slot]) {
-                    $Script:Window.Resources[$hcKey] = [System.Windows.Media.Brush]$br
-                }
-            } catch { }
-        }
-        # 语义色：深色皮肤下用提亮版，浅色皮肤用原色
-        $isDark = Test-ThemeIsDark $Name
-        foreach ($baseHex in $Script:HcSemanticMap.Keys) {
-            $useHex = $baseHex
-            if ($isDark -and $Script:SemanticDark.ContainsKey($baseHex)) {
-                $useHex = $Script:SemanticDark[$baseHex]
-            }
-            try {
-                $br = New-Object System.Windows.Media.SolidColorBrush (
-                    [System.Windows.Media.ColorConverter]::ConvertFromString($useHex))
-                $br.Freeze()
-                foreach ($hcKey in $Script:HcSemanticMap[$baseHex]) {
-                    $Script:Window.Resources[$hcKey] = [System.Windows.Media.Brush]$br
-                }
-            } catch { }
-        }
-    }
-
-    # ---- 3. 背景图 ----
+    # ---- 5. 背景图 ----
     $Script:ThemeImage = $Image
     $Script:ThemeOpacity = $Opacity
     $Script:ThemeFrost = $Frost
-    try {
-        if ($Image -and (Test-Path -LiteralPath $Image)) {
-            # 开了磨砂就铺模糊副本。没算过就现算一张，
-            # 算不出来（图坏了、没权限）就退回原图 —— 不能因为没磨成就白屏。
-            $src = $Image
-            if ($Frost) {
-                $fp = Get-FrostedPath $Image
-                if ($fp) { $src = $fp }
+    if ($Script:Window) {
+        try {
+            if ($Image -and (Test-Path -LiteralPath $Image)) {
+                # 开了磨砂就铺模糊副本；算不出来就退回原图 —— 不能因为没磨成就白屏
+                $src = $Image
+                if ($Frost) {
+                    $fp = Get-FrostedPath $Image
+                    if ($fp) { $src = $fp }
+                }
+                $bmp = New-Object System.Windows.Media.Imaging.BitmapImage
+                $bmp.BeginInit()
+                $bmp.UriSource = New-Object System.Uri $src
+                # OnLoad：一次性读进内存再放手，否则文件一直被占着删不掉
+                $bmp.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+                $bmp.EndInit()
+                $ib = New-Object System.Windows.Media.ImageBrush $bmp
+                $ib.Stretch = 'UniformToFill'
+                $ib.AlignmentX = 'Center'
+                $ib.AlignmentY = 'Center'
+                $Script:Window.Background = [System.Windows.Media.Brush]$ib
+            } else {
+                $Script:Window.Background = New-FrozenBrush $pal.Canvas
             }
-            $bmp = New-Object System.Windows.Media.Imaging.BitmapImage
-            $bmp.BeginInit()
-            $bmp.UriSource = New-Object System.Uri $src
-            # CacheOption=OnLoad：一次性读进内存再放手，
-            # 否则文件会被一直占着，用户想删想换那张图都删不掉
-            $bmp.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
-            $bmp.EndInit()
-            $ib = New-Object System.Windows.Media.ImageBrush $bmp
-            $ib.Stretch = 'UniformToFill'
-            $ib.AlignmentX = 'Center'
-            $ib.AlignmentY = 'Center'
-            $Script:Window.Background = [System.Windows.Media.Brush]$ib
-        } else {
-            # 同上：从字典里读回来的也要显式转一次，不能直接赋给 Background
-            $Script:Window.Background = [System.Windows.Media.Brush]$Script:Window.Resources['WindowBg']
+        } catch {
+            Write-Log "背景图加载失败：$($_.Exception.Message)" '警告'
+            $Script:Window.Background = New-FrozenBrush $pal.Canvas
         }
-    } catch {
-        Write-Log "背景图加载失败：$($_.Exception.Message)" '警告'
-        $Script:Window.Background = [System.Windows.Media.Brush]$Script:Window.Resources['WindowBg']
     }
 
-    Save-ThemeSetting -Name $Name -Image $Image -Opacity $Opacity -Anim ([bool]$Script:AnimEnabled) -Frost $Frost
-}
-
-function Test-ThemeIsDark {
-    <#
-      当前皮肤是不是深色的 —— 用窗口底色的感知亮度判断。
-
-      ★ 故意不用 [System.Windows.Media.ColorConverter] ★
-        它要 WPF 程序集已加载。在没加载的环境里（比如单跑模块做测试）
-        这句会抛异常，而异常一抛，函数返回的就不是 $false 而是错误 ——
-        调用方拿到的结果会让**浅色皮肤被当成深色**，
-        于是语义色整套反转（深色专用的提亮版配到了浅色底上，字全看不清）。
-
-        改成自己解析 #RRGGBB，纯字符串运算，零依赖，永远算得出。
-    #>
-    param([string]$Name)
-    $themes = Get-BuiltinThemes
-    if (-not $themes.Contains($Name)) { return $false }
-    $hex = "$($themes[$Name].Colors.WindowBg)".TrimStart('#')
-    if ($hex.Length -eq 8) { $hex = $hex.Substring(2) }      # 带 alpha 的去掉前两位
-    if ($hex.Length -ne 6) { return $false }
-    try {
-        $r = [Convert]::ToInt32($hex.Substring(0, 2), 16)
-        $g = [Convert]::ToInt32($hex.Substring(2, 2), 16)
-        $b = [Convert]::ToInt32($hex.Substring(4, 2), 16)
-    } catch { return $false }
-    # 感知亮度（Rec.709），低于 128 算深色
-    return ((0.2126 * $r + 0.7152 * $g + 0.0722 * $b) -lt 128)
+    if (-not $NoSave) { Save-ThemeSetting -Name $Name -Image $Image -Opacity $Opacity -Anim ([bool]$Script:AnimEnabled) -Frost $Frost }
 }
 
 function New-FrostedImage {
     <#
       把一张图模糊一份存到 DestPath。导入背景图时算一次，之后一直用这张。
 
-      ★ 先缩到最长边 1600 再模糊 ★
-        4K 原图卷一遍要好几秒，而它最终只是铺在一个 1240 宽的窗口上，
-        模糊之后细节本来就没了 —— 大图纯属白烧 CPU。
-
-      ★ 画的时候往外扩一圈再裁回来 ★
-        直接按原尺寸模糊，四边外面是透明的，卷积会把透明吸进来，
-        结果是一圈发白发虚的边。往外扩一个模糊半径再取中间那块就没有了。
+      ★ 先缩到最长边 1600 再模糊 ★ 4K 原图卷一遍要好几秒，模糊之后细节本来就没了。
+      ★ 画的时候往外扩一圈再裁回来 ★ 否则四边会把透明吸进来，一圈发白发虚的边。
     #>
-    # 半径 56 是试出来的：26 只能把边缘磨柔，细条纹还在，
-    # 字压上去照样乱；56 以上细节干净消失、大块颜色还在，
-    # 图还认得出是哪张，字也看得清。
+    # 半径 56 是试出来的：26 只能把边缘磨柔，56 以上细节干净消失、大块颜色还在
     param([string]$SourcePath, [string]$DestPath, [double]$Radius = 56)
     try {
         $bmp = New-Object System.Windows.Media.Imaging.BitmapImage
@@ -585,11 +380,7 @@ function Get-FrostedPath {
 function Copy-ThemeImage {
     <#
       把用户选的图片**复制**到 Backup\skin\ 下面再用。
-
-      ★ 为什么要复制而不是直接引用原路径 ★
-        用户很可能从「下载」文件夹或者 U 盘里选图，
-        那些地方的文件随时会被清理/拔掉，
-        下次启动就变成白板还报错。复制一份进来最省事。
+      用户很可能从「下载」或 U 盘里选图，那些地方随时会被清理 / 拔掉。
     #>
     param([string]$SourcePath)
     try {
@@ -598,10 +389,8 @@ function Copy-ThemeImage {
         $ext = [System.IO.Path]::GetExtension($SourcePath)
         if ([string]::IsNullOrWhiteSpace($ext)) { $ext = '.png' }
         $dest = Join-Path $dir ('background' + $ext)
-        # 先把旧的皮肤图清掉，免得攒一堆
         Get-ChildItem -LiteralPath $dir -Filter 'background.*' -ErrorAction SilentlyContinue |
             ForEach-Object { try { [System.IO.File]::Delete($_.FullName) } catch { } }
-        # 旧的磨砂副本也一起清掉，免得换了图还用着上一张的模糊版
         $oldFrost = Join-Path $dir 'background-frost.png'
         if (Test-Path -LiteralPath $oldFrost) { try { [System.IO.File]::Delete($oldFrost) } catch { } }
         Copy-Item -LiteralPath $SourcePath -Destination $dest -Force

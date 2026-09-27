@@ -1,16 +1,22 @@
 ﻿#Requires -Version 5.1
 <#
-    检查每套皮肤的文字对比度是否达到 WCAG AA（正文 4.5:1）。
+    检查两套皮肤的文字对比度是否达到 WCAG AA（正文 4.5:1）。
 
     README 里写了「所有文字对比度实测 ≥ 4.5:1」—— 这句话必须是真的，
     所以把验证脚本一起放进仓库，谁都能自己跑一遍。
 
-    加新皮肤、改配色之后跑一下：
+    加新色槽、改配色之后跑一下：
         powershell -NoProfile -ExecutionPolicy Bypass -File dev\对比度自检.ps1
 
+    查四组（色值全部来自 Modules\Theme.ps1，不在这里抄一份）：
+      1. 三级文字色 × 所有可能压在底下的背景
+      2. 主按钮字 / 主角卡字 × 它们各自的底
+      3. 语义色前景 × 卡片、画布、悬停底、自己配对的语义底
+      4. 选中态（强调色字）× 选中底
+
     ★ 2026-09-27 这个脚本抓出过 12 处不达标 ★
-      五套皮肤的 TextDim（次要说明文字）都差一点点，最低只有 3.90。
       单看谁都觉得「还行吧」，量出来才知道不行。
+    ★ v6.0 ★ 参考图的次文字 #8E91A8 在白卡上只有 3.10:1，就是被它拦下来改成 #666A88 的。
 #>
 Add-Type -AssemblyName System.Drawing
 
@@ -33,49 +39,52 @@ function Get-ContrastRatio([string]$Fg, [string]$Bg) {
     [math]::Round(($l1 + 0.05) / ($l2 + 0.05), 2)
 }
 
-$themes = Get-BuiltinThemes
-$fgKeys = @('TextMain', 'TextMid', 'TextDim')
-$bgKeys = @('WindowBg', 'PanelBg', 'CardBg', 'CardHover', 'SurfaceAlt', 'SurfaceSunken')
 $bad = 0
-
-foreach ($name in $themes.Keys) {
-    $c = $themes[$name].Colors
-    foreach ($fg in $fgKeys) {
-        foreach ($bg in $bgKeys) {
-            if (-not $c.ContainsKey($fg) -or -not $c.ContainsKey($bg)) { continue }
-            $r = Get-ContrastRatio $c[$fg] $c[$bg]
-            if ($r -lt 4.5) {
-                $bad++
-                Write-Host ("不达标  {0,-10} {1,-9}{2}  在  {3,-11}{4}  = {5}" -f $name, $fg, $c[$fg], $bg, $c[$bg], $r) -ForegroundColor Red
-            }
-        }
-    }
-
-    # ---- 语义色前景也要查 ----
-    #   ★ 这一块以前漏了 ★ 「高危」「超出参考范围」这些标记是**最需要被看清**的字，
-    #   结果反而没进自检。皮肤自带 Semantic 表就查它的（检验单的法定墨走这条）。
-    if ($themes[$name].Contains('Semantic')) {
-        $sem = $themes[$name].Semantic
-        $paper = @($bgKeys | Where-Object { $c.ContainsKey($_) } | ForEach-Object { $c[$_] })
-        foreach ($k in $sem.Keys) {
-            $v = "$($sem[$k])"
-            if ($paper -contains $v) { continue }   # 映射到纸色的是背景，不是墨
-            foreach ($bg in $bgKeys) {
-                if (-not $c.ContainsKey($bg)) { continue }
-                $r = Get-ContrastRatio $v $c[$bg]
-                if ($r -lt 4.5) {
-                    $bad++
-                    Write-Host ("不达标  {0,-10} 语义墨 {1}  在  {2,-11}{3}  = {4}" -f $name, $v, $bg, $c[$bg], $r) -ForegroundColor Red
-                }
-            }
-        }
+$n = 0
+function Test-Pair([string]$Theme, [string]$FgName, [string]$Fg, [string]$BgName, [string]$Bg) {
+    $script:n++
+    $r = Get-ContrastRatio $Fg $Bg
+    if ($r -lt 4.5) {
+        $script:bad++
+        Write-Host ("不达标  {0}  {1,-14}{2}  在  {3,-14}{4}  = {5}" -f $Theme, $FgName, $Fg, $BgName, $Bg, $r) -ForegroundColor Red
     }
 }
 
+$bgKeys = @('Canvas', 'Sidebar', 'Card', 'CardHover', 'SurfaceAlt', 'SurfaceSunken', 'AccentTint')
+foreach ($name in $Script:Palettes.Keys) {
+    $c = $Script:Palettes[$name]
+    $dark = ($name -eq '深色')
+
+    # 1. 三级文字
+    foreach ($fg in 'TextMain', 'TextMid', 'TextDim') {
+        foreach ($bg in $bgKeys) { Test-Pair $name $fg $c[$fg] $bg $c[$bg] }
+    }
+    # 2. 压在实色块上的字
+    Test-Pair $name 'OnAccent' $c.OnAccent 'Accent' $c.Accent
+    Test-Pair $name 'OnAccent' $c.OnAccent 'AccentPressed' $c.AccentPressed
+    Test-Pair $name 'OnHero' $c.OnHero 'HeroFill' $c.HeroFill
+    Test-Pair $name 'OnHeroDim' $c.OnHeroDim 'HeroFill' $c.HeroFill
+    # 4. 选中态：侧边栏当前页、选中的预设 = Accent 字压 AccentTint 底；链接式文字压卡片
+    Test-Pair $name 'Accent' $c.Accent 'AccentTint' $c.AccentTint
+    Test-Pair $name 'Accent' $c.Accent 'Card' $c.Card
+
+    # 3. 语义色：前景 × 常见底 + 自己配对的底
+    $Script:ThemeName = $name
+    $Script:ThemeIsDark = $dark
+    $pairs = @(@('#556B54', '#E7EBE4'), @('#7A6B45', '#EDE7D9'), @('#8A5750', '#EDE0DD'), @('#89694F', '#EDE2D6'))
+    foreach ($pr in $pairs) {
+        $fg = Get-ThemeHex $pr[0]
+        foreach ($bg in 'Canvas', 'Card', 'CardHover', 'SurfaceAlt') { Test-Pair $name "语义$($pr[0])" $fg $bg $c[$bg] }
+        Test-Pair $name "语义$($pr[0])" $fg '配对底' (Get-ThemeHex $pr[1])
+    }
+    # 危险按钮：白字压高危红
+    Test-Pair $name 'ButtonDanger字' $(if ($dark) { $c.Canvas } else { '#FFFFFF' }) 'SemBad' (Get-ThemeHex '#8A5750')
+}
+
 if ($bad -eq 0) {
-    Write-Host ("全部通过 —— {0} 套皮肤，{1} 组前景/背景组合都 ≥ 4.5:1" -f $themes.Count, ($themes.Count * $fgKeys.Count * $bgKeys.Count)) -ForegroundColor Green
+    Write-Host ("全部通过 —— {0} 套皮肤，{1} 组前景/背景组合都 ≥ 4.5:1" -f $Script:Palettes.Count, $n) -ForegroundColor Green
     exit 0
 } else {
-    Write-Host "共 $bad 处不达标" -ForegroundColor Red
+    Write-Host "共 $bad 处不达标（共查 $n 组）" -ForegroundColor Red
     exit 1
 }

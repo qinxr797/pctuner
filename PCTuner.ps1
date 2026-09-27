@@ -4,12 +4,12 @@
 ---------------------------------------------------------------------
   用法：双击同目录下的「电脑调优助手.exe」即可（会自动申请管理员权限）。
 
-  五个页面：
-    性能优化   —— 一条条开关，每条都写清楚了是干什么的
-    垃圾清理   —— 先扫描看能清多少，再决定清哪些
-    启动项管理 —— 开机自启程序，附带「这个能不能关」的建议
-    系统体检   —— 硬件信息 + 按性价比排序的升级/保养建议
-    操作日志   —— 做过什么一目了然
+  十个页面（左侧边栏切换）：
+    概览 / 性能优化 / 垃圾清理 / 日常维护 / 弹窗排查 /
+    启动项管理 / 自带软件 / 个性化 / 系统体检 / 操作日志
+
+  界面：v6.0 起是浅色扁平风格，控件库 MaterialDesignInXamlToolkit，
+  设计规范见 design.md。
 
   安全保障：
     · 改任何东西之前先备份原值，「还原」是真的能还原
@@ -55,7 +55,7 @@ $ErrorActionPreference = 'Continue'
 
 # ===== 版本号 =====
 # 改版本号只改这一处，标题栏 / 副标题 / 诊断报告都从这里取。
-$Script:AppVersion     = '5.1'
+$Script:AppVersion     = '6.0'
 $Script:AppVersionDate = '2026-09-27'
 
 # ---------------------------------------------------------------------
@@ -64,38 +64,51 @@ $Script:AppVersionDate = '2026-09-27'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
 
 # ---------------------------------------------------------------------
-#  0.5 加载 HandyControl（界面控件库，MIT 协议，随包分发）
+#  0.4 先解除「网络来源」锁定 —— 必须排在加载任何 DLL 之前
 # ---------------------------------------------------------------------
-#  v4.0 起界面构建在 HandyControl 上。DLL 放在 Lib\ 目录里，
-#  不用安装、不进 GAC、不写注册表，就是个跟着跑的文件。
-#
-#  ★★ 这里有个大坑，踩过一次，务必别改回去 ★★
-#    HandyControl 官方文档教你在 App.xaml 里合并这两个资源字典：
-#        pack://application:,,,/HandyControl;component/Themes/SkinDefault.xaml
-#        pack://application:,,,/HandyControl;component/Themes/Theme.xaml
-#    在 PowerShell 里照着做，会「加载成功」但**样式一个都不生效** ——
-#    按钮还是 Windows 原生样子，CircleProgressBar 直接渲染成一片空白，
-#    而且不报任何错，极难排查。
-#
-#    正确入口是 HandyControl.Themes.Theme 这个类：它是 ResourceDictionary
-#    的子类，会自己把该填的东西填进去。实测 5/5 具名样式可用。
-#
-#  另外必须先 new 一个 Application 实例 —— pack:// 这个 URI 协议
-#  是 Application 初始化时注册的，没有它连 DLL 里的资源都找不到。
-$Script:HcTheme = $null
+#  从微信 / QQ / 浏览器拿到的压缩包，解压出来的**每一个文件**都带一条
+#  叫 Zone.Identifier 的隐藏数据流（右键属性里那个「解除锁定」就是它）。
+#    · 带着它的 .ps1，PowerShell 报「对路径的访问被拒绝」
+#    · 带着它的 .dll，PowerShell 5.1 的 Add-Type 直接拒载
+#      （FileLoadException 0x80131515，loadFromRemoteSources —— 2026-09-27 实测）
+#  exe 启动壳已经先删过一遍了；这里再做一次，是给「诊断启动.bat」和
+#  直接跑 .ps1 的人兜底。清不掉也没关系，下面的诊断会说清是什么情况。
 try {
-    $hcDll = Join-Path (Split-Path -Parent $PSCommandPath) 'Lib\HandyControl.dll'
-    if (Test-Path -LiteralPath $hcDll) {
-        Add-Type -Path $hcDll -ErrorAction Stop
+    Get-ChildItem -LiteralPath (Split-Path -Parent $PSCommandPath) -Recurse -File -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch { }
+        }
+} catch { }
+
+# ---------------------------------------------------------------------
+#  0.5 加载 MaterialDesignInXamlToolkit（界面控件库，MIT 协议，随包分发）
+# ---------------------------------------------------------------------
+#  v6.0 起界面控件库从 HandyControl 换成 MDIX（net462 版，跑在 5.1 的 .NET 4.x 上）。
+#  DLL 放在 Lib\ 里，不安装、不进 GAC、不写注册表。三个文件缺一不可：
+#    MaterialDesignThemes.Wpf.dll    控件样式、图标、切页动画
+#    MaterialDesignColors.dll        调色板
+#    Microsoft.Xaml.Behaviors.dll    前者的依赖
+#
+#  ★ 必须先 new 一个 Application ★
+#    pack:// 这个 URI 协议是 Application 初始化时注册的，没有它连 DLL 里的资源都找不到。
+#  主题字典本身写在窗口 XAML 里（见第 4 节），由 XAML 解析器去设 Source ——
+#  在 PowerShell 里手写 $rd.Source = … 会被当成往字典里塞键，样式静默不生效。
+$Script:MdLoaded = $false
+try {
+    $libDir = Join-Path (Split-Path -Parent $PSCommandPath) 'Lib'
+    foreach ($d in 'Microsoft.Xaml.Behaviors.dll', 'MaterialDesignColors.dll', 'MaterialDesignThemes.Wpf.dll') {
+        $dp = Join-Path $libDir $d
+        if (Test-Path -LiteralPath $dp) { Add-Type -Path $dp -ErrorAction Stop }
+    }
+    if ('MaterialDesignThemes.Wpf.PackIcon' -as [type]) {
         if (-not [System.Windows.Application]::Current) {
             $null = New-Object System.Windows.Application
         }
-        $Script:HcTheme = New-Object HandyControl.Themes.Theme
-        [System.Windows.Application]::Current.Resources.MergedDictionaries.Add($Script:HcTheme)
+        $Script:MdLoaded = $true
     }
 } catch {
     # 加载失败不直接崩，下面的文件检查会给出人话提示
-    $Script:HcLoadError = "$($_.Exception.Message)"
+    $Script:MdLoadError = "$($_.Exception.Message)"
 }
 
 # ---------------------------------------------------------------------
@@ -189,11 +202,10 @@ $missing = @()
 foreach ($m in $Script:ModuleNames) {
     if (-not (Test-Path -LiteralPath (Join-Path $Script:AppRoot "Modules\$m.ps1"))) { $missing += "$m.ps1" }
 }
-# Lib 下的三个 DLL 也要查。
-# 少了界面库，整个界面会退化成 Windows 原生控件，而且不报错，
-# 只是「突然变丑」，用户根本不知道发生了什么；
+# Lib 下的 DLL 也要查。
+# 少了界面库，整个窗口的 XAML 都解析不了；
 # 少了硬件监控库，概览页的温度和风扇会全变成「—」。
-foreach ($d in 'HandyControl.dll', 'LibreHardwareMonitorLib.dll', 'HidSharp.dll') {
+foreach ($d in 'MaterialDesignThemes.Wpf.dll', 'MaterialDesignColors.dll', 'Microsoft.Xaml.Behaviors.dll', 'LibreHardwareMonitorLib.dll', 'HidSharp.dll') {
     if (-not (Test-Path -LiteralPath (Join-Path $Script:AppRoot "Lib\$d"))) { $missing += "Lib\$d" }
 }
 if ($missing.Count -gt 0) {
@@ -252,28 +264,6 @@ $Script:AppRoot
 "@, '电脑调优助手 - 位置不合适', 'YesNo', 'Warning')
     if ($ans -ne 'Yes') { exit }
 }
-
-# ---------- 1.2.5 自动解除「网络来源」锁定 ----------
-#
-# ★ 这一步是为了治一个反复出现的报错：「对路径的访问被拒绝」★
-#
-# 从微信 / QQ / 浏览器拿到的压缩包，解压出来的**每一个文件**都会被
-# Windows 打上一个叫 Zone.Identifier 的隐藏数据流（右键属性里那个
-# 「解除锁定」勾选框就是它）。带着这个标记的 .ps1，PowerShell 会
-# 拒绝读取，报出来的却是很难懂的「对路径的访问被拒绝」——
-# 文件明明好好地躺在那儿，就是读不了。
-#
-# 以前的做法是让用户自己右键 → 属性 → 解除锁定，
-# 但普通用户根本不知道要对**哪个**文件做、也经常漏掉子文件夹里的。
-# 所以这里开机直接全部清掉，不麻烦用户。
-#
-# 清不掉也没关系（比如文件只读），下面的诊断会接着说清是什么情况。
-try {
-    Get-ChildItem -LiteralPath $Script:AppRoot -Recurse -File -ErrorAction SilentlyContinue |
-        ForEach-Object {
-            try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch { }
-        }
-} catch { }
 
 # ---------- 1.2.6 文件到底怎么了：出错时给真诊断，不再一句话打发 ----------
 function Get-FileTrouble {
@@ -487,28 +477,22 @@ if ($AutoClean) {
 # ---------------------------------------------------------------------
 function Get-Brush {
     <#
-      拿一支画笔。
+      拿一支画笔。参数写**色槽名**（'TextMain'、'Card'、'Stroke'……，见 design.md 1.1），
+      或者语义色号（'#8A5750' 这类，见 design.md 1.3）。
 
-      【换肤的关键在这里】
-      界面代码里写的是「默认皮肤的那个色号」，比如 Get-Brush '#F6F5F2'。
-      这个函数会先查一遍当前皮肤的映射表：
-      如果这个色号属于可换肤的中性色/主色，就换成当前皮肤的对应色；
-      查不到（说明是绿/红/卡其那种语义色）就原样返回。
-
-      这样做的好处是：**代码里所有 Get-Brush 调用一行都不用改**，
-      换肤自动生效；而「高危=红色」这种含义色不会被皮肤弄乱。
+      色槽按当前皮肤取值；语义色按当前皮肤只换明暗、不换色相 ——「高危」永远是红的。
+      换肤之后 Redraw-AllPages 会把代码画的页面整个重画，所以这里返回的是一支普通画笔就够了。
     #>
     param([string]$Hex)
-    if ($Script:ColorRemap -and $Script:ColorRemap.ContainsKey($Hex.ToUpper())) {
-        $Hex = $Script:ColorRemap[$Hex.ToUpper()]
-    }
-    return (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($Hex)))
+    if ($Hex -eq 'Transparent') { return [System.Windows.Media.Brushes]::Transparent }
+    return (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString((Get-ThemeHex $Hex))))
 }
 function New-Thick {
     param($L, $T, $R, $B)
     if ($null -eq $T) { return (New-Object System.Windows.Thickness $L) }
     return (New-Object System.Windows.Thickness $L, $T, $R, $B)
 }
+function New-Corner { param([double]$R) New-Object System.Windows.CornerRadius $R }
 function Find-Descendants {
     <# 在可视树里找出某个类型的所有后代。出图模式滚页面用。 #>
     param($Root, [Type]$Type)
@@ -545,257 +529,210 @@ function Set-Busy {
     Sync-UI
 }
 
-# --- 列表卡片的配色（悬停 / 选中要有反馈，否则点了左边不知道自己点的是哪一条）---
-$Script:CARD_BG      = '#F6F5F2'
-$Script:CARD_BORDER  = '#E0DED8'
-$Script:CARD_HOVER   = '#F0EFEB'
-$Script:CARD_SEL_BG  = '#E4E7EC'
-$Script:CARD_SEL_BD  = '#7F8A99'
+# --- 列表行的配色（色槽名）。悬停 / 选中要有反馈，否则点了不知道自己点的是哪一条 ---
+$Script:CARD_BG      = 'Card'
+$Script:CARD_BORDER  = 'Stroke'
+$Script:CARD_HOVER   = 'CardHover'
+$Script:CARD_SEL_BG  = 'AccentTint'
 $Script:SelectedCard = $null
 
 # =====================================================================
-#  动画
+#  动画开关
 # ---------------------------------------------------------------------
-#  用 WPF 自带的 Storyboard，没有引入任何动画库。
-#
-#  ★ 规则来自 Emil Kowalski 的动画方法论（Sonner / Vaul 作者）★
-#    以下每一条都是照着他那套硬规矩写的，改之前先想清楚：
-#
-#    1. **只动 Opacity 和 Transform。**
-#       这两样走 GPU 合成，不触发布局和重绘。
-#       动 Width/Height/Margin 会让整页反复重排，是性能杀手。
-#
-#    2. **绝不用 ease-in。**
-#       它开头慢，而开头恰恰是用户正在盯着看的那一刻。
-#       同样 200ms，ease-out 感觉比 ease-in 快。
-#
-#    3. **内置缓动太弱，要用精确的三次贝塞尔。**
-#       WPF 的 CubicEase 大约是 cubic-bezier(0.33,1,0.68,1)，偏温吞。
-#       这里用 KeySpline 实现真正的 (0.23,1,0.32,1) —— 起步快、收尾稳。
-#       KeySpline 的两个控制点就是 cubic-bezier 的四个参数，一一对应。
-#
-#    4. **时长按元素类型分级，UI 一律 < 300ms。**
-#       按钮反馈 100~160 / 小浮层 125~200 / 下拉 150~250 / 弹窗抽屉 200~500
-#
-#    5. **按触发频率决定要不要动。**
-#       一天上百次的操作（键盘快捷键）不做动画；
-#       一天几十次的（悬停）只能做到「几乎察觉不到」。
-#       所以悬停用 110ms，比换页的 200ms 短得多。
-#
-#    6. **必须跟随系统的「减弱动效」设置。**
-#       Windows 里关掉「显示动画」的用户，多半是因为晕动症或机器太慢，
-#       不是让我们无视的。关掉之后不是「没有反馈」，而是「只留透明度、
-#       去掉位移」—— 减少和减弱，不是归零。
-#
-#    7. **不许所有元素同时进场**，列表要 30~80ms 错峰。
+#  补间函数都在 Modules\Motion.ps1；切页动画是 MDIX 的 TransitioningContent，
+#  写在窗口 XAML 里。这里只管「开不开」和右栏换内容时的淡入。
 # =====================================================================
-
-# 精确缓动曲线（对应 CSS 的 cubic-bezier）
-$Script:EaseOutPoints = @(0.23, 1.0, 0.32, 1.0)      # 进场/退场：强 ease-out
-$Script:EaseInOutPoints = @(0.77, 0.0, 0.175, 1.0)   # 屏幕内移动/形变
-
-# 时长分级（毫秒）
-$Script:DurHover = 110    # 悬停：一天几十次，只能几乎察觉不到
-$Script:DurPanel = 200    # 右侧详情栏换内容
-$Script:DurTab = 160      # 切页签
-$Script:DurStagger = 45   # 列表错峰间隔
-
 $Script:AnimEnabled = $true          # 用户在「个性化」页的开关
 $Script:SystemAnimOff = $false       # 系统级「减弱动效」
 
 function Test-SystemReducedMotion {
     <#
-      Windows 的「减弱动效」等价物。
-
-      控制面板 → 轻松使用 → 显示 → 「在 Windows 中显示动画」，
-      关掉之后 SystemParameters.ClientAreaAnimation 变 False。
-
-      会关这个的人通常有两种：晕动症，或者机器实在带不动。
-      两种都不该被我们无视。
+      Windows 的「减弱动效」等价物：轻松使用 → 显示 → 「在 Windows 中显示动画」。
+      会关这个的人通常是晕动症，或者机器实在带不动。两种都不该被无视。
     #>
     try { return (-not [System.Windows.SystemParameters]::ClientAreaAnimation) } catch { return $false }
 }
 
-function Test-AnimOn {
-    <# 动画到底开不开：用户开关 且 系统没要求减弱 #>
-    return ($Script:AnimEnabled -and -not $Script:SystemAnimOff)
+function Test-AnimOn { return (Test-MotionOn) }
+
+function Sync-TransitionSwitch {
+    <#
+      动画开关同步给 MDIX 的切页动画：
+        用户关了动画        → 切页瞬间完成（TransitionAssist.DisableTransitions）
+        系统关了「显示动画」→ 只留淡入，把「上移」那一段拿掉（减弱，不是归零）
+    #>
+    try {
+        [MaterialDesignThemes.Wpf.TransitionAssist]::SetDisableTransitions($Script:Window, (-not (Test-AnimOn)))
+    } catch { }
+    try {
+        $tabs = $Script:UI.Tabs
+        [void]$tabs.ApplyTemplate()
+        $tc = $tabs.Template.FindName('PageTransition', $tabs)
+        $Script:PageTransition = $tc
+        if ($tc -and $Script:SystemAnimOff) {
+            foreach ($fx in @($tc.OpeningEffects)) {
+                if ("$($fx.Kind)" -like 'Slide*') { [void]$tc.OpeningEffects.Remove($fx) }
+            }
+        }
+    } catch { }
 }
 
-function New-SplineAnim {
+function Invoke-PageTransition {
     <#
-      用 KeySpline 做出精确的 cubic-bezier 曲线。
+      重播切页动画（MDIX TransitioningContent 的进场效果：淡入 + 上移 200ms）。
 
-      【为什么不用 CubicEase / QuarticEase 那些内置的】
-        它们是固定公式，曲线偏软，动起来「温吞」。
-        KeySpline 的两个控制点 = cubic-bezier 的四个参数，
-        想要什么曲线就是什么曲线，不用将就。
+      ★ 为什么要反射 ★
+        MDIX 5.3 重播进场效果的方法 RunOpeningEffects 是 protected 的，没有公开入口；
+        它的 RunHint 属性按文档该触发重播，实测不触发（逐帧读透明度一直是 1）。
+        反射调它是唯一能用上 MDIX 自己那套切页动画的办法。
+        将来 MDIX 改了方法名：这里 catch 住只是「没动画」不会崩，而自检会把它报出来。
     #>
-    param([double]$From, [double]$To, [double]$Ms, [double[]]$Curve)
-    $anim = New-Object System.Windows.Media.Animation.DoubleAnimationUsingKeyFrames
-    $anim.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Ms))
-
-    # 起点：0 时刻用 Discrete 钉住，避免从控件当前值开始插值
-    $k0 = New-Object System.Windows.Media.Animation.DiscreteDoubleKeyFrame
-    $k0.KeyTime = [System.Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::Zero)
-    $k0.Value = $From
-    [void]$anim.KeyFrames.Add($k0)
-
-    $k1 = New-Object System.Windows.Media.Animation.SplineDoubleKeyFrame
-    $k1.KeyTime = [System.Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::FromMilliseconds($Ms))
-    $k1.Value = $To
-    $k1.KeySpline = New-Object System.Windows.Media.Animation.KeySpline (
-        $Curve[0], $Curve[1], $Curve[2], $Curve[3])
-    [void]$anim.KeyFrames.Add($k1)
-    return $anim
+    if (-not (Test-AnimOn) -or $null -eq $Script:PageTransition) { return }
+    try {
+        if (-not $Script:RunFx) {
+            $Script:RunFx = [MaterialDesignThemes.Wpf.Transitions.TransitioningContentBase].GetMethod(
+                'RunOpeningEffects', [System.Reflection.BindingFlags]'NonPublic,Public,Instance')
+        }
+        if ($Script:RunFx) { [void]$Script:RunFx.Invoke($Script:PageTransition, $null) }
+    } catch { }
 }
 
 function Start-FadeSlideIn {
     <#
-      内容换新时的淡入 + 轻微上移。用在右侧详情栏这种「整块换内容」的地方。
-
-      Delay 用来做列表错峰进场（30~80ms 一档）——
-      全部同时出现是 Emil 那份 Never Ship 清单里的一条。
+      内容换新时的淡入 + 轻微上移（200ms）。用在右栏这种「点了左边、右边整块换内容」的地方 ——
+      它回答的是「右边刚换了」。
     #>
-    param($Element, [double]$Ms = 0, [double]$SlideY = 10, [double]$Delay = 0)
+    param($Element, [double]$Ms = 0, [double]$SlideY = 8)
     if ($null -eq $Element) { return }
-    if ($Ms -le 0) { $Ms = $Script:DurPanel }
-
+    if ($Ms -le 0) { $Ms = $Script:Dur.Panel }
     if (-not (Test-AnimOn)) {
         $Element.Opacity = 1
         $Element.RenderTransform = $null
         return
     }
-
-    # 系统要求减弱动效时：保留淡入（帮助理解内容换了），去掉位移
-    $reduce = $Script:SystemAnimOff
+    # 系统关了「显示动画」：保留淡入（帮助理解内容换了），去掉位移
+    if ($Script:SystemAnimOff) { $SlideY = 0; $Element.RenderTransform = $null }
     try {
-        $fade = New-SplineAnim -From 0 -To 1 -Ms $Ms -Curve $Script:EaseOutPoints
-        if ($Delay -gt 0) { $fade.BeginTime = [TimeSpan]::FromMilliseconds($Delay) }
-        $Element.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fade)
-
-        if (-not $reduce -and $SlideY -ne 0) {
-            $tt = New-Object System.Windows.Media.TranslateTransform
-            $tt.Y = $SlideY
+        Start-Prop $Element ([System.Windows.UIElement]::OpacityProperty) 0 1 $Ms $Script:Ease.Out
+        if ($SlideY -ne 0) {
+            $tt = New-Object System.Windows.Media.TranslateTransform 0, $SlideY
             $Element.RenderTransform = $tt
-            $slide = New-SplineAnim -From $SlideY -To 0 -Ms $Ms -Curve $Script:EaseOutPoints
-            if ($Delay -gt 0) { $slide.BeginTime = [TimeSpan]::FromMilliseconds($Delay) }
-            $tt.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $slide)
+            Start-Prop $tt ([System.Windows.Media.TranslateTransform]::YProperty) $SlideY 0 $Ms $Script:Ease.Out
         }
-    } catch {
-        # 动画失败绝不能拖垮功能：直接显示出来
-        $Element.Opacity = 1
-    }
-}
-
-function Start-StaggerIn {
-    <#
-      一批元素错峰进场，每个比前一个晚 45ms。
-
-      【为什么要错峰】
-        全部同时淡入，眼睛会把它们当成一整块，感觉不到「逐个出现」，
-        反而显得生硬。差几十毫秒，大脑就读成有节奏的序列。
-        超过 6 个就不再往后加延迟 —— 再排下去最后一个要等半秒，
-        那就从「有节奏」变成「怎么还没出来」。
-    #>
-    param($Elements, [double]$Ms = 0, [double]$SlideY = 8)
-    if ($Ms -le 0) { $Ms = $Script:DurPanel }
-    $i = 0
-    foreach ($e in $Elements) {
-        if ($null -eq $e) { continue }
-        $delay = [math]::Min($i, 6) * $Script:DurStagger
-        Start-FadeSlideIn -Element $e -Ms $Ms -SlideY $SlideY -Delay $delay
-        $i++
-    }
-}
-
-function Get-ThemedHex {
-    <# 拿到某个基准色号在当前皮肤下的实际色号（Get-Brush 的纯字符串版）#>
-    param([string]$Hex)
-    if ($Script:ColorRemap -and $Script:ColorRemap.ContainsKey($Hex.ToUpper())) {
-        return $Script:ColorRemap[$Hex.ToUpper()]
-    }
-    return $Hex
-}
-
-function Start-ColorFade {
-    <#
-      背景色平滑过渡。用在卡片悬停上。
-
-      【悬停必须极短】
-        悬停是一天要发生几十上百次的动作。按 Emil 的频率分级，
-        这一档「只能做到几乎察觉不到，否则就别做」。
-        110ms 是能感觉到「柔和」但不会觉得「在等」的上限。
-
-      【用 ColorAnimation 而不是关键帧】
-        鼠标可以在两张卡之间快速来回扫，动画会被反复打断。
-        ColorAnimation 会从「当前实际颜色」重新出发；
-        关键帧则每次都从头播，来回扫的时候会闪。
-
-      【注意冻结画笔】
-        主题里那批资源画笔是 Frozen 的（渲染更快），
-        直接对它做动画会抛 InvalidOperationException。
-        所以这里每次都换一支独立的、可动画的画笔给这个控件用。
-    #>
-    param($Element, [string]$ToHex, [double]$Ms = 0)
-    if ($null -eq $Element) { return }
-    if ($Ms -le 0) { $Ms = $Script:DurHover }
-    $to = [System.Windows.Media.ColorConverter]::ConvertFromString((Get-ThemedHex $ToHex))
-
-    if (-not (Test-AnimOn)) {
-        $Element.Background = New-Object System.Windows.Media.SolidColorBrush $to
-        return
-    }
-    try {
-        $cur = $Element.Background
-        if ($cur -isnot [System.Windows.Media.SolidColorBrush] -or $cur.IsFrozen) {
-            $startColor = if ($cur -is [System.Windows.Media.SolidColorBrush]) { $cur.Color } else { $to }
-            $cur = New-Object System.Windows.Media.SolidColorBrush $startColor
-            $Element.Background = $cur
-        }
-        $anim = New-Object System.Windows.Media.Animation.ColorAnimation
-        $anim.To = $to
-        $anim.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Ms))
-        # 悬停这种「颜色变化」用标准 ease，不用强 ease-out —— 强曲线在
-        # 这么短的时长里反而显得一顿
-        $ez = New-Object System.Windows.Media.Animation.CubicEase
-        $ez.EasingMode = 'EaseOut'
-        $anim.EasingFunction = $ez
-        $cur.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $anim)
-    } catch {
-        $Element.Background = New-Object System.Windows.Media.SolidColorBrush $to
-    }
+    } catch { $Element.Opacity = 1 }
 }
 
 # =====================================================================
 #  弹窗与提示
 # ---------------------------------------------------------------------
-#  以前直接用 [System.Windows.MessageBox]，那是 Win32 原生灰底方框 ——
-#  界面做得再精致，一弹窗就露馅，是质感上最扎眼的一处。
-#  换成 HandyControl 的：跟着皮肤走，深色模式下弹窗也是深色的。
+#  Win32 原生的灰底方框一弹出来，界面做得再干净也露馅。
+#  这里自绘一个扁平模态窗：白卡、圆角 12、左上一个语义图标、主按钮在右。
+#  「做完了」这种不用点确定的，走 MDIX 的 Snackbar，3 秒自己消失。
 #
 #  ★ 保留原生作为兜底 ★
-#    模块没载入、DLL 有问题的时候也得能弹窗报错 ——
+#    界面库没载入、窗口还没建好的时候也得能弹窗报错 ——
 #    那种时刻恰恰最需要告诉用户到底出了什么事。
 # =====================================================================
+function Show-FlatDialog {
+    <#
+      Kind: Info / Success / Warning / Error / Ask / AskWarn
+      Ask / AskWarn 返回 'Yes' / 'No'，其余返回 'OK'
+    #>
+    param([string]$Text, [string]$Title, [string]$Kind = 'Info')
+    $ask = ($Kind -eq 'Ask' -or $Kind -eq 'AskWarn')
+    $spec = switch ($Kind) {
+        'Success' { @{ Icon = 'CheckCircleOutline'; Color = '#556B54' } }
+        'Warning' { @{ Icon = 'AlertOutline'; Color = '#7A6B45' } }
+        'AskWarn' { @{ Icon = 'AlertOutline'; Color = '#7A6B45' } }
+        'Error'   { @{ Icon = 'CloseCircleOutline'; Color = '#8A5750' } }
+        'Ask'     { @{ Icon = 'HelpCircleOutline'; Color = 'TextMid' } }
+        default   { @{ Icon = 'InformationOutline'; Color = 'TextMid' } }
+    }
+
+    $w = New-Object System.Windows.Window
+    $w.Title = $Title
+    $w.WindowStyle = 'None'
+    $w.AllowsTransparency = $true
+    $w.Background = [System.Windows.Media.Brushes]::Transparent
+    $w.ResizeMode = 'NoResize'
+    $w.SizeToContent = 'Height'
+    $w.Width = 460
+    $w.ShowInTaskbar = $false
+    $w.FontFamily = New-Object System.Windows.Media.FontFamily $Script:FontStack
+    # 样式和色槽都挂在 Application 上，子窗口自动拿到，不用再抄一份
+    if ($Script:Window -and $Script:Window.IsVisible) {
+        $w.Owner = $Script:Window
+        $w.WindowStartupLocation = 'CenterOwner'
+    } else { $w.WindowStartupLocation = 'CenterScreen' }
+
+    $card = New-Object System.Windows.Controls.Border
+    $card.Background = Get-Brush 'Card'
+    $card.BorderBrush = Get-Brush 'StrokeStrong'
+    $card.BorderThickness = New-Thick 1
+    $card.CornerRadius = New-Corner 12
+    $card.Padding = New-Thick 24 20 24 20
+    $card.Add_MouseLeftButtonDown({ try { $this.Parent.DragMove() } catch { } })
+
+    $root = New-Object System.Windows.Controls.StackPanel
+    $head = New-Object System.Windows.Controls.StackPanel
+    $head.Orientation = 'Horizontal'
+    $ic = New-Object MaterialDesignThemes.Wpf.PackIcon
+    $ic.Kind = $spec.Icon
+    $ic.Width = 24; $ic.Height = 24
+    $ic.Foreground = Get-Brush $spec.Color
+    $ic.VerticalAlignment = 'Center'
+    $head.Children.Add($ic) | Out-Null
+    $tt = New-TextBlock -Text $Title -Size 16 -Bold $true
+    $tt.VerticalAlignment = 'Center'
+    $tt.Margin = New-Thick 12 0 0 0
+    $head.Children.Add($tt) | Out-Null
+    $root.Children.Add($head) | Out-Null
+
+    $sv = New-Object System.Windows.Controls.ScrollViewer
+    $sv.VerticalScrollBarVisibility = 'Auto'
+    $sv.MaxHeight = 440
+    $sv.Margin = New-Thick 0 16 0 0
+    $body = New-TextBlock -Text $Text -Size 13 -Color 'TextMid' -Wrap $true
+    $sv.Content = $body
+    $root.Children.Add($sv) | Out-Null
+
+    $bar = New-Object System.Windows.Controls.StackPanel
+    $bar.Orientation = 'Horizontal'
+    $bar.HorizontalAlignment = 'Right'
+    $bar.Margin = New-Thick 0 24 0 0
+    $w.Tag = 'No'
+    if ($ask) {
+        $bNo = New-Object System.Windows.Controls.Button
+        $bNo.Content = '取消'
+        $bNo.IsCancel = $true
+        $bNo.Add_Click({ $win = [System.Windows.Window]::GetWindow($this); $win.Tag = 'No'; $win.Close() })
+        $bar.Children.Add($bNo) | Out-Null
+    }
+    $bOk = New-Object System.Windows.Controls.Button
+    $bOk.Content = $(if ($ask) { '确定' } else { '知道了' })
+    $bOk.IsDefault = $true
+    if (-not $ask) { $bOk.IsCancel = $true }
+    try { $bOk.Style = $Script:Window.FindResource($(if ($Kind -eq 'AskWarn') { 'ButtonDanger' } else { 'ButtonPrimary' })) } catch { }
+    $bOk.Margin = New-Thick 0
+    $bOk.Add_Click({ $win = [System.Windows.Window]::GetWindow($this); $win.Tag = 'Yes'; $win.Close() })
+    $bar.Children.Add($bOk) | Out-Null
+    $root.Children.Add($bar) | Out-Null
+
+    $card.Child = $root
+    $w.Content = $card
+    [System.Windows.Media.TextOptions]::SetTextFormattingMode($w, 'Display')
+    $w.ShowDialog() | Out-Null
+    if ($ask) { return "$($w.Tag)" }
+    return 'OK'
+}
+
 function Show-Msg {
-    <# Kind: Info / Success / Warning / Error / Ask。Ask 返回 'Yes'/'No'，其余返回 'OK' #>
+    <# Kind: Info / Success / Warning / Error / Ask / AskWarn。Ask 返回 'Yes'/'No'，其余返回 'OK' #>
     param([string]$Text, [string]$Title = '电脑调优助手', [string]$Kind = 'Info')
     try {
-        if ($Script:HcTheme) {
-            if ($Kind -eq 'Ask') {
-                $r = [HandyControl.Controls.MessageBox]::Ask($Text, $Title)
-                return $(if ("$r" -eq 'OK' -or "$r" -eq 'Yes') { 'Yes' } else { 'No' })
-            }
-            switch ($Kind) {
-                'Success' { [HandyControl.Controls.MessageBox]::Success($Text, $Title) | Out-Null }
-                'Warning' { [HandyControl.Controls.MessageBox]::Warning($Text, $Title) | Out-Null }
-                'Error' { [HandyControl.Controls.MessageBox]::Error($Text, $Title) | Out-Null }
-                default { [HandyControl.Controls.MessageBox]::Info($Text, $Title) | Out-Null }
-            }
-            return 'OK'
-        }
+        if ($Script:MdLoaded -and $Script:Window) { return (Show-FlatDialog -Text $Text -Title $Title -Kind $Kind) }
     } catch { }
-    if ($Kind -eq 'Ask') {
+    if ($Kind -eq 'Ask' -or $Kind -eq 'AskWarn') {
         return "$([System.Windows.MessageBox]::Show($Text, $Title, 'YesNo', 'Question'))"
     }
     $icon = switch ($Kind) { 'Warning' { 'Warning' } 'Error' { 'Error' } default { 'Information' } }
@@ -805,104 +742,72 @@ function Show-Msg {
 
 function Show-Toast {
     <#
-      右上角飘一条气泡，几秒后自己消失。
-      用在「做完了」这种不需要点确定的场合 ——
-      以前每做完一件事都弹个模态框逼人点一下，很烦。
+      底部飘一条提示，3 秒后自己消失（MDIX Snackbar）。
+      用在「做完了」这种不需要点确定的场合 —— 每做完一件事都弹个模态框逼人点一下，很烦。
     #>
     param([string]$Text, [string]$Kind = 'Success')
     try {
-        if ($Script:HcTheme) {
-            switch ($Kind) {
-                'Info' { [HandyControl.Controls.Growl]::InfoGlobal($Text) }
-                'Warning' { [HandyControl.Controls.Growl]::WarningGlobal($Text) }
-                'Error' { [HandyControl.Controls.Growl]::ErrorGlobal($Text) }
-                default { [HandyControl.Controls.Growl]::SuccessGlobal($Text) }
-            }
-            return
-        }
+        if ($Script:ToastQueue) { $Script:ToastQueue.Enqueue($Text); return }
     } catch { }
     try { Set-Status $Text } catch { }   # 兜底：至少写到状态栏
 }
 
-function Add-CardShadow {
+# =====================================================================
+#  卡片与列表（design.md 4.4）
+# =====================================================================
+function New-Card {
     <#
-      给卡片加一层很淡的投影，让它从背景上「浮」起来一点 ——
-      质感差距最明显的一处，而且改动极小。
-
-      【为什么挂在效果开关下面】
-        投影是 GPU 每帧都要算的（DropShadowEffect 走像素着色器）。
-        一页几十张卡片同时投影，在集显老机器上是实打实的负担，
-        而这工具恰恰有一大票老机器用户。关掉效果时就不加。
+      一张白卡：Card 底 + 1px Stroke 描边 + 圆角 12 + 内边距 20，零阴影。
+      返回 @{ Card; Body }：往 Body 里加内容，把 Card 加进页面。
     #>
-    param($Element, [string]$Level = 'EffectShadow1')
-    # ★ 深色皮肤一律不加阴影（design.md 4.2）★
-    #   深色界面上的深度只有两个来源：表面阶梯（亮一级 = 近一层）和 1px 发丝线。
-    #   在近黑底上打灰阴影是看不见的，只会白白烧 GPU；而「每张卡下面
-    #   同一种灰阴影」恰恰是 SaaS 卡片套装最好认的特征。
-    #   Linear 和 Raycast 都是全系统零阴影，深度全靠色阶。
-    if ($Script:ThemeIsDark) { return }
-    if (-not $Script:AnimEnabled) { return }
-    try {
-        $fx = $Script:Window.TryFindResource($Level)
-        if ($fx) { $Element.Effect = $fx }
-    } catch { }
+    param([string]$Title = '', [string]$Aside = '', [double]$Pad = 20, [string]$Icon = '')
+    $b = New-Object System.Windows.Controls.Border
+    $b.Background = Get-Brush 'Card'
+    $b.BorderBrush = Get-Brush 'Stroke'
+    $b.BorderThickness = New-Thick 1
+    $b.CornerRadius = New-Corner 12
+    $b.Padding = New-Thick $Pad
+    $sp = New-Object System.Windows.Controls.StackPanel
+    if ($Title) { $sp.Children.Add((New-RptSection -Title $Title -Aside $Aside -Icon $Icon)) | Out-Null }
+    $b.Child = $sp
+    return @{ Card = $b; Body = $sp }
 }
 
 function New-ListCard {
     <#
-      列表里的一条。
-
-      【这不再是「卡片」】
-        报告单上的一行就是一行：上下留白 + 一条行间细线。
-        没有圆角、没有边框盒子、没有阴影 ——
-        craft-floor 拒绝「同尺寸卡片当页面结构」，
-        而深色界面上的投影本来也看不见，只是白烧 GPU。
-
-      悬停 / 按下 / 回弹统一走 Modules\Motion.ps1 的交互引擎，
-      别在这儿各写各的。
+      列表里可点的一行。
+      圆角 8 的行，不画分隔线：悬停浮出 CardHover，选中铺 AccentTint。
+      （带圆角的行再画底边线，线会跟着圆角弯上去 —— 所以列表行不画线，靠留白分开。）
     #>
     $c = New-Object System.Windows.Controls.Border
     $c.Background = [System.Windows.Media.Brushes]::Transparent
-    $c.BorderBrush = Get-Brush $Script:CARD_BORDER
-    $c.BorderThickness = New-Thick 0 0 0 1     # 只有行间线
-    $c.Padding = New-Thick 4 12 4 12
-    $c.Margin = New-Thick 0 0 0 0
+    $c.CornerRadius = New-Corner 8
+    $c.Padding = New-Thick 12 12 12 12
     $c.Cursor = 'Hand'
-    # 行不做上移（上移是卡片的语汇，表格行上移会让整列看起来在抖）
-    Add-Interactive $c -BgNormal 'Transparent' -BgHover $Script:CARD_HOVER -NoLift
+    Add-Interactive $c -BgNormal 'Transparent' -BgHover $Script:CARD_HOVER
     return $c
 }
 
 function Select-Card {
-    <# 把某张卡片标成「当前选中」，上一张恢复原样 #>
+    <# 把某一行标成「当前选中」（AccentTint 底），上一行恢复原样 #>
     param($Card)
     if ($Script:SelectedCard) {
         try {
-            $Script:SelectedCard.Background = Get-Brush $Script:CARD_BG
-            $Script:SelectedCard.BorderBrush = Get-Brush $Script:CARD_BORDER
+            $m = $Script:SelectedCard.Resources['__motion']
+            $Script:SelectedCard.Background = Get-Brush $(if ($m) { $m.BgN } else { 'Transparent' })
         } catch { }
     }
     $Script:SelectedCard = $Card
-    if ($Card) {
-        $Card.Background = Get-Brush $Script:CARD_SEL_BG
-        $Card.BorderBrush = Get-Brush $Script:CARD_SEL_BD
-    }
+    if ($Card) { $Card.Background = Get-Brush $Script:CARD_SEL_BG }
 }
 function Format-Reflow {
     <#
       把说明文字里「为了源码好读而手动折的行」重新接回整段，让 WPF 自己按栏宽折行。
-
-      为什么要做：说明文本都是按大约 40 个字手写折行的，在右侧那个窄栏里显示，
-      两种折行会打架，出现「平衡模式为了省电，会在你不动 / 的时候把 CPU 频率降到很低」
-      这种莫名其妙的断句。
-
-      但不能无脑全合并 —— 列表项、编号、小标题、缩进的命令行本来就该独立成行。
-      所以只合并「两行都是普通正文」的情况。
+      不能无脑全合并 —— 列表项、编号、小标题、缩进的命令行本来就该独立成行。
     #>
     param([string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
 
-    # 这些开头的行保持原样：项目符号 / 编号 / 小标题 / 提示符号 / 缩进
     $keep = '^(\s{2,}|[·•\-—>|☆✓✗⚠※]|【|\d+[\.\)、]|第[一二三四五六七八九十]|[A-Da-d][\.\)]\s)'
     $out = New-Object System.Collections.ArrayList
     foreach ($line in ($Text -split "`r?`n")) {
@@ -914,7 +819,6 @@ function Format-Reflow {
         if ($standalone -or -not $prevMergeable) {
             [void]$out.Add($t)
         } else {
-            # 中文直接接上；两边都是英文/数字时补一个空格
             $sep = ''
             if ($prev -match '[A-Za-z0-9)]$' -and $t -match '^[A-Za-z0-9(]') { $sep = ' ' }
             $out[$out.Count - 1] = $prev + $sep + $t.TrimStart()
@@ -925,24 +829,23 @@ function Format-Reflow {
 
 function New-TextBlock {
     <#
-      说明文字里用 **这样** 标记重点。
-      注意：WPF 的 TextBlock 不认 Markdown —— 直接赋给 .Text 的话
-      屏幕上会原样出现两个星号，很难看。所以这里把文本按 ** 切开，
-      拼成一串 Run，偶数段普通、奇数段加粗，让重点真的变成粗体。
+      说明文字里用 **这样** 标记重点。TextBlock 不认 Markdown ——
+      这里把文本按 ** 切开拼成一串 Run，奇数段加粗。
+      Color 传色槽名或语义色号。
     #>
-    param([string]$Text, [double]$Size = 13, [string]$Color = '#2B2A26', [bool]$Bold = $false, [bool]$Wrap = $false)
+    param([string]$Text, [double]$Size = 13, [string]$Color = 'TextMain', [bool]$Bold = $false, [bool]$Wrap = $false)
     $tb = New-Object System.Windows.Controls.TextBlock
     $tb.FontSize = $Size
     $tb.Foreground = Get-Brush $Color
     if ($Bold) { $tb.FontWeight = 'SemiBold' }
-    if ($Wrap) { $tb.TextWrapping = 'Wrap'; $tb.LineHeight = $Size * 1.65 }
+    if ($Wrap) { $tb.TextWrapping = 'Wrap'; $tb.LineHeight = [math]::Round($Size * 1.6) }
 
     if ($Text -and $Text.Contains('**')) {
         $isBold = $false
         foreach ($seg in ($Text -split '\*\*')) {
             if ($seg -ne '') {
                 $run = New-Object System.Windows.Documents.Run $seg
-                if ($isBold) { $run.FontWeight = 'Bold' }
+                if ($isBold) { $run.FontWeight = 'SemiBold'; $run.Foreground = Get-Brush 'TextMain' }
                 $tb.Inlines.Add($run)
             }
             $isBold = -not $isBold
@@ -952,429 +855,263 @@ function New-TextBlock {
     }
     return $tb
 }
+
+function New-Icon {
+    <# 一个 MDIX 图标。Kind 是 Material Design Icons 的名字，Color 传色槽名或语义色号 #>
+    param([string]$Kind, [double]$Size = 20, [string]$Color = 'TextDim')
+    $ic = New-Object MaterialDesignThemes.Wpf.PackIcon
+    $ic.Kind = $Kind
+    $ic.Width = $Size; $ic.Height = $Size
+    $ic.Foreground = Get-Brush $Color
+    $ic.VerticalAlignment = 'Center'
+    return $ic
+}
+
 function Get-TintBg {
-    <#
-      按前景色给徽章配一个同色系的浅底。
-      换浅色主题时踩的坑：原来深色主题下徽章底写的是深色（#12161D），
-      批量换色后变成了白色，结果白徽章贴在白卡片上完全看不出边界。
-      改成按语义取淡色底，既有区分度又不刺眼。
-    #>
+    <# 按前景色给徽章配一个同色系的底（前景 / 底成对，见 design.md 1.3） #>
     param([string]$Fg)
     switch ($Fg) {
-        '#556B54' { return '#E2E7E0' }   # 灰绿：良好 / 必做 / 低风险
-        '#7A6B45' { return '#EDE7D9' }   # 灰卡其：需实测 / 中风险 / 可疑
-        '#89694F' { return '#EDE7D9' }   # 灰陶：会弹黑框
-        '#8A5750' { return '#EDE0DD' }   # 灰玫瑰：高危 / 高风险
-        '#55606F' { return '#E4E7EC' }   # 灰蓝：推荐 / 已知打扰 / 主色
-        '#66635B' { return '#E8E7E2' }   # 暖灰：中性（显式列出来——
-                                         # 原来它是靠 default 恰好返回同一个值才对的，
-                                         # 属于「碰巧能跑」，中性色一改就会悄悄失效）
-        default   { return '#E8E7E2' }
+        '#556B54' { return '#E7EBE4' }   # 绿：良好 / 必做 / 低风险
+        '#7A6B45' { return '#EDE7D9' }   # 卡其：需实测 / 中风险 / 可疑
+        '#89694F' { return '#EDE2D6' }   # 陶：会弹黑框
+        '#8A5750' { return '#EDE0DD' }   # 玫瑰红：高危 / 高风险
+        default   { return 'SurfaceSunken' }   # 中性、推荐：灰底
     }
 }
 
 # =====================================================================
-#  检验报告单的排版原语
+#  读数与表格的排版原语
 # ---------------------------------------------------------------------
-#  整个界面的母题是「你这台机器的检验报告」。见
-#  .impeccable\surfaces\pctuner-ps1.md 的 Direction contract。
-#
-#  ★ 四栏骨架统治每一个列表 ★
-#        项目 │ 结果 │ 标记 │ 参考范围 │ 单位
-#    「参考范围」那一栏就是这个产品唯一无法被抄的机制：
-#    同一项对不同使用场景，合格范围本来就不一样 ——
-#    跟化验单上血红蛋白男女参考范围不同是同一回事。
-#
-#  ★ 分级靠标记，不靠颜色 ★
-#        （空）  在参考范围内。不标色、不加粗，和别的行一模一样
-#        *      需实测，脚注引到下方备注区
-#        ↑ / ↓  超出上限 / 低于下限
-#        ↑↑     显著超出（高风险）
-#        —      本机不适用 / 读不到
-#    这套标记来自真实化验单（H/L/HH 那一套的中文形态），
-#    好处是**定性项目也能表达**：「已启用 / 建议已关闭」这种布尔项
-#    在化验单上就是「阴性（参考：阴性）」，不需要数值区间。
-#
-#  ★ 颜色只在标记上 ★
-#    法定墨只有一种，法定含义只有一个：超出参考范围。
-#    正文字段永远消色 —— 不许给行加底色，不许给卡片加彩色左边条。
+#  v5 的「检验报告单」语法里有用的部分留下了：
+#    · 「安全范围」这一栏 —— 同一个值对不同用途，合格线本来就不一样
+#    · 标记 ↑ / ↓ / ↑↑ / —：只有超出安全范围的那几行上红色，满页平静
+#  换掉的是长相：卡片装表格、圆角量程条、MiSans Semibold 读数。
 # =====================================================================
 
 # 报告表的列轨。★ 这是模数，别在调用处手填宽度 ★
-#   窄了缩列，不重排 —— 四栏的相对位置在任何宽度下都不变，
-#   这样用户扫第二行时不用重新找「结果」在哪。
-$Script:RptCol = @{ Result = 86; Mark = 30; Bar = 212; Ref = 104; Unit = 46 }
+$Script:RptCol = @{ Result = 72; Mark = 24; Bar = 160; Ref = 80; Unit = 40 }
+$Script:BarW = 160      # 量程条总宽（含右边百分比）
 
-$Script:BarW = 204      # 血条总宽（含右边百分比）。★ 模数，别在调用处手填 ★
+function New-Meter {
+    <#
+      一条圆角量程条（design.md 4.7）。返回 @{ Host; Fill; Line; C0; C1; L0; L1 }
+      宽度跟着父容器走：填充和安全线都用星号列按比例摆，不写死像素。
+    #>
+    param([string]$Track = 'SurfaceSunken', [string]$FillColor = 'TextMid', [string]$LineColor = 'TextMain')
+    $g = New-Object System.Windows.Controls.Grid
+    $g.Height = 12
+    $g.VerticalAlignment = 'Center'
+
+    $tr = New-Object System.Windows.Controls.Border
+    $tr.Height = 6
+    $tr.CornerRadius = New-Corner 3
+    $tr.Background = Get-Brush $Track
+    $tr.VerticalAlignment = 'Center'
+    $g.Children.Add($tr) | Out-Null
+
+    $fg = New-Object System.Windows.Controls.Grid
+    $c0 = New-Object System.Windows.Controls.ColumnDefinition
+    $c0.Width = New-Object System.Windows.GridLength 0, ([System.Windows.GridUnitType]::Star)
+    $c1 = New-Object System.Windows.Controls.ColumnDefinition
+    $c1.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+    $fg.ColumnDefinitions.Add($c0); $fg.ColumnDefinitions.Add($c1)
+    $fill = New-Object System.Windows.Controls.Border
+    $fill.Height = 6
+    $fill.CornerRadius = New-Corner 3
+    $fill.Background = Get-Brush $FillColor
+    $fill.VerticalAlignment = 'Center'
+    $fg.Children.Add($fill) | Out-Null
+    $g.Children.Add($fg) | Out-Null
+
+    $lg = New-Object System.Windows.Controls.Grid
+    $l0 = New-Object System.Windows.Controls.ColumnDefinition
+    $l1 = New-Object System.Windows.Controls.ColumnDefinition
+    $lg.ColumnDefinitions.Add($l0); $lg.ColumnDefinitions.Add($l1)
+    $line = New-Object System.Windows.Shapes.Rectangle
+    $line.Width = 2
+    $line.Height = 12
+    $line.RadiusX = 1; $line.RadiusY = 1
+    $line.Fill = Get-Brush $LineColor
+    $line.HorizontalAlignment = 'Right'
+    $line.Visibility = 'Collapsed'
+    $lg.Children.Add($line) | Out-Null
+    $g.Children.Add($lg) | Out-Null
+
+    return @{ Host = $g; Fill = $fill; Line = $line; C0 = $c0; C1 = $c1; L0 = $l0; L1 = $l1 }
+}
+
+function Set-Meter {
+    <#
+      刷一条量程条。Value 为 $null = 读不到，条子留空 —— 不画一个假的长度。
+      Mark = 安全线位置（$null 不画：没有阈值的项画了就等于承诺了一个不存在的标准）。
+    #>
+    param($M, $Value, [double]$Max = 100, $Mark = $null, [string]$FillColor = 'TextMid')
+    if ($null -eq $M) { return }
+    if ($Max -le 0) { $Max = 100 }
+    $star = [System.Windows.GridUnitType]::Star
+    if ($null -eq $Value) {
+        $M.C0.Width = New-Object System.Windows.GridLength 0, $star
+        $M.C1.Width = New-Object System.Windows.GridLength 1, $star
+        $M.Fill.Visibility = 'Collapsed'
+    } else {
+        $v = [math]::Max(0, [math]::Min([double]$Value, $Max))
+        $M.C0.Width = New-Object System.Windows.GridLength $v, $star
+        $M.C1.Width = New-Object System.Windows.GridLength ($Max - $v), $star
+        $M.Fill.Visibility = $(if ($v -gt 0) { 'Visible' } else { 'Collapsed' })
+        $M.Fill.Background = Get-Brush $FillColor
+    }
+    if ($null -eq $Mark) {
+        $M.Line.Visibility = 'Collapsed'
+    } else {
+        $mk = [math]::Max(0, [math]::Min([double]$Mark, $Max))
+        $M.L0.Width = New-Object System.Windows.GridLength ([math]::Max($mk, 0.001)), $star
+        $M.L1.Width = New-Object System.Windows.GridLength ([math]::Max($Max - $mk, 0.001)), $star
+        $M.Line.Visibility = 'Visible'
+    }
+}
 
 function New-RangeBar {
     <#
-      血条。返回 @{ Host; Track; Fill; Line; Pct }
-
-      画法：
-          ████████████░░░░░░░│░░░   41%
-          └─ 填了多少 ────┘   └ 安全线
-
-        Track  整条量程的底槽
-        Fill   当前值填掉的那一段
-        Line   安全线（合格上限或下限所在的位置）
-        Pct    填充比例，写在条子右边
-
-      ★ 为什么不是化验单那张参考区间图 ★
-        上一版照化验单画了「底槽 + 合格区间色块 + 一根刻记」。
-        三个抽象符号叠在一条 168px 的线上，读者得先分清哪个代表自己
-        才能开始读 —— 老板一句「一点都看不懂」，那就是设计错了，
-        不是他没耐心。血条不用教：填得多就是占得多。
-
-      ★ 越线时整条上法定墨，不是只红超出的那一段 ★
-        血量告急是整条变红，这是所有人都见过的。
-        只红一小段，反而要读者去比较两段颜色的长度。
+      表格行里的量程条 + 右边百分比。返回 @{ Host; Meter; Pct }
+      越线时整条换高危红 —— 不是只红超出的那一段，那要读者去比两段颜色的长度。
     #>
     $g = New-Object System.Windows.Controls.Grid
     $g.Width = $Script:BarW
-    $g.Height = 20
     $g.HorizontalAlignment = 'Left'
     $g.VerticalAlignment = 'Center'
+    $cA = New-Object System.Windows.Controls.ColumnDefinition
+    $cA.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+    $cB = New-Object System.Windows.Controls.ColumnDefinition
+    $cB.Width = New-Object System.Windows.GridLength 44
+    $g.ColumnDefinitions.Add($cA); $g.ColumnDefinitions.Add($cB)
 
-    $barW = $Script:BarW - 44      # 右边留给百分比
-
-    # 底槽
-    $track = New-Object System.Windows.Shapes.Rectangle
-    $track.Width = $barW
-    $track.Height = 11
-    $track.RadiusX = 1; $track.RadiusY = 1
-    $track.Fill = Get-Brush '#D2D0C9'          # BorderMed，比 SurfaceSunken 深一档
-    #   ★ 底槽必须在纸色上看得见 ★
-    #     用 SurfaceSunken(#E5E3DC) 拍出来几乎隐形，0% 那一行只剩一根竖线，
-    #     读者不知道满格在哪，血条就白画了。
-    $track.HorizontalAlignment = 'Left'
-    $track.VerticalAlignment = 'Center'
-    $g.Children.Add($track) | Out-Null
-
-    # 填充段
-    $fill = New-Object System.Windows.Shapes.Rectangle
-    $fill.Height = 11
-    $fill.RadiusX = 1; $fill.RadiusY = 1
-    $fill.Width = 0
-    $fill.HorizontalAlignment = 'Left'
-    $fill.VerticalAlignment = 'Center'
-    $fill.Fill = Get-Brush '#565349'           # 中性深灰，正常值不上彩墨
-    $g.Children.Add($fill) | Out-Null
-
-    # 安全线。★ 必须比填充色深、比底槽重，否则被填充段吃掉看不见 ★
-    $line = New-Object System.Windows.Shapes.Rectangle
-    $line.Width = 2
-    $line.Height = 18
-    $line.HorizontalAlignment = 'Left'
-    $line.VerticalAlignment = 'Center'
-    $line.Fill = Get-Brush '#2B2A26'           # TextMain
-    $line.Visibility = 'Collapsed'
-    $g.Children.Add($line) | Out-Null
+    $m = New-Meter
+    $g.Children.Add($m.Host) | Out-Null
 
     # 百分比。★ 表格数位 ★ 每秒刷新时不加这句整列会左右抖
-    $pct = New-TextBlock -Text '' -Size 13 -Color '#66635B'
+    $pct = New-TextBlock -Text '' -Size 12 -Color 'TextDim'
     $pct.HorizontalAlignment = 'Right'
     $pct.VerticalAlignment = 'Center'
     [System.Windows.Documents.Typography]::SetNumeralAlignment($pct, 'Tabular')
+    [System.Windows.Controls.Grid]::SetColumn($pct, 1)
     $g.Children.Add($pct) | Out-Null
 
-    return @{ Host = $g; Track = $track; Fill = $fill; Line = $line; Pct = $pct; W = $barW }
+    return @{ Host = $g; Meter = $m; Pct = $pct }
 }
 
 function Set-RangeBar {
     <#
-      刷一条血条。
+      刷一条量程条。
         Value  当前值（$null = 读不到，条子留空、百分比写「—」）
         Max    满量程
-        Lo/Hi  安全线。Lo = 低于它就不合格（刷新率、剩余空间）
-                        Hi = 高于它就不合格（温度、占用率）
-        Abnormal 越线了 —— 整条上法定墨
-
-      读不到就不填 —— 和「绝不编数字」一个道理，不画一个假的长度。
+        Lo/Hi  安全线。Lo = 低于它就不合格（刷新率、剩余空间）；Hi = 高于它就不合格（温度、占用率）
+        Abnormal 越线了 —— 整条换高危红
     #>
     param($Bar, $Value, [double]$Max = 100, $Lo = $null, $Hi = $null, [bool]$Abnormal = $false)
     if ($null -eq $Bar) { return }
     if ($Max -le 0) { $Max = 100 }
-    $w = [double]$Bar.W
-
-    # --- 安全线 ---
-    #   两侧都有限值时（很少见）画上限那一侧 —— 用户更怕的是超上限。
     $mark = if ($null -ne $Hi) { [double]$Hi } elseif ($null -ne $Lo) { [double]$Lo } else { $null }
-    if ($null -eq $mark) {
-        # 没有阈值的项（瞬时占用率）：不画安全线。
-        # 画了就等于对用户承诺了一个并不存在的标准。
-        $Bar.Line.Visibility = 'Collapsed'
-    } else {
-        $mk = [math]::Max(0, [math]::Min($mark, $Max))
-        $Bar.Line.Visibility = 'Visible'
-        $Bar.Line.Margin = New-Thick ([math]::Max(0, $w * $mk / $Max - 1)) 0 0 0
-    }
-
-    # --- 填充 ---
+    Set-Meter $Bar.Meter $Value $Max $mark $(if ($Abnormal) { '#8A5750' } else { 'TextMid' })
     if ($null -eq $Value) {
-        $Bar.Fill.Width = 0
         $Bar.Pct.Text = '—'
-        $Bar.Pct.Foreground = Get-Brush '#66635B'
+        $Bar.Pct.Foreground = Get-Brush 'TextDim'
         return
     }
     $v = [math]::Max(0, [math]::Min([double]$Value, $Max))
-    $Bar.Fill.Width = [math]::Max(0, $w * $v / $Max)
-    $Bar.Fill.Fill = Get-Brush $(if ($Abnormal) { '#8A5750' } else { '#565349' })
-
     $Bar.Pct.Text = ('{0}%' -f [math]::Round(100 * $v / $Max))
-    $Bar.Pct.Foreground = Get-Brush $(if ($Abnormal) { '#8A5750' } else { '#66635B' })
+    $Bar.Pct.Foreground = Get-Brush $(if ($Abnormal) { '#8A5750' } else { 'TextDim' })
     $Bar.Pct.FontWeight = $(if ($Abnormal) { 'SemiBold' } else { 'Normal' })
 }
 
 # =====================================================================
-#  指针仪表
+#  读数卡（概览页，design.md 4.7）
 # ---------------------------------------------------------------------
-#  半圆弧 + 合格段 + 指针 + 大读数。照着万用表/压力表的面孔做的。
-#
-#  ★ 不做完整圆环 ★
-#    整圆 + 亮色渐变 + 中间一个数字，是「性能工具」这个品类的默认长相，
-#    套哪个产品上都一样。真实的量测仪器是半圆刻度盘配一根指针。
-#
-#  ★ 弧上必须分段 ★
-#    一条单色弧只能表达「多少」，分了段才能表达「在不在合格范围」——
-#    后者才是这个产品真正要说的事。
+#  v5 的半圆指针仪表换成扁平读数卡：图标 + 标签 / 大数字 + 小单位 / 量程条 / 附注。
+#  函数名保留 New-Gauge / Set-Gauge，调用处不用改。
 # =====================================================================
-
-function New-ArcPath {
-    <#
-      画一段圆弧。角度用「仪表角」：180 = 最左，0 = 最右，顺时针。
-      返回 Path。
-    #>
-    param(
-        [double]$Cx, [double]$Cy, [double]$R,
-        [double]$FromDeg, [double]$ToDeg,
-        [string]$Color, [double]$Thickness = 9
-    )
-    $rad = [math]::PI / 180
-    $p1 = New-Object System.Windows.Point (
-        ($Cx + $R * [math]::Cos($FromDeg * $rad)),
-        ($Cy - $R * [math]::Sin($FromDeg * $rad)))
-    $p2 = New-Object System.Windows.Point (
-        ($Cx + $R * [math]::Cos($ToDeg * $rad)),
-        ($Cy - $R * [math]::Sin($ToDeg * $rad)))
-
-    $fig = New-Object System.Windows.Media.PathFigure
-    $fig.StartPoint = $p1
-    $arc = New-Object System.Windows.Media.ArcSegment
-    $arc.Point = $p2
-    $arc.Size = New-Object System.Windows.Size $R, $R
-    $arc.SweepDirection = 'Clockwise'
-    $arc.IsLargeArc = ([math]::Abs($FromDeg - $ToDeg) -gt 180)
-    $fig.Segments.Add($arc)
-
-    $geo = New-Object System.Windows.Media.PathGeometry
-    $geo.Figures.Add($fig)
-
-    $path = New-Object System.Windows.Shapes.Path
-    $path.Data = $geo
-    $path.Stroke = Get-Brush $Color
-    $path.StrokeThickness = $Thickness
-    $path.StrokeStartLineCap = 'Round'
-    $path.StrokeEndLineCap = 'Round'
-    return $path
-}
-
 function New-Gauge {
-    <#
-      一个指针仪表。返回 @{ Host; Value; Unit; Label; Sub; Needle; OkArc; Canvas; Cfg }
+    <# 返回 @{ Host; Value; Unit; Mark; Label; Sub; Meter } —— Host 就是往卡片里放的那一块 #>
+    param([string]$Label, [string]$Icon = 'Gauge')
+    $sp = New-Object System.Windows.Controls.StackPanel
 
-      结构（从下往上画）：
-          底弧      整个量程，暗
-          合格弧    参考范围那一段，亮
-          刻度      每 1/5 一根短线
-          指针      从圆心指向当前值
-          读数      弧中间的大数字 + 小单位
-          标签      仪表下方的名字
-    #>
-    param([string]$Label, [double]$W = 200, [double]$H = 150)
+    $head = New-Object System.Windows.Controls.StackPanel
+    $head.Orientation = 'Horizontal'
+    $head.Children.Add((New-Icon -Kind $Icon -Size 20 -Color 'TextDim')) | Out-Null
+    $lb = New-TextBlock -Text $Label -Size 12 -Color 'TextDim'
+    $lb.VerticalAlignment = 'Center'
+    $lb.Margin = New-Thick 8 0 0 0
+    $head.Children.Add($lb) | Out-Null
+    $sp.Children.Add($head) | Out-Null
 
-    $host_ = New-Object System.Windows.Controls.StackPanel
-    $host_.Width = $W
-    $host_.HorizontalAlignment = 'Center'
-
-    $cv = New-Object System.Windows.Controls.Canvas
-    $cv.Width = $W
-    $cv.Height = 104
-
-    $cx = $W / 2
-    $cy = 92
-    $r = 66
-
-    # 底弧（整个量程）
-    # 底弧压暗、合格弧提亮 —— 两者必须一眼分得出来，
-    # 否则「在不在合格区间」这件事就没被表达出来，仪表也就白画了。
-    $base = New-ArcPath -Cx $cx -Cy $cy -R $r -FromDeg 180 -ToDeg 0 -Color '#E5E3DC' -Thickness 7
-    $cv.Children.Add($base) | Out-Null
-
-    # 合格弧，运行时替换
-    $okHolder = New-Object System.Windows.Controls.Canvas
-    $cv.Children.Add($okHolder) | Out-Null
-
-    # 刻度：每 1/5 一根
-    for ($i = 0; $i -le 5; $i++) {
-        $deg = 180 - 36 * $i
-        $rad = [math]::PI / 180
-        $r1 = $r + 11; $r2 = $r + 16
-        $ln = New-Object System.Windows.Shapes.Line
-        $ln.X1 = $cx + $r1 * [math]::Cos($deg * $rad)
-        $ln.Y1 = $cy - $r1 * [math]::Sin($deg * $rad)
-        $ln.X2 = $cx + $r2 * [math]::Cos($deg * $rad)
-        $ln.Y2 = $cy - $r2 * [math]::Sin($deg * $rad)
-        $ln.Stroke = Get-Brush '#C6C4BC'
-        $ln.StrokeThickness = 2
-        $cv.Children.Add($ln) | Out-Null
-    }
-
-    # 游标：弧上一小段垂直于弧的粗线，标出当前值的位置。
-    # 不从圆心出发 —— 长指针会横穿弧中央的读数。
-    $needle = New-Object System.Windows.Shapes.Line
-    $needle.X1 = $cx - $r - 9; $needle.Y1 = $cy
-    $needle.X2 = $cx - $r + 9; $needle.Y2 = $cy
-    $needle.Stroke = Get-Brush '#2B2A26'
-    $needle.StrokeThickness = 4
-    $needle.StrokeStartLineCap = 'Round'
-    $needle.StrokeEndLineCap = 'Round'
-    $cv.Children.Add($needle) | Out-Null
-
-    # 读数（弧里面）
-    #
-    # ★ Canvas 里子元素的 HorizontalAlignment 不生效 ★
-    #   Canvas 只认 Left/Top，对齐属性直接被忽略 ——
-    #   上一版数字因此全跑到弧的最左边去了。
-    #   解法是套一层定宽的 Grid：Grid 内部的对齐是生效的。
-    $vhost = New-Object System.Windows.Controls.Grid
-    $vhost.Width = $W
-    $vrow = New-Object System.Windows.Controls.StackPanel
-    $vrow.Orientation = 'Horizontal'
-    $vrow.HorizontalAlignment = 'Center'
-    $vrow.VerticalAlignment = 'Center'
-    $val = New-TextBlock -Text ([string][char]0x2014) -Size 30 -Color '#2B2A26'
-    $val.FontWeight = 'Normal'
+    $row = New-Object System.Windows.Controls.StackPanel
+    $row.Orientation = 'Horizontal'
+    $row.Margin = New-Thick 0 12 0 0
+    $val = New-TextBlock -Text ([string][char]0x2014) -Size 28 -Bold $true
     [System.Windows.Documents.Typography]::SetNumeralAlignment($val, 'Tabular')
-    $vrow.Children.Add($val) | Out-Null
-    $unit = New-TextBlock -Text '' -Size 13 -Color '#66635B'
+    $row.Children.Add($val) | Out-Null
+    $unit = New-TextBlock -Text '' -Size 11 -Color 'TextDim'
     $unit.VerticalAlignment = 'Bottom'
-    $unit.Margin = New-Thick 3 0 0 5
-    $vrow.Children.Add($unit) | Out-Null
-    $vhost.Children.Add($vrow) | Out-Null
-    [System.Windows.Controls.Canvas]::SetLeft($vhost, 0)
-    [System.Windows.Controls.Canvas]::SetTop($vhost, 50)
-    $cv.Children.Add($vhost) | Out-Null
+    $unit.Margin = New-Thick 4 0 0 6
+    $row.Children.Add($unit) | Out-Null
+    $mk = New-TextBlock -Text '' -Size 14 -Color '#8A5750' -Bold $true
+    $mk.VerticalAlignment = 'Bottom'
+    $mk.Margin = New-Thick 8 0 0 5
+    $row.Children.Add($mk) | Out-Null
+    $sp.Children.Add($row) | Out-Null
 
-    $host_.Children.Add($cv) | Out-Null
+    $m = New-Meter
+    $m.Host.Margin = New-Thick 0 12 0 0
+    $sp.Children.Add($m.Host) | Out-Null
 
-    # 名字
-    $lb = New-TextBlock -Text $Label -Size 14.5 -Color '#2B2A26'
-    $lb.HorizontalAlignment = 'Center'
-    $lb.Margin = New-Thick 0 2 0 0
-    $host_.Children.Add($lb) | Out-Null
+    $sub = New-TextBlock -Text '' -Size 12 -Color 'TextDim' -Wrap $true
+    $sub.Margin = New-Thick 0 8 0 0
+    $sp.Children.Add($sub) | Out-Null
 
-    # 副注（参考范围 / 型号 / 容量）
-    $sub = New-TextBlock -Text '' -Size 12.5 -Color '#66635B' -Wrap $true
-    $sub.HorizontalAlignment = 'Center'
-    $sub.TextAlignment = 'Center'
-    $sub.Margin = New-Thick 0 3 0 0
-    $sub.MaxHeight = 40
-    $sub.LineHeight = 18
-    $host_.Children.Add($sub) | Out-Null
-
-    return @{
-        Host = $host_; Value = $val; Unit = $unit; Label = $lb; Sub = $sub
-        Needle = $needle; OkHolder = $okHolder; Canvas = $cv
-        Cx = $cx; Cy = $cy; R = $r
-    }
+    return @{ Host = $sp; Value = $val; Unit = $unit; Mark = $mk; Label = $lb; Sub = $sub; Meter = $m }
 }
 
 function Set-Gauge {
     <#
-      刷一个仪表。
-        Value  当前值（$null = 读不到，指针归零位并变虚）
+      刷一张读数卡。
+        Value  当前值（$null = 读不到：数字写「—」、量程条不填 —— 绝不编数字）
         Max    满量程
         Lo/Hi  合格区间
-      读不到就不指 —— 和「绝不编数字」一个道理，不指一个假位置。
     #>
     param($G, $Value, [double]$Max = 100, $Lo = $null, $Hi = $null,
         [int]$Decimals = 0, [string]$Unit = '', [string]$Sub = '')
     if ($null -eq $G) { return }
     if ($Max -le 0) { $Max = 100 }
-    $rad = [math]::PI / 180
-
-    # 合格弧（只画一次；量程变了要重画，比如系统盘容量）
-    $G.OkHolder.Children.Clear()
-    if ($null -ne $Lo -or $null -ne $Hi) {
-        $lo = if ($null -ne $Lo) { [double]$Lo } else { 0 }
-        $hi = if ($null -ne $Hi) { [double]$Hi } else { $Max }
-        $lo = [math]::Max(0, [math]::Min($lo, $Max))
-        $hi = [math]::Max(0, [math]::Min($hi, $Max))
-        if ($hi -gt $lo) {
-            $d1 = 180 - 180 * $lo / $Max
-            $d2 = 180 - 180 * $hi / $Max
-            $ok = New-ArcPath -Cx $G.Cx -Cy $G.Cy -R $G.R -FromDeg $d1 -ToDeg $d2 -Color '#4A4842' -Thickness 11
-            $G.OkHolder.Children.Add($ok) | Out-Null
-        }
-    }
-
     $G.Unit.Text = $Unit
     $G.Sub.Text = $Sub
+    $mark = if ($null -ne $Hi) { [double]$Hi } elseif ($null -ne $Lo) { [double]$Lo } else { $null }
 
     if ($null -eq $Value) {
         $G.Value.Text = [string][char]0x2014
-        $G.Value.Foreground = Get-Brush '#66635B'
-        $G.Value.FontWeight = 'Normal'
-        $G.Needle.Visibility = 'Collapsed'
+        $G.Value.Foreground = Get-Brush 'TextDim'
+        $G.Mark.Text = ''
+        Set-Meter $G.Meter $null $Max $mark
         return
     }
-    $G.Needle.Visibility = 'Visible'
 
-    $v = [math]::Max(0, [math]::Min([double]$Value, $Max))
-    $deg = 180 - 180 * $v / $Max
-
-    # 超不超标
     $bad = $false
     if ($null -ne $Hi -and [double]$Value -gt [double]$Hi) { $bad = $true }
     if ($null -ne $Lo -and [double]$Value -lt [double]$Lo) { $bad = $true }
-
-    $ink = if ($bad) { '#8A5750' } else { '#2B2A26' }
+    $ink = if ($bad) { '#8A5750' } else { 'TextMain' }
     $G.Value.Foreground = Get-Brush $ink
-    $G.Value.FontWeight = if ($bad) { 'SemiBold' } else { 'Normal' }
-    $G.Needle.Stroke = Get-Brush $ink
+    $G.Mark.Text = $(if ($bad) { $(if ($null -ne $Hi) { [string][char]0x2191 } else { [string][char]0x2193 }) } else { '' })
+    Set-Meter $G.Meter ([double]$Value) $Max $mark $(if ($bad) { '#8A5750' } else { 'TextMid' })
 
-    # 游标滑过去（不是瞬间跳）—— 这是仪表最像仪表的地方。
-    # 两端分别在 r-9 和 r+9，连线正好垂直于弧。
-    $cos = [math]::Cos($deg * $rad); $sin = [math]::Sin($deg * $rad)
-    $x1 = $G.Cx + ($G.R - 9) * $cos;  $y1 = $G.Cy - ($G.R - 9) * $sin
-    $x2 = $G.Cx + ($G.R + 9) * $cos;  $y2 = $G.Cy - ($G.R + 9) * $sin
-    if (Test-MotionOn) {
-        Start-Prop $G.Needle ([System.Windows.Shapes.Line]::X1Property) $G.Needle.X1 $x1 280 $Script:Ease.Out
-        Start-Prop $G.Needle ([System.Windows.Shapes.Line]::Y1Property) $G.Needle.Y1 $y1 280 $Script:Ease.Out
-        Start-Prop $G.Needle ([System.Windows.Shapes.Line]::X2Property) $G.Needle.X2 $x2 280 $Script:Ease.Out
-        Start-Prop $G.Needle ([System.Windows.Shapes.Line]::Y2Property) $G.Needle.Y2 $y2 280 $Script:Ease.Out
-    } else {
-        $G.Needle.X1 = $x1; $G.Needle.Y1 = $y1
-        $G.Needle.X2 = $x2; $G.Needle.Y2 = $y2
-    }
-
-    $fmt = if ($Decimals -gt 0) { "F$Decimals" } else { 'F0' }
     $old = "$($G.Value.Text)" -replace '[^\d.\-]', ''
     $changed = $true
     if ($old -and [double]::TryParse($old, [ref]$null)) {
         $changed = ([math]::Round([double]$old, $Decimals) -ne [math]::Round([double]$Value, $Decimals))
     }
-    # 位数多的读数（比如系统盘 198.7）会把仪表撑宽，按长度降一档字号
-    $txt = ([double]$Value).ToString($fmt)
-    $G.Value.FontSize = if ($txt.Length -ge 5) { 24 } elseif ($txt.Length -ge 4) { 27 } else { 30 }
-
-    Start-CountUp -Target $G.Value -To ([double]$Value) -Decimals $Decimals -Ms 260
+    Start-CountUp -Target $G.Value -To ([double]$Value) -Decimals $Decimals -Ms 240
     if ($changed) { Start-ValueFlash $G.Value }
 }
 
 function New-RptGrid {
-    <# 造一个符合列轨的 Grid：项目(*) 结果 标记 参考范围 单位 #>
+    <# 造一个符合列轨的 Grid：项目(*) 结果 标记 量程 参考范围 单位 #>
     $g = New-Object System.Windows.Controls.Grid
     foreach ($w in @(0, $Script:RptCol.Result, $Script:RptCol.Mark, $Script:RptCol.Bar, $Script:RptCol.Ref, $Script:RptCol.Unit)) {
         $cd = New-Object System.Windows.Controls.ColumnDefinition
@@ -1392,25 +1129,20 @@ function Add-RptAct {
     <# 往一行的处置位里塞一个控件，顺手把处置位显形 #>
     param($Row, $Control)
     if ($null -eq $Row -or $null -eq $Control) { return }
-    if ($Control -is [System.Windows.Controls.Control]) { $Control.Margin = New-Thick 0 0 8 6 }
+    if ($Control -is [System.Windows.Controls.Control]) { $Control.Margin = New-Thick 0 0 8 8 }
     $Row.Act.Children.Add($Control) | Out-Null
     $Row.Act.Visibility = 'Visible'
 }
 
 function New-ActRow {
     <#
-      一行处置项：左边项目名 + 一行小字说明，右边动作。
-      返回 @{ Row; Slot; Note }
-
-      ★ 别再用圆角卡片装这些 ★
-        上一版这一页是四张带底色的圆角卡叠下来。卡片本身不携带任何信息，
-        只是把页面切成四块 —— 四块一样大，读者反而分不出哪件事更重要。
-        一条细线做同样的分隔，而且不抢墨。
+      一行处置项：左边名字 + 一行小字说明，右边动作。返回 @{ Row; Slot; Note; Name }
+      放在卡片里，行与行之间一条 Stroke 细线（最后一行由 Close-CardRows 收掉）。
     #>
     param([string]$Name, [string]$Note = '')
     $wrap = New-Object System.Windows.Controls.Border
-    $wrap.Padding = New-Thick 0 11 0 11
-    $wrap.BorderBrush = Get-Brush $Script:CARD_BORDER
+    $wrap.Padding = New-Thick 0 12 0 12
+    $wrap.BorderBrush = Get-Brush 'Stroke'
     $wrap.BorderThickness = New-Thick 0 0 0 1
 
     $g = New-Object System.Windows.Controls.Grid
@@ -1423,10 +1155,10 @@ function New-ActRow {
 
     $left = New-Object System.Windows.Controls.StackPanel
     $left.VerticalAlignment = 'Center'
-    $nm = New-TextBlock -Text $Name -Size 15 -Color '#2B2A26' -Wrap $true
+    $nm = New-TextBlock -Text $Name -Size 14 -Bold $true -Wrap $true
     $left.Children.Add($nm) | Out-Null
-    $nt = New-TextBlock -Text $Note -Size 13 -Color '#66635B' -Wrap $true
-    $nt.Margin = New-Thick 0 3 0 0
+    $nt = New-TextBlock -Text $Note -Size 12 -Color 'TextDim' -Wrap $true
+    $nt.Margin = New-Thick 0 4 0 0
     if (-not $Note) { $nt.Visibility = 'Collapsed' }
     $left.Children.Add($nt) | Out-Null
     $g.Children.Add($left) | Out-Null
@@ -1434,7 +1166,7 @@ function New-ActRow {
     $slot = New-Object System.Windows.Controls.StackPanel
     $slot.Orientation = 'Horizontal'
     $slot.VerticalAlignment = 'Center'
-    $slot.Margin = New-Thick 18 0 0 0
+    $slot.Margin = New-Thick 24 0 0 0
     [System.Windows.Controls.Grid]::SetColumn($slot, 1)
     $g.Children.Add($slot) | Out-Null
 
@@ -1442,106 +1174,97 @@ function New-ActRow {
     return @{ Row = $wrap; Slot = $slot; Note = $nt; Name = $nm }
 }
 
+function Close-CardRows {
+    <# 卡片里最后一行不画底线 —— 卡片自己的描边就是边界，两条线叠在一起显脏 #>
+    param($Panel)
+    if ($null -eq $Panel -or $Panel.Children.Count -eq 0) { return }
+    $last = $Panel.Children[$Panel.Children.Count - 1]
+    if ($last -is [System.Windows.Controls.Border] -and $last.BorderThickness.Bottom -eq 1 -and $last.BorderThickness.Top -eq 0) {
+        $last.BorderThickness = New-Thick 0
+    }
+}
+
 function New-RptHeader {
-    <# 表头行：项目 / 结果 / 参考范围 / 单位，下面一条粗线 #>
+    <# 表头行：项目 / 结果 / 占了多少 / 安全范围 / 单位，下面一条 StrokeMed 线 #>
     param([string]$First = '项目')
     $sp = New-Object System.Windows.Controls.StackPanel
+    $sp.Margin = New-Thick 0 4 0 0
 
     $g = New-RptGrid
-    $g.Margin = New-Thick 0 0 0 6
+    $g.Margin = New-Thick 0 0 0 8
     $cells = @(
         @{ T = $First; Col = 0; Align = 'Left' },
         @{ T = '结果'; Col = 1; Align = 'Right' },
-        @{ T = ''; Col = 2; Align = 'Center' },
         @{ T = '占了多少'; Col = 3; Align = 'Left' },
         @{ T = '安全范围'; Col = 4; Align = 'Right' },
         @{ T = '单位'; Col = 5; Align = 'Right' })
     foreach ($c in $cells) {
-        if (-not $c.T) { continue }
-        $t = New-TextBlock -Text $c.T -Size 13 -Color '#66635B'
-        $t.FontWeight = 'SemiBold'
+        $t = New-TextBlock -Text $c.T -Size 11 -Color 'TextDim'
         $t.HorizontalAlignment = $c.Align
         [System.Windows.Controls.Grid]::SetColumn($t, $c.Col)
         $g.Children.Add($t) | Out-Null
     }
     $sp.Children.Add($g) | Out-Null
 
-    # 表头下那条粗线。报告单上这条线是分隔「栏目名」和「数据」的，必须比行间线重
     $rule = New-Object System.Windows.Shapes.Rectangle
-    $rule.Height = 1.5
-    $rule.Fill = Get-Brush '#D2D0C9'     # BorderMed
+    $rule.Height = 1
+    $rule.Fill = Get-Brush 'StrokeMed'
     $sp.Children.Add($rule) | Out-Null
     return $sp
 }
 
 function New-RptRow {
     <#
-      一行检验项目。返回 @{ Row; Name; Result; Mark; Ref; Unit; Note }
-
-      Mark 取值：'' / '*' / '↑' / '↓' / '↑↑' / '—'
-      只有 ↑ ↓ ↑↑ 会上法定墨并加粗；其余一律消色普通字重。
+      一行读数。返回 @{ Row; Name; Result; Mark; Ref; Unit; Note; Bar; Act }
+      Mark：'' / '*' / '↑' / '↓' / '↑↑' / '—'。只有 ↑ ↓ ↑↑ 上高危红并加粗；其余一律安静。
     #>
     param(
-        [string]$Name = '',
-        [string]$Result = '',
-        [string]$Mark = '',
-        [string]$Ref = '',
-        [string]$Unit = '',
-        [string]$Note = '',
-        [bool]$Zebra = $false,
-        [bool]$NoBar = $false
+        [string]$Name = '', [string]$Result = '', [string]$Mark = '', [string]$Ref = '',
+        [string]$Unit = '', [string]$Note = '', [bool]$Zebra = $false, [bool]$NoBar = $false
     )
     $wrap = New-Object System.Windows.Controls.Border
-    $wrap.Padding = New-Thick 0 9 0 9
-    $wrap.BorderBrush = Get-Brush $Script:CARD_BORDER
-    $wrap.BorderThickness = New-Thick 0 0 0 1     # 行间细线
-    if ($Zebra) { $wrap.Background = Get-Brush '#EAE9E3' }   # SurfaceAlt
+    $wrap.Padding = New-Thick 0 12 0 12
+    $wrap.BorderBrush = Get-Brush 'Stroke'
+    $wrap.BorderThickness = New-Thick 0 0 0 1
+    if ($Zebra) { $wrap.Background = Get-Brush 'SurfaceAlt' }
 
     $outer = New-Object System.Windows.Controls.StackPanel
     $g = New-RptGrid
 
-    # --- 项目名 ---
-    $nm = New-TextBlock -Text $Name -Size 15 -Color '#2B2A26' -Wrap $true
+    $nm = New-TextBlock -Text $Name -Size 14 -Wrap $true
     $nm.VerticalAlignment = 'Center'
-    [System.Windows.Controls.Grid]::SetColumn($nm, 0)
     $g.Children.Add($nm) | Out-Null
 
-    # --- 结果（等宽数位，右对齐）---
-    #   ★ 必须表格数位 ★ 不加的话 1 比 8 窄，每秒刷新时整列左右抖
-    $rs = New-TextBlock -Text $Result -Size 22 -Color '#2B2A26'
+    # 结果：MiSans Semibold + 表格数位，右对齐
+    $rs = New-TextBlock -Text $Result -Size 16 -Bold $true
     $rs.HorizontalAlignment = 'Right'
     $rs.VerticalAlignment = 'Center'
     [System.Windows.Documents.Typography]::SetNumeralAlignment($rs, 'Tabular')
     [System.Windows.Controls.Grid]::SetColumn($rs, 1)
     $g.Children.Add($rs) | Out-Null
 
-    # --- 标记 ---
-    $mk = New-TextBlock -Text $Mark -Size 15 -Color '#4A4842'
+    $mk = New-TextBlock -Text $Mark -Size 14 -Color 'TextDim'
     $mk.HorizontalAlignment = 'Center'
     $mk.VerticalAlignment = 'Center'
     [System.Windows.Controls.Grid]::SetColumn($mk, 2)
     $g.Children.Add($mk) | Out-Null
 
-    # --- 量程与合格区间 ---
-    #   化验单自带的那张图：一条量程、一段合格区间、一个刻记。
-    #   它比圆环多一层信息 —— 不只是「你多少」，而是「你在合格区间的哪」。
     $bar = New-RangeBar
-    # 没有量程可言的项（「一键维护」这种纯操作行）不画空槽 ——
-    # 画一条永远空着的量程，等于对用户承诺了一个并不存在的测量。
+    $bar.Host.Margin = New-Thick 16 0 0 0
+    $bar.Host.Width = $Script:BarW - 16
+    # 没有量程可言的项不画空槽 —— 画一条永远空着的量程，等于承诺了一个不存在的测量
     if ($NoBar) { $bar.Host.Visibility = 'Collapsed' }
     [System.Windows.Controls.Grid]::SetColumn($bar.Host, 3)
     $g.Children.Add($bar.Host) | Out-Null
 
-    # --- 参考范围 ---
-    $rf = New-TextBlock -Text $Ref -Size 14 -Color '#66635B'
+    $rf = New-TextBlock -Text $Ref -Size 12 -Color 'TextDim'
     $rf.HorizontalAlignment = 'Right'
     $rf.VerticalAlignment = 'Center'
     [System.Windows.Documents.Typography]::SetNumeralAlignment($rf, 'Tabular')
     [System.Windows.Controls.Grid]::SetColumn($rf, 4)
     $g.Children.Add($rf) | Out-Null
 
-    # --- 单位 ---
-    $un = New-TextBlock -Text $Unit -Size 13 -Color '#66635B'
+    $un = New-TextBlock -Text $Unit -Size 11 -Color 'TextDim'
     $un.HorizontalAlignment = 'Right'
     $un.VerticalAlignment = 'Center'
     [System.Windows.Controls.Grid]::SetColumn($un, 5)
@@ -1549,24 +1272,15 @@ function New-RptRow {
 
     $outer.Children.Add($g) | Out-Null
 
-    # --- 附注（项目名下方的小字，不占表格列）---
-    $nt = New-TextBlock -Text $Note -Size 13 -Color '#66635B' -Wrap $true
-    $nt.Margin = New-Thick 0 3 0 0
+    $nt = New-TextBlock -Text $Note -Size 12 -Color 'TextDim' -Wrap $true
+    $nt.Margin = New-Thick 0 4 0 0
     if (-not $Note) { $nt.Visibility = 'Collapsed' }
     $outer.Children.Add($nt) | Out-Null
 
-    # --- 处置位 ---
-    #   报告单上「处置 / 医嘱」是跟在那一行结论后面的，不另开一栏。
-    #   界面上同理：能对这一项做的操作就排在它的附注下面，
-    #   而不是收进页尾一排按钮里让用户自己对号。
-    #   没人往里塞控件就不占高度。
-    #   ★ WrapPanel，不是横排 StackPanel ★
-    #     刷新率那一行有八个档位按钮，横排会顶出行宽。
-    #   ★ WrapPanel 在 System.Windows.Controls，不在 .Primitives ★
-    #     （UniformGrid 才在 Primitives。写错了 New-Object 返回 $null，
-    #       后面每一句都在 $null 上操作，界面少一块但不报错 —— 踩过。）
+    # 处置位：能对这一项做的操作排在它的附注下面。
+    # ★ WrapPanel ★ 刷新率那一行有八个档位按钮，横排会顶出行宽。
     $act = New-Object System.Windows.Controls.WrapPanel
-    $act.Margin = New-Thick 0 7 0 0
+    $act.Margin = New-Thick 0 12 0 0
     $act.Visibility = 'Collapsed'
     $outer.Children.Add($act) | Out-Null
 
@@ -1577,72 +1291,61 @@ function New-RptRow {
 }
 
 function Set-RptMark {
-    <#
-      设置一行的标记，并按标记决定结果值的墨色与字重。
-
-      【正常值不标色、不加粗】
-        这是报告单可信的来源：满页平静，只有真出问题的那几行跳出来。
-        如果每一行都有颜色，异常就不再显眼 —— 那正是上一版的毛病。
-    #>
+    <# 设置一行的标记，并按标记决定结果值的颜色。正常值不标色 —— 满页平静，只有真出问题的那几行跳出来。 #>
     param($Row, [string]$Mark)
     if ($null -eq $Row) { return }
     $Row.Mark.Text = $Mark
     $abnormal = ($Mark -eq '↑' -or $Mark -eq '↓' -or $Mark -eq '↑↑' -or $Mark -eq '↓↓')
     if ($abnormal) {
-        # 法定墨：色号写的是「高危」那一个，换肤映射表会把它翻成当前皮肤的法定墨
         $Row.Result.Foreground = Get-Brush '#8A5750'
-        $Row.Result.FontWeight = 'SemiBold'
         $Row.Mark.Foreground = Get-Brush '#8A5750'
         $Row.Mark.FontWeight = 'SemiBold'
     } else {
-        $Row.Result.Foreground = Get-Brush '#2B2A26'
-        $Row.Result.FontWeight = 'Normal'
-        $Row.Mark.Foreground = Get-Brush '#66635B'
+        $Row.Result.Foreground = Get-Brush 'TextMain'
+        $Row.Mark.Foreground = Get-Brush 'TextDim'
         $Row.Mark.FontWeight = 'Normal'
     }
 }
 
 function New-RptSection {
-    <# 分区标题 + 下方一条细线。报告单用分区把「血常规 / 肝功能」分开 #>
-    param([string]$Title, [string]$Aside = '')
-    $sp = New-Object System.Windows.Controls.StackPanel
-    $sp.Margin = New-Thick 0 0 0 8
-
+    <# 卡片标题：section 16 Semibold（可带一个图标）+ 右边一行灰字 #>
+    param([string]$Title, [string]$Aside = '', [string]$Icon = '')
     $row = New-Object System.Windows.Controls.Grid
-    $t = New-TextBlock -Text $Title -Size 17 -Bold $true
-    $row.Children.Add($t) | Out-Null
+    $row.Margin = New-Thick 0 0 0 12
+    $left = New-Object System.Windows.Controls.StackPanel
+    $left.Orientation = 'Horizontal'
+    if ($Icon) {
+        $ic = New-Icon -Kind $Icon -Size 20 -Color 'TextDim'
+        $ic.Margin = New-Thick 0 0 8 0
+        $left.Children.Add($ic) | Out-Null
+    }
+    $t = New-TextBlock -Text $Title -Size 16 -Bold $true
+    $t.VerticalAlignment = 'Center'
+    $left.Children.Add($t) | Out-Null
+    $row.Children.Add($left) | Out-Null
     if ($Aside) {
-        $a = New-TextBlock -Text $Aside -Size 13 -Color '#66635B'
+        $a = New-TextBlock -Text $Aside -Size 12 -Color 'TextDim'
         $a.HorizontalAlignment = 'Right'
-        $a.VerticalAlignment = 'Bottom'
-        $a.Margin = New-Thick 0 0 0 1
+        $a.VerticalAlignment = 'Center'
         $row.Children.Add($a) | Out-Null
     }
-    $sp.Children.Add($row) | Out-Null
-
-    $rule = New-Object System.Windows.Shapes.Rectangle
-    $rule.Height = 1
-    $rule.Fill = Get-Brush $Script:CARD_BORDER
-    $rule.Margin = New-Thick 0 6 0 0
-    $sp.Children.Add($rule) | Out-Null
-    return $sp
+    return $row
 }
 
 function Add-ColHeader {
     <#
-      在列表容器顶部插一行列名 + 一条表头粗线。
-
-      直接作为 panel 的第一个子元素插进去，不动 XAML ——
-      一个函数覆盖多页，而且表头跟着列表一起重建，换肤时不会留旧配色。
-
+      在列表容器顶部插一行列名 + 一条 StrokeMed 线。
       ★ 宽度必须和行里的列轨完全一致 ★ 否则列名对不上下面的数。
+      Indent 是第一列文字的左缩进（列表行有 12 的内边距 + 勾选框）。
     #>
-    param($Panel, [string]$First = '检验项目', $Cols = @(), [double]$Indent = 26)
+    param($Panel, [string]$First = '检验项目', $Cols = @(), [double]$Indent = 44)
     if ($null -eq $Panel) { return }
 
     $wrap = New-Object System.Windows.Controls.StackPanel
+    $wrap.Margin = New-Thick 0 0 0 8
 
     $g = New-Object System.Windows.Controls.Grid
+    $g.Margin = New-Thick 0 4 12 8
     $cd0 = New-Object System.Windows.Controls.ColumnDefinition
     $cd0.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
     $g.ColumnDefinitions.Add($cd0)
@@ -1652,15 +1355,13 @@ function Add-ColHeader {
         $g.ColumnDefinitions.Add($cd)
     }
 
-    $t0 = New-TextBlock -Text $First -Size 13 -Color '#66635B'
-    $t0.FontWeight = 'SemiBold'
+    $t0 = New-TextBlock -Text $First -Size 11 -Color 'TextDim'
     $t0.Margin = New-Thick $Indent 0 0 0
     $g.Children.Add($t0) | Out-Null
 
     $i = 1
     foreach ($c in $Cols) {
-        $t = New-TextBlock -Text $c.T -Size 13 -Color '#66635B'
-        $t.FontWeight = 'SemiBold'
+        $t = New-TextBlock -Text $c.T -Size 11 -Color 'TextDim'
         $t.TextAlignment = 'Right'
         [System.Windows.Controls.Grid]::SetColumn($t, $i)
         $g.Children.Add($t) | Out-Null
@@ -1669,9 +1370,8 @@ function Add-ColHeader {
     $wrap.Children.Add($g) | Out-Null
 
     $rule = New-Object System.Windows.Shapes.Rectangle
-    $rule.Height = 1.5
-    $rule.Fill = Get-Brush '#D2D0C9'
-    $rule.Margin = New-Thick 0 6 0 0
+    $rule.Height = 1
+    $rule.Fill = Get-Brush 'StrokeMed'
     $wrap.Children.Add($rule) | Out-Null
 
     $Panel.Children.Add($wrap) | Out-Null
@@ -1679,34 +1379,18 @@ function Add-ColHeader {
 
 function New-Badge {
     <#
-      报告单上的「标注」，不是徽章。
-
-      【过去这里是圆角药丸 + 底色】
-        一行上挂三四个彩色药丸，是 SaaS 后台的长相；
-        而且它违反了这一版的核心法则 ——
-        **颜色只在标记上，阅读区永远消色**（见 .impeccable\surfaces\pctuner-ps1.md）。
-        一页几十个彩色色块之后，真正超差的那一项就再也跳不出来了。
-
-      化验单上的标注长这样：小字、消色、项与项之间用竖线分开；
-      只有**超出参考范围**的那一个上法定墨。
-      所以这里不给底色、不给圆角，靠字号和墨色区分。
-
-      $Bg 参数保留是为了不用改 21 处调用点 —— 它现在只用来判断
-      「这是不是一个异常标注」：底色属于语义色系的就上法定墨。
+      一个小徽章（design.md 4.9）：label 11 字号、圆角 6、语义前景 + 语义底成对。
+      中性的（分类名、大小）用 TextDim 压 SurfaceSunken。
     #>
     param([string]$Text, [string]$Fg, [string]$Bg)
-
-    $b = New-Object System.Windows.Controls.Border
-    $b.Background = [System.Windows.Media.Brushes]::Transparent
-    $b.Padding = New-Thick 0 0 0 0
-    $b.Margin = New-Thick 0 0 12 2
-    $b.VerticalAlignment = 'Center'      # 不加这句，标注和旁边的文字会错开半行
-
-    # 语义色系的前景（绿/卡其/玫瑰/陶）保留原色号，换肤映射表会把它
-    # 翻成当前皮肤的墨；中性色一律降成次要墨。
     $isSemantic = $Fg -in @('#556B54', '#7A6B45', '#8A5750', '#89694F')
-    $tb = New-TextBlock -Text $Text -Size 11.5 -Color $(if ($isSemantic) { $Fg } else { '#66635B' })
-    if ($isSemantic) { $tb.FontWeight = 'SemiBold' }
+    $b = New-Object System.Windows.Controls.Border
+    $b.CornerRadius = New-Corner 6
+    $b.Padding = New-Thick 8 2 8 2
+    $b.Margin = New-Thick 0 0 8 4
+    $b.VerticalAlignment = 'Center'
+    $b.Background = Get-Brush $(if ($isSemantic) { Get-TintBg $Fg } else { 'SurfaceSunken' })
+    $tb = New-TextBlock -Text $Text -Size 11 -Color $(if ($isSemantic) { $Fg } else { 'TextMid' })
     $b.Child = $tb
     return $b
 }
@@ -1714,758 +1398,834 @@ function New-Badge {
 function Get-RiskColors {
     param([string]$Risk)
     switch ($Risk) {
-        '低' { return @{ Fg = '#556B54'; Bg = '#E2E7E0' } }
+        '低' { return @{ Fg = '#556B54'; Bg = '#E7EBE4' } }
         '中' { return @{ Fg = '#7A6B45'; Bg = '#EDE7D9' } }
         '高' { return @{ Fg = '#8A5750'; Bg = '#EDE0DD' } }
-        default { return @{ Fg = '#66635B'; Bg = '#E8E7E2' } }
+        default { return @{ Fg = 'TextDim'; Bg = 'SurfaceSunken' } }
     }
 }
 
 # ---------------------------------------------------------------------
 #  4. 界面布局（XAML）
 # ---------------------------------------------------------------------
+#  两份 XAML：
+#    ① 全局样式字典 —— MDIX 主题 + 我们把它压扁平的那几个样式。挂在 Application 上，
+#       主窗口和所有弹窗都拿得到
+#    ② 主窗口 —— 侧边栏 + 顶栏 + 页面容器 + 状态栏
+#
+#  ★ MDIX 的主题字典写在 XAML 里，由 XAML 解析器去设 Source ★
+#    在 PowerShell 里写 $rd.Source = … 会被当成往字典里塞一个叫 Source 的键，
+#    样式静默不生效（v4 时以为是 HandyControl 的 bug，其实就是这个）。
+# ---------------------------------------------------------------------
+$appStylesXaml = @'
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes">
+  <ResourceDictionary.MergedDictionaries>
+    <!-- 主色 = Accent #5B5FD6。深浅由 Set-AppTheme 调 set_BaseTheme 切 -->
+    <md:CustomColorTheme BaseTheme="Light" PrimaryColor="#5B5FD6" SecondaryColor="#5B5FD6"/>
+    <!-- 选 MaterialDesign3 而不是 2：M3 的按钮默认不转大写、圆角更大、控件更轻，
+         离「扁平、干净」更近；2 的按钮是 Material 早期那种浮起来的方块。 -->
+    <ResourceDictionary Source="pack://application:,,,/MaterialDesignThemes.Wpf;component/Themes/MaterialDesign3.Defaults.xaml"/>
+  </ResourceDictionary.MergedDictionaries>
+
+  <!-- 色槽默认值（浅色）。运行时由 Set-AppTheme 整体替换，见 design.md 1.1 -->
+  <SolidColorBrush x:Key="Canvas" Color="#F4F5FA"/>
+  <SolidColorBrush x:Key="Sidebar" Color="#FFFFFF"/>
+  <SolidColorBrush x:Key="Card" Color="#FFFFFF"/>
+  <SolidColorBrush x:Key="CardHover" Color="#F7F8FC"/>
+  <SolidColorBrush x:Key="SurfaceAlt" Color="#F7F8FC"/>
+  <SolidColorBrush x:Key="SurfaceSunken" Color="#EEF0F6"/>
+  <SolidColorBrush x:Key="Stroke" Color="#ECEEF4"/>
+  <SolidColorBrush x:Key="StrokeMed" Color="#E2E5EE"/>
+  <SolidColorBrush x:Key="StrokeStrong" Color="#C9CDE0"/>
+  <SolidColorBrush x:Key="TextMain" Color="#1E2046"/>
+  <SolidColorBrush x:Key="TextMid" Color="#4A4E6D"/>
+  <SolidColorBrush x:Key="TextDim" Color="#666A88"/>
+  <SolidColorBrush x:Key="Accent" Color="#5B5FD6"/>
+  <SolidColorBrush x:Key="AccentHover" Color="#7478E0"/>
+  <SolidColorBrush x:Key="AccentPressed" Color="#4B53B8"/>
+  <SolidColorBrush x:Key="AccentTint" Color="#EEEFFC"/>
+  <SolidColorBrush x:Key="OnAccent" Color="#FFFFFF"/>
+  <SolidColorBrush x:Key="HeroFill" Color="#4B53B8"/>
+  <SolidColorBrush x:Key="OnHero" Color="#FFFFFF"/>
+  <SolidColorBrush x:Key="OnHeroDim" Color="#D4D6F7"/>
+  <SolidColorBrush x:Key="OnHeroTrack" Color="#6B72C9"/>
+  <SolidColorBrush x:Key="SemBad" Color="#8A5750"/>
+  <SolidColorBrush x:Key="SemBadBg" Color="#EDE0DD"/>
+  <SolidColorBrush x:Key="OnSemBad" Color="#FFFFFF"/>
+
+  <!-- 键盘焦点：1px 实线框，不是系统的黑点线（键盘操作的人全靠它） -->
+  <Style x:Key="AppFocusVisual">
+    <Setter Property="Control.Template">
+      <Setter.Value>
+        <ControlTemplate>
+          <Rectangle Margin="-2" StrokeThickness="1" RadiusX="8" RadiusY="8" SnapsToDevicePixels="True"
+                     Stroke="{DynamicResource StrokeStrong}"/>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- ================================================================
+       按钮（design.md 4.3）—— 把 MDIX 的按钮压扁平：
+         · ElevationAssist = Dp0：没有 Material 那种浮起来的阴影
+         · 圆角 8、高 36、字号 12
+         · 水波纹留着，颜色在 Set-AppTheme 里压淡
+       ================================================================ -->
+  <!-- 次按钮 = 默认按钮：白底 + 1px 边 -->
+  <Style TargetType="Button" BasedOn="{StaticResource MaterialDesignOutlinedButton}">
+    <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+    <Setter Property="Background" Value="{DynamicResource Card}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource StrokeMed}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Height" Value="36"/>
+    <Setter Property="Padding" Value="16,0"/>
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="FontWeight" Value="Normal"/>
+    <Setter Property="Margin" Value="0,0,8,0"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
+    <Setter Property="md:ButtonAssist.CornerRadius" Value="8"/>
+    <Setter Property="md:ElevationAssist.Elevation" Value="Dp0"/>
+    <Setter Property="md:RippleAssist.Feedback" Value="{DynamicResource Accent}"/>
+    <Setter Property="md:RippleAssist.RippleSizeMultiplier" Value="1"/>
+  </Style>
+
+  <!-- 主按钮：强调色实底。一屏只许一个 -->
+  <Style x:Key="ButtonPrimary" TargetType="Button" BasedOn="{StaticResource MaterialDesignRaisedButton}">
+    <Setter Property="Foreground" Value="{DynamicResource OnAccent}"/>
+    <Setter Property="Background" Value="{DynamicResource Accent}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+    <Setter Property="Height" Value="36"/>
+    <Setter Property="Padding" Value="16,0"/>
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="Margin" Value="0,0,8,0"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
+    <Setter Property="md:ButtonAssist.CornerRadius" Value="8"/>
+    <Setter Property="md:ElevationAssist.Elevation" Value="Dp0"/>
+    <Setter Property="md:RippleAssist.Feedback" Value="#FFFFFF"/>
+  </Style>
+
+  <!-- 危险按钮：高危红实底（语义色，换肤只换明暗） -->
+  <Style x:Key="ButtonDanger" TargetType="Button" BasedOn="{StaticResource ButtonPrimary}">
+    <Setter Property="Background" Value="{DynamicResource SemBad}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource SemBad}"/>
+    <Setter Property="Foreground" Value="{DynamicResource OnSemBad}"/>
+  </Style>
+
+  <!-- 图标按钮：顶栏的换肤切换 -->
+  <Style x:Key="ButtonIcon" TargetType="Button" BasedOn="{StaticResource MaterialDesignIconButton}">
+    <Setter Property="Foreground" Value="{DynamicResource TextMid}"/>
+    <Setter Property="Width" Value="36"/>
+    <Setter Property="Height" Value="36"/>
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="md:RippleAssist.Feedback" Value="{DynamicResource Accent}"/>
+  </Style>
+
+  <Style TargetType="CheckBox" BasedOn="{StaticResource MaterialDesignCheckBox}">
+    <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
+    <Setter Property="md:RippleAssist.Feedback" Value="{DynamicResource Accent}"/>
+  </Style>
+
+  <!-- 搜索框：描边输入框，前置放大镜，占位字不浮动（design.md 4.10） -->
+  <Style x:Key="SearchBox" TargetType="TextBox" BasedOn="{StaticResource MaterialDesignOutlinedTextBox}">
+    <Setter Property="Height" Value="36"/>
+    <Setter Property="Padding" Value="8,0,8,0"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="VerticalContentAlignment" Value="Center"/>
+    <Setter Property="Background" Value="{DynamicResource Card}"/>
+    <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource TextMain}"/>
+    <Setter Property="SelectionBrush" Value="{DynamicResource Accent}"/>
+    <Setter Property="md:HintAssist.IsFloating" Value="False"/>
+    <Setter Property="md:HintAssist.Foreground" Value="{DynamicResource Accent}"/>
+    <Setter Property="md:TextFieldAssist.TextFieldCornerRadius" Value="8"/>
+    <Setter Property="md:TextFieldAssist.HasLeadingIcon" Value="True"/>
+    <Setter Property="md:TextFieldAssist.LeadingIcon" Value="Magnify"/>
+    <Setter Property="md:TextFieldAssist.LeadingIconSize" Value="18"/>
+    <Setter Property="md:TextFieldAssist.HasClearButton" Value="True"/>
+  </Style>
+
+
+  <!-- ================================================================
+       滚动条（design.md 4.10）：8px 细条、圆角、没有上下箭头。
+       系统默认那种带箭头的粗灰条，一出现整页就不像同一套东西了。
+       ================================================================ -->
+  <Style x:Key="ThinThumb" TargetType="Thumb">
+    <Setter Property="OverridesDefaultStyle" Value="True"/>
+    <Setter Property="IsTabStop" Value="False"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Thumb">
+          <Border x:Name="T" CornerRadius="4" Background="{DynamicResource StrokeStrong}"/>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="T" Property="Background" Value="{DynamicResource TextDim}"/>
+            </Trigger>
+            <Trigger Property="IsDragging" Value="True">
+              <Setter TargetName="T" Property="Background" Value="{DynamicResource TextMid}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="ThinPage" TargetType="RepeatButton">
+    <Setter Property="OverridesDefaultStyle" Value="True"/>
+    <Setter Property="Focusable" Value="False"/>
+    <Setter Property="IsTabStop" Value="False"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="RepeatButton">
+          <Border Background="Transparent"/>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style TargetType="ScrollBar">
+    <Setter Property="OverridesDefaultStyle" Value="True"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Width" Value="8"/>
+    <Setter Property="MinWidth" Value="8"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ScrollBar">
+          <Grid Background="Transparent">
+            <Track x:Name="PART_Track" IsDirectionReversed="True">
+              <Track.DecreaseRepeatButton>
+                <RepeatButton Style="{StaticResource ThinPage}" Command="ScrollBar.PageUpCommand"/>
+              </Track.DecreaseRepeatButton>
+              <Track.Thumb>
+                <Thumb Style="{StaticResource ThinThumb}" Margin="1,2"/>
+              </Track.Thumb>
+              <Track.IncreaseRepeatButton>
+                <RepeatButton Style="{StaticResource ThinPage}" Command="ScrollBar.PageDownCommand"/>
+              </Track.IncreaseRepeatButton>
+            </Track>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+    <Style.Triggers>
+      <Trigger Property="Orientation" Value="Horizontal">
+        <Setter Property="Width" Value="Auto"/>
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="Height" Value="8"/>
+        <Setter Property="MinHeight" Value="8"/>
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ScrollBar">
+              <Grid Background="Transparent">
+                <Track x:Name="PART_Track" IsDirectionReversed="False">
+                  <Track.DecreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource ThinPage}" Command="ScrollBar.PageLeftCommand"/>
+                  </Track.DecreaseRepeatButton>
+                  <Track.Thumb>
+                    <Thumb Style="{StaticResource ThinThumb}" Margin="2,1"/>
+                  </Track.Thumb>
+                  <Track.IncreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource ThinPage}" Command="ScrollBar.PageRightCommand"/>
+                  </Track.IncreaseRepeatButton>
+                </Track>
+              </Grid>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+
+  <!-- 卡片：Card 底 + 1px Stroke + 圆角 12 + 内边距 20，零阴影（design.md 4.4） -->
+  <Style x:Key="CardBorder" TargetType="Border">
+    <Setter Property="Background" Value="{DynamicResource Card}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource Stroke}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="12"/>
+    <Setter Property="Padding" Value="20"/>
+  </Style>
+  <!-- 列表卡：内边距 8，里面的行自己带 12 的内边距 -->
+  <Style x:Key="ListCardBorder" TargetType="Border" BasedOn="{StaticResource CardBorder}">
+    <Setter Property="Padding" Value="8"/>
+  </Style>
+
+  <Style x:Key="Hint" TargetType="TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource TextDim}"/>
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="TextWrapping" Value="Wrap"/>
+    <Setter Property="LineHeight" Value="20"/>
+  </Style>
+
+  <!-- ================================================================
+       页面容器：TabControl 收起页签条，只留内容区
+       页签条的活交给左侧边栏；TabControl 留着是因为全程序几十处代码
+       靠它的 SelectedIndex / SelectedItem 判断当前在哪一页，出图模式也靠它按页拍。
+
+       切页动画 = MDIX 的 TransitioningContent：淡入 + 上移，200ms。
+       ★ 它只在第一次加载时自己播 ★ 之后每次切页由 SelectionChanged 调 Invoke-PageTransition 重播
+         （MDIX 5.3 实测：RunHint 绑到 SelectedIndex 不会触发重播，透明度一直是 1）。
+       「个性化」里关掉动画时，窗口上的 TransitionAssist.DisableTransitions 会让它瞬间完成。
+       ================================================================ -->
+  <Style x:Key="PageHost" TargetType="TabControl">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="TabControl">
+          <Grid>
+            <TabPanel x:Name="HeaderPanel" IsItemsHost="True" Visibility="Collapsed"/>
+            <md:TransitioningContent x:Name="PageTransition" OpeningEffectsOffset="0:0:0">
+              <md:TransitioningContent.OpeningEffects>
+                <md:TransitionEffect Kind="FadeIn" Duration="0:0:0.2"/>
+                <md:TransitionEffect Kind="SlideInFromBottom" Duration="0:0:0.2"/>
+              </md:TransitioningContent.OpeningEffects>
+              <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"/>
+            </md:TransitioningContent>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+</ResourceDictionary>
+'@
+
+$Script:AppStyles = $null
+if ($Script:MdLoaded) {
+    try {
+        $Script:AppStyles = [Windows.Markup.XamlReader]::Parse($appStylesXaml)
+        [System.Windows.Application]::Current.Resources.MergedDictionaries.Add($Script:AppStyles)
+        # 换深浅时要调它的 set_BaseTheme
+        $Script:MdTheme = $Script:AppStyles.MergedDictionaries[0]
+    } catch { $Script:MdLoadError = "界面样式加载失败：$($_.Exception.Message)" }
+}
+
 $xamlText = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:hc="https://handyorg.github.io/handycontrol"
-        Title="电脑调优助手" Height="800" Width="1240" MinHeight="620" MinWidth="1000"
-        WindowStartupLocation="CenterScreen" Background="{DynamicResource WindowBg}" Foreground="{DynamicResource TextMain}"
-        FontFamily="Microsoft YaHei UI, Segoe UI" FontSize="14"
+        xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes"
+        Title="电脑调优助手" Height="820" Width="1280" MinHeight="640" MinWidth="1080"
+        WindowStartupLocation="CenterScreen" Background="{DynamicResource Canvas}" Foreground="{DynamicResource TextMain}"
+        FontSize="13" TextElement.Foreground="{DynamicResource TextMain}"
         TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType">
   <Window.Resources>
-    <!-- 换肤用的中性色与主色。运行时由 Apply-Theme 整体替换。
-         注意：绿/红/卡其那几个语义色故意不在这里 —— 换肤不能改变「高危」的颜色。 -->
-    <SolidColorBrush x:Key="Accent" Color="#55606F"/>
-    <SolidColorBrush x:Key="AccentDark" Color="#39424E"/>
-    <SolidColorBrush x:Key="AccentLight" Color="#7F8A99"/>
-    <SolidColorBrush x:Key="AccentTint" Color="#E4E7EC"/>
-    <SolidColorBrush x:Key="BorderMed" Color="#D6D4CD"/>
-    <SolidColorBrush x:Key="BorderSoft" Color="#DDDBD5"/>
-    <SolidColorBrush x:Key="BorderStrong" Color="#C6C4BC"/>
-    <SolidColorBrush x:Key="CardBg" Color="#F6F5F2"/>
-    <SolidColorBrush x:Key="NeutralTint" Color="#E8E7E2"/>
-    <SolidColorBrush x:Key="OnAccent" Color="#FFFFFF"/>
-    <SolidColorBrush x:Key="PanelBg" Color="#FBFAF8"/>
-    <SolidColorBrush x:Key="ScrollThumbBg" Color="#CBC9C1"/>
-    <SolidColorBrush x:Key="ScrollThumbDrag" Color="#9E9B91"/>
-    <SolidColorBrush x:Key="ScrollThumbHover" Color="#B5B2A9"/>
-    <SolidColorBrush x:Key="SurfaceAlt" Color="#EDECE8"/>
-    <SolidColorBrush x:Key="SurfaceSunken" Color="#E5E3DC"/>
-    <SolidColorBrush x:Key="TextDim" Color="#6E6B63"/>
-    <SolidColorBrush x:Key="TextMain" Color="#2B2A26"/>
-    <SolidColorBrush x:Key="TextMid" Color="#4A4842"/>
-    <SolidColorBrush x:Key="WindowBg" Color="#E4E3DE"/>
-
     <Style TargetType="TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
     </Style>
-
-    <!-- ================================================================
-         你没画的那些地方，一样在承载设计
-
-         文本选中的高亮、输入光标、键盘焦点框 —— 这三样 WPF 都给了
-         **系统默认值**，不属于任何设计系统：
-           · 选中高亮是系统蓝 #3399FF，压在这套完全消色的界面上
-             像别人的东西掉进来了
-           · 焦点框是**黑色点线**，在近黑背景上等于没有 ——
-             而键盘操作的人全靠它，这是无障碍问题不是美观问题
-         把它们接到调色板上，是区分「做出来的」和「拼出来的」最便宜的一步。
-         ================================================================ -->
-
-    <!-- 键盘焦点：1px 实线框，用边框强调色，不是系统的黑点线 -->
-    <Style x:Key="AppFocusVisual">
-      <Setter Property="Control.Template">
-        <Setter.Value>
-          <ControlTemplate>
-            <Rectangle Margin="-2" StrokeThickness="1" SnapsToDevicePixels="True"
-                       Stroke="{DynamicResource BorderStrong}"/>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
-    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
-    </Style>
-    <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
-      <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
-    </Style>
-
-    <!-- 输入框：选中高亮和光标都走调色板 -->
-    <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-      <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
-      <Setter Property="SelectionBrush" Value="{DynamicResource BorderStrong}"/>
-      <Setter Property="SelectionOpacity" Value="0.45"/>
-      <Setter Property="CaretBrush" Value="{DynamicResource TextMain}"/>
-    </Style>
-
-    <!-- ================================================================
-         v4.0 起，控件样式全部交给 HandyControl。
-
-         这里以前有 11 个手写样式（滚动条 / 复选框 / 输入框 / 进度条 /
-         按钮 / 页签 / TabControl），共两百多行，现在一条不留。
-
-         能这么干，是因为 HandyControl 的控件模板内部引用的是
-         RegionBrush / PrimaryTextBrush / BorderBrush 这些键，
-         而上面那批画笔在换肤时会把这些键一起覆盖掉
-         （见 Modules\Theme.ps1 的 $Script:HcBrushMap）。
-         所以「库出模板、我们出颜色」，两边都不用将就。
-
-         要强调色按钮用 {DynamicResource ButtonPrimary}，
-         危险按钮用 {DynamicResource ButtonDanger}，都是库里现成的。
-         ================================================================ -->
-
-    <!-- ================================================================
-         页签样式 —— ★ 全app唯一一个手写回来的控件模板 ★
-
-         v4.0 起样式全交给 HandyControl，这里破一次例，理由：
-         库自带的页签会在选中项下面画一条自己的指示线，位置和颜色都归它管。
-         而我们要的是一条**在页签之间滑过去**的指示条 —— 两条线并存必然打架，
-         所以得先把库那条收掉，自己画。
-
-         模板本身刻意做得极简：没有底色、没有圆角、没有药丸。
-         一排页签在报告单上就是一排栏目名，选中的那个字重一些、墨深一些，
-         剩下交给下面那条会滑动的线。
-         ================================================================ -->
-    <!-- ================================================================
-         主按钮 —— ★ 这个键盖掉了 HandyControl 的同名键 ★
-
-         窗口自己的资源字典优先于它合并进来的库字典，所以所有写
-         {DynamicResource ButtonPrimary} 和 FindResource('ButtonPrimary')
-         的地方会自动拿到这一个，一处调用点都不用改。
-
-         两件事让它比一块平色高级：
-           1. 一层几乎看不见的竖向渐变（白 7% -> 透明）。纯平色看着像贴纸，
-              有一点点由上到下的光就有了厚度。
-           2. 悬停时一道高光斜着扫过，520ms，一次，不循环。
-              循环的光是广告牌；扫一次是回应 —— 它在说「我收到你的鼠标了」。
-
-         禁用态不上色，只掉到下沉面 + 灰字 ——「禁用即未上墨」。
-         ================================================================ -->
-    <Style x:Key="ButtonPrimary" TargetType="Button">
-      <Setter Property="Foreground" Value="{DynamicResource OnAccent}"/>
-      <Setter Property="Background" Value="{DynamicResource Accent}"/>
-      <Setter Property="FontSize" Value="13.5"/>
-      <Setter Property="Padding" Value="18,8,18,9"/>
-      <Setter Property="Margin" Value="0,0,8,0"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="SnapsToDevicePixels" Value="True"/>
-      <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="Bd" CornerRadius="3" Background="{TemplateBinding Background}"
-                    ClipToBounds="True" SnapsToDevicePixels="True">
-              <Grid>
-                <!-- 厚度：一层极淡的竖向渐变 -->
-                <Rectangle x:Name="Sheen" RadiusX="3" RadiusY="3">
-                  <Rectangle.Fill>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                      <GradientStop Color="#12FFFFFF" Offset="0"/>
-                      <GradientStop Color="#00FFFFFF" Offset="0.62"/>
-                      <GradientStop Color="#0C000000" Offset="1"/>
-                    </LinearGradientBrush>
-                  </Rectangle.Fill>
-                </Rectangle>
-
-                <!-- 高光。斜着放，扫过去比横着有速度感 -->
-                <Rectangle x:Name="Glare" Width="70" HorizontalAlignment="Left" Opacity="0">
-                  <Rectangle.Fill>
-                    <LinearGradientBrush StartPoint="0,1" EndPoint="1,0">
-                      <GradientStop Color="#00FFFFFF" Offset="0"/>
-                      <GradientStop Color="#3DFFFFFF" Offset="0.5"/>
-                      <GradientStop Color="#00FFFFFF" Offset="1"/>
-                    </LinearGradientBrush>
-                  </Rectangle.Fill>
-                  <Rectangle.RenderTransform>
-                    <TranslateTransform x:Name="GlareT" X="-90"/>
-                  </Rectangle.RenderTransform>
-                </Rectangle>
-
-                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
-                                  Margin="{TemplateBinding Padding}"
-                                  RecognizesAccessKey="True"/>
-              </Grid>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentLight}"/>
-                <Trigger.EnterActions>
-                  <BeginStoryboard>
-                    <Storyboard>
-                      <DoubleAnimation Storyboard.TargetName="GlareT" Storyboard.TargetProperty="X"
-                                       From="-90" To="340" Duration="0:0:0.52">
-                        <DoubleAnimation.EasingFunction>
-                          <CubicEase EasingMode="EaseOut"/>
-                        </DoubleAnimation.EasingFunction>
-                      </DoubleAnimation>
-                      <DoubleAnimation Storyboard.TargetName="Glare" Storyboard.TargetProperty="Opacity"
-                                       From="0" To="1" Duration="0:0:0.10"/>
-                      <DoubleAnimation Storyboard.TargetName="Glare" Storyboard.TargetProperty="Opacity"
-                                       To="0" BeginTime="0:0:0.26" Duration="0:0:0.26"/>
-                    </Storyboard>
-                  </BeginStoryboard>
-                </Trigger.EnterActions>
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentDark}"/>
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceSunken}"/>
-                <Setter TargetName="Sheen" Property="Opacity" Value="0"/>
-                <Setter Property="Foreground" Value="{DynamicResource TextDim}"/>
-                <Setter Property="Cursor" Value="Arrow"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
-    <Style TargetType="TabItem" x:Key="ReportTab">
-      <Setter Property="Foreground" Value="{DynamicResource TextDim}"/>
-      <Setter Property="FontSize" Value="14.5"/>
-      <Setter Property="Padding" Value="15,9,15,11"/>
-      <Setter Property="Margin" Value="0,0,4,0"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="TabItem">
-            <Border x:Name="Bd" Background="Transparent" Padding="{TemplateBinding Padding}"
-                    SnapsToDevicePixels="True">
-              <ContentPresenter x:Name="Cp" ContentSource="Header"
-                                HorizontalAlignment="Center" VerticalAlignment="Center"
-                                TextElement.Foreground="{TemplateBinding Foreground}"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Cp" Property="TextElement.Foreground" Value="{DynamicResource TextMid}"/>
-              </Trigger>
-              <Trigger Property="IsSelected" Value="True">
-                <Setter TargetName="Cp" Property="TextElement.Foreground" Value="{DynamicResource TextMain}"/>
-                <Setter TargetName="Cp" Property="TextElement.FontWeight" Value="SemiBold"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
   </Window.Resources>
 
   <Grid>
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="*"/>
-      <RowDefinition Height="Auto"/>
-    </Grid.RowDefinitions>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="232"/>
+      <ColumnDefinition Width="*"/>
+    </Grid.ColumnDefinitions>
 
     <!-- ================================================================
-         报告单页眉
-
-         【不做「品牌 banner」】
-           一张检验报告的抬头不是 logo 墙，是四个事实：
-           这是什么报告、给哪台机器出的、什么时候出的、编号是多少。
-           陌生人下载一个会改注册表的工具，第一眼要看到的就是这四条 ——
-           它们合起来说明「这东西在如实记录，不是在推销加速」。
-
-         【下面那条粗线是报告单的表头线】
-           整个界面靠线重分层，不靠卡片和阴影。
+         侧边栏（design.md 4.5）：白底、右侧一条淡描边
+         导航项由 Build-NavUI 按分组画出来
          ================================================================ -->
-    <Border Grid.Row="0" Background="{DynamicResource PanelBg}" Padding="28,16,28,0"
-            BorderBrush="{DynamicResource BorderMed}" BorderThickness="0,0,0,1.5">
+    <Border Grid.Column="0" x:Name="SidebarBox" Background="{DynamicResource Sidebar}"
+            BorderBrush="{DynamicResource Stroke}" BorderThickness="0,0,1,0">
       <Grid>
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
           <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-
-        <Grid Grid.Row="0">
-          <StackPanel>
-            <TextBlock x:Name="RptTitle" Text="系统检验报告" FontSize="20" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextMain}"/>
-            <TextBlock x:Name="SubTitle" Text="" FontSize="12" Foreground="{DynamicResource TextDim}" Margin="0,3,0,0"/>
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="24,24,16,8">
+          <Border Width="36" Height="36" CornerRadius="8" Background="{DynamicResource Accent}">
+            <md:PackIcon Kind="SpeedometerMedium" Width="22" Height="22" Foreground="{DynamicResource OnAccent}"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+            <TextBlock Text="电脑调优助手" FontSize="16" FontWeight="SemiBold"/>
+            <TextBlock x:Name="AppVerText" Text="" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="0,2,0,0"/>
           </StackPanel>
-          <StackPanel HorizontalAlignment="Right" VerticalAlignment="Top">
-            <TextBlock x:Name="RptNo" Text="" FontSize="12" Foreground="{DynamicResource TextDim}"
-                       HorizontalAlignment="Right" Typography.NumeralAlignment="Tabular"/>
-            <TextBlock x:Name="RptDate" Text="" FontSize="12" Foreground="{DynamicResource TextDim}"
-                       HorizontalAlignment="Right" Margin="0,3,0,0" Typography.NumeralAlignment="Tabular"/>
-          </StackPanel>
-        </Grid>
-
-        <!-- 全局动作跟着页眉走，不单独做一条工具栏 -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,12">
-          <CheckBox x:Name="ChkRestorePoint" Content="动手前自动创建系统还原点" IsChecked="True"
-                    Foreground="{DynamicResource TextDim}" FontSize="12" Margin="0,0,16,0"/>
-          <Button x:Name="BtnRestorePoint" Content="立即创建还原点"/>
+        </StackPanel>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel x:Name="NavPanel" Margin="16,8,16,16"/>
+        </ScrollViewer>
+        <StackPanel Grid.Row="2" Margin="28,12,16,20">
+          <TextBlock x:Name="RptNo" Text="" FontSize="11" Foreground="{DynamicResource TextDim}" Typography.NumeralAlignment="Tabular"/>
+          <TextBlock x:Name="RptDate" Text="" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="0,4,0,0" Typography.NumeralAlignment="Tabular"/>
         </StackPanel>
       </Grid>
     </Border>
 
-    <!-- ========== 主体 ========== -->
-    <!-- ★ ItemContainerStyle 必须显式指，光写隐式 Style 没用 ★
-           HandyControl 的 TabControl 样式自己 set 了 ItemContainerStyle，
-           而显式设的容器样式优先级高于隐式样式 ——
-           所以我们写的那个 TabItem 样式压根儿没生效，
-           页签下面一直是库的默认蓝 #326CF3，换什么皮肤都不变。 -->
-    <TabControl Grid.Row="1" x:Name="Tabs" Background="Transparent" BorderThickness="0" Padding="0" Margin="14,10,14,0"
-                ItemContainerStyle="{StaticResource ReportTab}">
-      <!-- 指示条见根 Grid 最后那层 TabInkLayer -->
+    <Grid Grid.Column="1">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
 
       <!-- ================================================================
-           概览（v4.1 新增，排第一页）
-
-           这一页的存在理由：以前打开工具，第一眼是一堆勾选框列表，
-           用户不知道自己电脑现在到底什么状态、该不该动手。
-           现在先给一个「体检分 + 实时硬件读数」的整体印象。
-
-           温度 / 风扇 / 各核心频率来自 LibreHardwareMonitorLib，
-           读不到的一律显示「—」，绝不编数字（见 Modules\Dash.ps1）。
+           顶栏（design.md 4.6）：页面标题 + 受检机器；右边全局动作和换肤
            ================================================================ -->
-      <TabItem Header="概览">
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-          <Grid Margin="28,20,28,20">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="300"/>
-            </Grid.ColumnDefinitions>
+      <Border Grid.Row="0" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Stroke}"
+              BorderThickness="0,0,0,1" Padding="24,16,24,16" MinHeight="72">
+        <Grid>
+          <StackPanel VerticalAlignment="Center">
+            <TextBlock x:Name="PageTitle" Text="概览" FontSize="20" FontWeight="SemiBold"/>
+            <TextBlock x:Name="SubTitle" Text="" FontSize="12" Foreground="{DynamicResource TextDim}" Margin="0,4,0,0"
+                       TextTrimming="CharacterEllipsis"/>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <CheckBox x:Name="ChkRestorePoint" Content="动手前自动创建系统还原点" IsChecked="True"
+                      Foreground="{DynamicResource TextMid}" FontSize="12" Margin="0,0,16,0" VerticalAlignment="Center"/>
+            <Button x:Name="BtnRestorePoint" Content="立即创建还原点"/>
+            <Button x:Name="BtnThemeToggle" Style="{DynamicResource ButtonIcon}" ToolTip="切换浅色 / 深色" Margin="4,0,0,0">
+              <md:PackIcon x:Name="ThemeIcon" Kind="WeatherNight" Width="20" Height="20"/>
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Border>
 
-            <StackPanel Grid.Column="0" Margin="0,0,40,0">
+      <TabControl Grid.Row="1" x:Name="Tabs" Style="{DynamicResource PageHost}">
 
-              <!-- ============================================================
-                   本次检验摘要
-
-                   【这里过去是四张圆角卡 + 大数字 + sparkline】
-                     那是 craft-floor 明令拒绝的两样东西叠在一起：
-                     「hero-metric 模板」和「sparkline 当内容用」。
-                     换成四栏表之后，同样的四个数字多带了一栏
-                     **参考范围** —— 那一栏才是这个产品真正独有的东西：
-                     同一个值对不同机器、不同用途，合格线本来就不一样。
-                   ============================================================ -->
-              <StackPanel x:Name="DashSummary"/>
-
-              <!-- 检验结论：一行判定 + 超差项的备注 -->
-              <StackPanel x:Name="DashVerdict" Margin="0,28,0,0"/>
-
-            </StackPanel>
-
-            <!-- ============================================================
-                 右栏：按用途选
-
-                 放右边而不是底部，是因为它是「选择受检类别」——
-                 化验单上「按年龄/性别选参考范围」也是登记信息，
-                 不是结果的一部分。选了它，左边整张表的参考范围会变。
-                 ============================================================ -->
-            <StackPanel Grid.Column="1">
-              <StackPanel x:Name="DashPickHead"/>
-              <StackPanel x:Name="DashQuickPick" Margin="0,4,0,0"/>
-
-              <!-- 签发区：报告单右下角那一块 -->
-              <StackPanel x:Name="DashSignOff" Margin="0,32,0,0"/>
-            </StackPanel>
-          </Grid>
-        </ScrollViewer>
-      </TabItem>
-
-      <!-- 第一页：性能优化 -->
-      <TabItem Header="性能优化">
-        <Grid Margin="0">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="430"/>
-          </Grid.ColumnDefinitions>
-          <Grid Grid.Column="0" Margin="16,14,8,14">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
-              <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <!-- ================================================================
-                 预设区。【必须可以收起】
-                   12 张卡片分三组排开有 490px 高，而整个左栏只有 610px ——
-                   展开着的时候，下面那个「优化项列表」会被挤成 0 高度，
-                   用户在这一页上根本看不见自己要勾的东西。
-                   所以点完预设（= 已经做完选择）就自动收起，
-                   抬头那一行随时能再点开。
-                 ================================================================ -->
-            <Border Grid.Row="0" Background="{DynamicResource CardBg}" CornerRadius="8" BorderBrush="{DynamicResource BorderMed}"
-                    BorderThickness="1" Padding="14,9" Margin="0,0,0,8">
-              <StackPanel>
-                <!-- ★ 整个预设区并成一行 ★
-                       这一页的主角是下面那 55 个优化项（老板定位：鼓励用户
-                       自己手动调整）。预设区原来占 200px、内容区的三分之一，
-                       把列表挤得只剩 3 行，主次完全颠倒。
-                       组名、四个选项、「更多」全排进同一行，压到约 44px。 -->
-                <Grid>
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                  </Grid.ColumnDefinitions>
-
-                  <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0">
-                    <Border Width="3" Height="15" CornerRadius="1" VerticalAlignment="Center"
-                            Background="{DynamicResource TextMid}" Margin="0,0,8,0"/>
-                    <TextBlock Text="按用途选" FontSize="14" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextMain}" VerticalAlignment="Center"/>
-                  </StackPanel>
-
-                  <!-- 卡片区。★ 必须是竖向 StackPanel，不能是 WrapPanel ★
-                       内层 WrapPanel 的期望宽度一变，外层就会把内容横着甩乱。 -->
-                  <StackPanel x:Name="PresetPrimary" Grid.Column="1" VerticalAlignment="Center"/>
-
-                  <!-- 其余分组默认收起：12 张卡全展开有 490px 高，
-                       展开着的时候下面的列表会被挤没。 -->
-                  <StackPanel x:Name="PresetHeader" Grid.Column="2" Orientation="Horizontal"
-                              Cursor="Hand" Background="Transparent" VerticalAlignment="Center" Margin="14,0,0,0">
-                    <TextBlock x:Name="PresetMoreHint" Text="更多"
-                               Foreground="{DynamicResource TextDim}" FontSize="12.5" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="PresetToggle" Text="展开" FontSize="12.5"
-                               Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="8,0,2,0"/>
-                  </StackPanel>
-                </Grid>
-                <StackPanel x:Name="PresetBody" Margin="0,8,0,0" Visibility="Collapsed">
-                  <StackPanel x:Name="PresetBar"/>
-                </StackPanel>
-              </StackPanel>
-            </Border>
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
-              <Grid Width="200" Margin="0,0,10,0">
-                <TextBox x:Name="TweakSearch"/>
-                <TextBlock x:Name="TweakSearchHint" Text="搜索优化项…" Foreground="{DynamicResource TextDim}" FontSize="12.5"
-                           Margin="11,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
-              </Grid>
-              <Button x:Name="BtnPickRecommended" Content="勾选通用推荐项"/>
-              <Button x:Name="BtnPickNone" Content="全部不选"/>
-              <Button x:Name="BtnRescan" Content="重新检测状态"/>
-            </StackPanel>
-            <!-- 四栏表头。没有它，右边那三列就是三串没名字的东西 -->
-            <Grid Grid.Row="2" Margin="0,4,10,0">
+        <!-- ============================================================
+             概览：卡片网格（design.md 5.1）
+             第一行 主角卡（健康度）+ 两张温度卡；第二行 内存 / 系统盘 / 实时占用；
+             第三行 检验结论（宽）+ 受检类别
+             温度 / 风扇 / 频率来自 LibreHardwareMonitorLib，读不到一律「—」
+             ============================================================ -->
+        <TabItem Header="概览">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Grid Margin="24">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="66"/>
-                <ColumnDefinition Width="24"/>
-                <ColumnDefinition Width="76"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="*"/>
               </Grid.ColumnDefinitions>
-              <TextBlock Text="检验项目" Grid.Column="0" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}" Margin="26,0,0,0"/>
-              <TextBlock Text="结果" Grid.Column="1" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
-              <TextBlock Text="安全范围" Grid.Column="3" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="16"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="16"/>
+                <RowDefinition Height="Auto"/>
+              </Grid.RowDefinitions>
+              <StackPanel x:Name="DashSummary" Grid.Row="0" Grid.ColumnSpan="5"/>
+              <Border x:Name="DashHero" Grid.Row="1" Grid.Column="0" Background="{DynamicResource HeroFill}" CornerRadius="12" Padding="24"/>
+              <Border x:Name="DashCell1" Grid.Row="1" Grid.Column="2" Style="{DynamicResource CardBorder}"/>
+              <Border x:Name="DashCell2" Grid.Row="1" Grid.Column="4" Style="{DynamicResource CardBorder}"/>
+              <Border x:Name="DashCell3" Grid.Row="3" Grid.Column="0" Style="{DynamicResource CardBorder}"/>
+              <Border x:Name="DashCell4" Grid.Row="3" Grid.Column="2" Style="{DynamicResource CardBorder}"/>
+              <Border x:Name="DashCell5" Grid.Row="3" Grid.Column="4" Style="{DynamicResource CardBorder}"/>
+              <Border Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3" Style="{DynamicResource CardBorder}">
+                <StackPanel x:Name="DashVerdict"/>
+              </Border>
+              <Border Grid.Row="5" Grid.Column="4" Style="{DynamicResource CardBorder}">
+                <StackPanel>
+                  <StackPanel x:Name="DashPickHead"/>
+                  <StackPanel x:Name="DashQuickPick" Margin="0,4,0,0"/>
+                  <StackPanel x:Name="DashSignOff" Margin="0,24,0,0"/>
+                </StackPanel>
+              </Border>
             </Grid>
-            <Rectangle Grid.Row="3" Height="1.5" Fill="{DynamicResource BorderMed}" Margin="0,6,10,0"/>
-            <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-              <StackPanel x:Name="TweakPanel" Margin="0,0,10,0"/>
-            </ScrollViewer>
-            <Border Grid.Row="5" BorderBrush="{DynamicResource BorderMed}" BorderThickness="0,1,0,0" Padding="0,12,0,0" Margin="0,10,0,0">
-              <StackPanel Orientation="Horizontal">
+          </ScrollViewer>
+        </TabItem>
+
+        <!-- 性能优化：左边预设 + 列表，右边说明 -->
+        <TabItem Header="性能优化">
+          <Grid Margin="24">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="16"/>
+              <ColumnDefinition Width="400"/>
+            </Grid.ColumnDefinitions>
+            <Grid Grid.Column="0">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+              </Grid.RowDefinitions>
+              <!-- ============================================================
+                   预设区。【必须可以收起】12 个预设全展开会把下面的列表挤成 0 高度。
+                   常驻的只有「按用途选」一行，其余两组点「更多」展开。
+                   ============================================================ -->
+              <Border Grid.Row="0" Style="{DynamicResource CardBorder}" Padding="16,12">
+                <StackPanel>
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,16,0">
+                      <md:PackIcon Kind="TuneVariant" Width="20" Height="20" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center"/>
+                      <TextBlock Text="按用途选" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                    </StackPanel>
+                    <StackPanel x:Name="PresetPrimary" Grid.Column="1" VerticalAlignment="Center"/>
+                    <StackPanel x:Name="PresetHeader" Grid.Column="2" Orientation="Horizontal"
+                                Cursor="Hand" Background="Transparent" VerticalAlignment="Center" Margin="16,0,0,0">
+                      <TextBlock x:Name="PresetMoreHint" Text="更多" Foreground="{DynamicResource TextDim}" FontSize="12" VerticalAlignment="Center"/>
+                      <TextBlock x:Name="PresetToggle" Text="展开" FontSize="12" FontWeight="SemiBold"
+                                 Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                    </StackPanel>
+                  </Grid>
+                  <StackPanel x:Name="PresetBody" Margin="0,12,0,0" Visibility="Collapsed">
+                    <StackPanel x:Name="PresetBar"/>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+              <WrapPanel Grid.Row="1" Margin="0,16,0,16">
+                <TextBox x:Name="TweakSearch" Style="{DynamicResource SearchBox}" Width="220" Margin="0,0,8,0"
+                         md:HintAssist.Hint="搜索优化项…"/>
+                <Button x:Name="BtnPickRecommended" Content="勾选通用推荐项"/>
+                <Button x:Name="BtnPickNone" Content="全部不选"/>
+                <Button x:Name="BtnRescan" Content="重新检测状态"/>
+              </WrapPanel>
+              <Border Grid.Row="2" Style="{DynamicResource ListCardBorder}">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                  </Grid.RowDefinitions>
+                  <!-- 列名。没有它，右边那三列就是三串没名字的东西 -->
+                  <StackPanel Grid.Row="0">
+                    <Grid Margin="0,4,24,8">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="72"/>
+                        <ColumnDefinition Width="24"/>
+                        <ColumnDefinition Width="80"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Text="检验项目" Grid.Column="0" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="44,0,0,0"/>
+                      <TextBlock Text="结果" Grid.Column="1" FontSize="11" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
+                      <TextBlock Text="安全范围" Grid.Column="3" FontSize="11" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
+                    </Grid>
+                    <Rectangle Height="1" Fill="{DynamicResource StrokeMed}" Margin="12,0,12,4"/>
+                  </StackPanel>
+                  <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="TweakPanel" Margin="0,0,4,0"/>
+                  </ScrollViewer>
+                </Grid>
+              </Border>
+              <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,16,0,0">
                 <Button x:Name="BtnApplySelected" Content="应用选中的优化" Style="{DynamicResource ButtonPrimary}"/>
                 <Button x:Name="BtnRevertSelected" Content="还原选中的优化"/>
                 <Button x:Name="BtnRevertAll" Content="全部还原为系统默认" Style="{DynamicResource ButtonDanger}"/>
-                <TextBlock x:Name="TweakSelCount" Text="" Foreground="{DynamicResource TextDim}" FontSize="12.5"
-                           VerticalAlignment="Center" Margin="6,0,0,0"/>
+                <TextBlock x:Name="TweakSelCount" Text="" Foreground="{DynamicResource TextDim}" FontSize="12"
+                           VerticalAlignment="Center" Margin="8,0,0,0"/>
               </StackPanel>
+            </Grid>
+            <Border Grid.Column="2" Style="{DynamicResource CardBorder}" Padding="0">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="TweakDetail" Margin="20"/>
+              </ScrollViewer>
             </Border>
           </Grid>
-          <Border Grid.Column="1" Background="{DynamicResource PanelBg}" Margin="8,14,16,14" CornerRadius="10" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1">
-            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="18,16">
-              <StackPanel x:Name="TweakDetail"/>
-            </ScrollViewer>
-          </Border>
-        </Grid>
-      </TabItem>
+        </TabItem>
 
-      <!-- 第二页：垃圾清理 -->
-      <TabItem Header="垃圾清理">
+        <!-- 垃圾清理 -->
+        <TabItem Header="垃圾清理">
+          <Grid Margin="24">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="16"/>
+              <ColumnDefinition Width="400"/>
+            </Grid.ColumnDefinitions>
+            <Grid Grid.Column="0">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+              </Grid.RowDefinitions>
+              <WrapPanel Grid.Row="0" Margin="0,0,0,16">
+                <TextBox x:Name="CleanSearch" Style="{DynamicResource SearchBox}" Width="180" Margin="0,0,8,0"
+                         md:HintAssist.Hint="搜索清理项…"/>
+                <Button x:Name="BtnScanJunk" Content="扫描可清理的垃圾"/>
+                <Button x:Name="BtnPickCleanRec" Content="勾选推荐项"/>
+                <Button x:Name="BtnPickCleanNone" Content="全部不选"/>
+                <TextBlock x:Name="TotalJunkText" Text="还没扫描" Foreground="{DynamicResource TextDim}" FontSize="12"
+                           VerticalAlignment="Center" Margin="8,10,0,0"/>
+              </WrapPanel>
+              <Border Grid.Row="1" Style="{DynamicResource ListCardBorder}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                  <StackPanel x:Name="CleanPanel" Margin="0,0,4,0"/>
+                </ScrollViewer>
+              </Border>
+              <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,16,0,0">
+                <Button x:Name="BtnClean" Content="开始清理选中项" Style="{DynamicResource ButtonPrimary}"/>
+                <TextBlock x:Name="CleanSelCount" Text="" Foreground="{DynamicResource TextDim}" FontSize="12"
+                           VerticalAlignment="Center" Margin="8,0,0,0"/>
+              </StackPanel>
+            </Grid>
+            <Border Grid.Column="2" Style="{DynamicResource CardBorder}" Padding="0">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="CleanDetail" Margin="20"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- 日常维护：左边一摞处置卡，右边大文件查找 -->
+        <TabItem Header="日常维护">
+          <Grid Margin="24">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="16"/>
+              <ColumnDefinition Width="400"/>
+            </Grid.ColumnDefinitions>
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel x:Name="MaintainPanel" Margin="0,0,4,0"/>
+            </ScrollViewer>
+            <Border Grid.Column="2" Style="{DynamicResource CardBorder}">
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <StackPanel Grid.Row="0">
+                  <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                    <md:PackIcon Kind="FileSearchOutline" Width="20" Height="20" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center"/>
+                    <TextBlock Text="大文件查找" FontSize="16" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                  </StackPanel>
+                  <TextBlock Style="{DynamicResource Hint}"
+                             Text="「我的 C 盘到底被什么占满了」—— 点一个盘符开始扫描，列出最大的 40 个文件。只列出来给你看，不会自动删任何东西。扫描要一两分钟。"/>
+                  <WrapPanel x:Name="BigFileDrives" Margin="0,12,0,8"/>
+                </StackPanel>
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+                  <StackPanel x:Name="BigFilePanel"/>
+                </ScrollViewer>
+              </Grid>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- 弹窗排查：左边扫自启位置，右边抓现行 -->
+        <TabItem Header="弹窗排查">
+          <Grid Margin="24">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="16"/>
+              <ColumnDefinition Width="440"/>
+            </Grid.ColumnDefinitions>
+            <Grid Grid.Column="0">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="16"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <Border Grid.Row="0" Style="{DynamicResource CardBorder}">
+                <StackPanel>
+                  <TextBlock TextWrapping="Wrap" FontSize="13" LineHeight="21" Foreground="{DynamicResource TextMid}"
+                             Text="黑框一闪而过、一次弹好几个 —— 那是有程序在后台调用命令行但没把窗口藏好。这里会把所有「会在后台执行命令」的地方扫一遍，按可疑程度排序。"/>
+                  <WrapPanel Margin="0,16,0,0">
+                    <Button x:Name="BtnInspect" Content="开始扫描" Style="{DynamicResource ButtonPrimary}"/>
+                    <Button x:Name="BtnInspectFilter" Content="只看会弹黑框的"/>
+                    <TextBlock x:Name="InspectSummary" Text="还没扫描" Foreground="{DynamicResource TextDim}"
+                               VerticalAlignment="Center" Margin="8,10,0,0" FontSize="12"/>
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
+              <Border Grid.Row="2" Style="{DynamicResource ListCardBorder}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                  <StackPanel x:Name="InspectPanel" Margin="12,4,12,4"/>
+                </ScrollViewer>
+              </Border>
+            </Grid>
+            <Border Grid.Column="2" Style="{DynamicResource CardBorder}">
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <StackPanel Grid.Row="0">
+                  <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                    <md:PackIcon Kind="ConsoleLine" Width="20" Height="20" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center"/>
+                    <TextBlock Text="抓现行" FontSize="16" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                  </StackPanel>
+                  <TextBlock Style="{DynamicResource Hint}"
+                             Text="左边扫的是「开机会自动跑什么」。但弹窗也可能来自某个已经在运行的程序定期开的子进程 —— 那种情况扫任何自启位置都找不到。这里直接盯「新建进程」，不管它藏在哪都跑不掉。"/>
+
+                  <TextBlock Text="实时监控" FontSize="14" FontWeight="SemiBold" Margin="0,24,0,0"/>
+                  <TextBlock Style="{DynamicResource Hint}" Margin="0,4,0,0"
+                             Text="最快，立等可取。点「开始监控」后正常用电脑，等黑框出现 —— 出现的瞬间就会记下是谁开的、它的父进程是谁。"/>
+                  <WrapPanel Margin="0,12,0,0">
+                    <Button x:Name="BtnWatchStart" Content="开始监控"/>
+                    <Button x:Name="BtnWatchStop" Content="停止" IsEnabled="False"/>
+                  </WrapPanel>
+
+                  <Rectangle Height="1" Fill="{DynamicResource Stroke}" Margin="0,20,0,0"/>
+                  <TextBlock Text="持续记录" FontSize="14" FontWeight="SemiBold" Margin="0,20,0,0"/>
+                  <TextBlock Style="{DynamicResource Hint}" Margin="0,4,0,0"
+                             Text="打开系统自带的进程创建审核，关掉本工具也在记，之后随时回来查，带完整命令行。适合「弹窗不定时、蹲不到」的情况。"/>
+                  <WrapPanel Margin="0,12,0,0">
+                    <Button x:Name="BtnProcAudit" Content="开启持续记录" Margin="0,0,8,8"/>
+                    <Button x:Name="BtnProcLog" Content="查看进程记录" Margin="0,0,8,8"/>
+                    <Button x:Name="BtnEnableTaskLog" Content="开启任务记录" Margin="0,0,8,8"/>
+                    <Button x:Name="BtnRecentRuns" Content="查看任务记录" Margin="0,0,8,8"/>
+                  </WrapPanel>
+                  <TextBlock x:Name="WatchStatus" Text="" FontSize="12" Foreground="{DynamicResource TextMid}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                  <StackPanel x:Name="RecentRunPanel"/>
+                </ScrollViewer>
+              </Grid>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- 启动项管理 -->
+        <TabItem Header="启动项管理">
+          <Grid Margin="24">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0" Margin="0,0,0,16">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Button x:Name="BtnRefreshStartup" Content="刷新列表" VerticalAlignment="Top"/>
+              <TextBlock Grid.Column="1" Style="{DynamicResource Hint}" VerticalAlignment="Center" Margin="8,0,0,0"
+                         Text="勾掉复选框 = 禁止开机自启（立即生效，随时能勾回来，不删除任何文件）。标「看情况」的自己判断：认得、且需要它开机就在，就留着；完全没印象的可以先关一天试试。"/>
+            </Grid>
+            <Border Grid.Row="1" Style="{DynamicResource ListCardBorder}">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="StartupPanel" Margin="0,0,4,0"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- 自带软件：微软预装的 UWP 应用，哪些能删哪些不能 -->
+        <TabItem Header="自带软件">
+          <Grid Margin="24">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <WrapPanel Grid.Row="0" Margin="0,0,0,16">
+              <Button x:Name="BtnRefreshAppx" Content="刷新列表"/>
+              <Button x:Name="BtnCheckAppxSafe" Content="勾选「可以删」的"/>
+              <Button x:Name="BtnUninstallAppx" Content="卸载勾选的应用" Style="{DynamicResource ButtonPrimary}"/>
+              <TextBlock x:Name="AppxCounter" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="8,10,0,0" FontSize="12"/>
+            </WrapPanel>
+            <!-- 提示条（design.md 4.4）：全页只此一条 -->
+            <Border Grid.Row="1" Background="{DynamicResource AccentTint}" CornerRadius="8" Padding="16,12" Margin="0,0,0,16">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <md:PackIcon Kind="InformationOutline" Width="20" Height="20" Foreground="{DynamicResource Accent}" VerticalAlignment="Top"/>
+                <TextBlock Grid.Column="1" TextWrapping="Wrap" FontSize="12" LineHeight="20" Foreground="{DynamicResource TextMid}" Margin="12,0,0,0"
+                           Text="卸载只针对当前用户，不动系统镜像 —— 任何一个删错了，都能去 Microsoft Store 搜名字原样装回来。标「必须留」的项勾不上，那些是删了会让系统出毛病的（应用商店、安全中心界面、运行库、解码器）。标「看情况」的先点开说明看完再决定，拿不准就别删。"/>
+              </Grid>
+            </Border>
+            <Border Grid.Row="2" Style="{DynamicResource ListCardBorder}">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="AppxPanel" Margin="0,0,4,0"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- 个性化：换肤 -->
+        <TabItem Header="个性化">
+          <Grid Margin="24">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" TextWrapping="Wrap" FontSize="13" LineHeight="21" Foreground="{DynamicResource TextMid}" Margin="0,0,0,16" MaxWidth="820" HorizontalAlignment="Left"
+                       Text="换肤只改界面的底色、卡片和主色。表示危险程度的那一种墨色是故意不跟着变的 —— 「高危」永远是红的，不能因为换了皮肤看错。选好立刻生效，下次打开自动记住。"/>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel x:Name="ThemePanel" MaxWidth="820" HorizontalAlignment="Left" Margin="0,0,4,0"/>
+            </ScrollViewer>
+          </Grid>
+        </TabItem>
+
+        <!-- 系统体检 -->
+        <TabItem Header="系统体检">
+          <Grid Margin="24">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <!-- ★ 一屏只能有一个主按钮 ★ WrapPanel：窗口拉窄时按钮换行，不会被顶出可视区 -->
+            <WrapPanel Grid.Row="0" Margin="0,0,0,8">
+              <Button x:Name="BtnHealthScan" Content="重新体检" Style="{DynamicResource ButtonPrimary}" Margin="0,0,8,8"/>
+              <Button x:Name="BtnFpsDiag" Content="为什么我帧数没变？" Margin="0,0,8,8"/>
+              <Button x:Name="BtnOcCoach" Content="我能超频吗？" Margin="0,0,8,8"/>
+              <Button x:Name="BtnVendor" Content="该装哪个厂商工具" Margin="0,0,8,8"/>
+              <Button x:Name="BtnAddExclusion" Content="把游戏文件夹加入杀毒白名单" Margin="0,0,8,8"/>
+              <Button x:Name="BtnSfc" Content="检查系统文件完整性" Margin="0,0,8,8"/>
+              <Button x:Name="BtnCopyReport" Content="复制体检报告" Margin="0,0,8,8"/>
+              <Button x:Name="BtnExportReport" Content="导出诊断报告到桌面" Margin="0,0,8,8"/>
+            </WrapPanel>
+            <Grid Grid.Row="1">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="420"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Border Grid.Column="0" Style="{DynamicResource CardBorder}" Padding="0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                  <StackPanel x:Name="InfoPanel" Margin="20"/>
+                </ScrollViewer>
+              </Border>
+              <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="AdvicePanel" Margin="0,0,4,0"/>
+              </ScrollViewer>
+            </Grid>
+          </Grid>
+        </TabItem>
+
+        <!-- 操作日志 -->
+        <TabItem Header="操作日志">
+          <Grid Margin="24">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <WrapPanel Grid.Row="0" Margin="0,0,0,16">
+              <Button x:Name="BtnOpenBackup" Content="打开备份 / 日志文件夹"/>
+              <Button x:Name="BtnCopyLog" Content="复制全部日志"/>
+              <TextBlock Text="所有修改的原始值都保存在备份文件夹里，「还原」功能依赖它，请不要删除。"
+                         Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="8,10,0,0" FontSize="12"/>
+            </WrapPanel>
+            <Border Grid.Row="1" Style="{DynamicResource ListCardBorder}">
+              <ScrollViewer x:Name="LogScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="LogPanel" Margin="12,4,12,4"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+        </TabItem>
+      </TabControl>
+
+      <!-- ========== 状态栏 ========== -->
+      <Border Grid.Row="2" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Stroke}" BorderThickness="0,1,0,0"
+              Padding="24,0" Height="32">
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="430"/>
+            <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
-          <Grid Grid.Column="0" Margin="16,14,8,14">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
-              <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
-              <Grid Width="170" Margin="0,0,10,0">
-                <TextBox x:Name="CleanSearch"/>
-                <TextBlock x:Name="CleanSearchHint" Text="搜索清理项…" Foreground="{DynamicResource TextDim}" FontSize="12.5"
-                           Margin="11,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
-              </Grid>
-              <Button x:Name="BtnScanJunk" Content="扫描可清理的垃圾" Style="{DynamicResource ButtonPrimary}"/>
-              <Button x:Name="BtnPickCleanRec" Content="勾选推荐项"/>
-              <Button x:Name="BtnPickCleanNone" Content="全部不选"/>
-              <TextBlock x:Name="TotalJunkText" Text="还没扫描" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="10,0,0,0"/>
-            </StackPanel>
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-              <StackPanel x:Name="CleanPanel" Margin="0,0,10,0"/>
-            </ScrollViewer>
-            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,12,0,0">
-              <Button x:Name="BtnClean" Content="开始清理选中项" Style="{DynamicResource ButtonPrimary}"/>
-              <TextBlock x:Name="CleanSelCount" Text="" Foreground="{DynamicResource TextDim}" FontSize="12.5"
-                         VerticalAlignment="Center" Margin="6,0,0,0"/>
-            </StackPanel>
-          </Grid>
-          <Border Grid.Column="1" Background="{DynamicResource PanelBg}" Margin="8,14,16,14" CornerRadius="10" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1">
-            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="18,16">
-              <StackPanel x:Name="CleanDetail"/>
-            </ScrollViewer>
-          </Border>
+          <TextBlock Grid.Column="0" x:Name="StatusText" Text="就绪" Foreground="{DynamicResource TextDim}" FontSize="12"
+                     TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+          <ProgressBar Grid.Column="1" x:Name="BusyBar" Width="160" Height="4" IsIndeterminate="True"
+                       Visibility="Collapsed" VerticalAlignment="Center" Margin="16,0,0,0"/>
         </Grid>
-      </TabItem>
+      </Border>
+    </Grid>
 
-      <!-- 第三页：日常维护 -->
-      <TabItem Header="日常维护">
-        <Grid Margin="16,14,16,14">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="480"/>
-          </Grid.ColumnDefinitions>
-          <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,10,0">
-            <StackPanel x:Name="MaintainPanel"/>
-          </ScrollViewer>
-          <Border Grid.Column="1" Background="{DynamicResource PanelBg}" CornerRadius="10" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1">
-            <Grid Margin="16,14,16,14">
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-              </Grid.RowDefinitions>
-              <StackPanel Grid.Row="0">
-                <TextBlock Text="大文件查找" FontSize="17" FontWeight="SemiBold"/>
-                <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextDim}" Margin="0,6,0,0"
-                           Text="「我的 C 盘到底被什么占满了」—— 点一个盘符开始扫描，列出最大的 40 个文件。只列出来给你看，不会自动删任何东西。扫描要一两分钟。"/>
-                <WrapPanel x:Name="BigFileDrives" Margin="0,10,0,6"/>
-              </StackPanel>
-              <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,6,0,0">
-                <StackPanel x:Name="BigFilePanel"/>
-              </ScrollViewer>
-            </Grid>
-          </Border>
-        </Grid>
-      </TabItem>
-
-      <!-- 第四页：弹窗排查 -->
-      <TabItem Header="弹窗排查">
-        <Grid Margin="16,14,16,14">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="470"/>
-          </Grid.ColumnDefinitions>
-          <Grid Grid.Column="0" Margin="0,0,10,0">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
-            <StackPanel Grid.Row="0" Margin="0,0,0,10">
-              <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextMid}"
-                         Text="黑框一闪而过、一次弹好几个 —— 那是有程序在后台调用命令行但没把窗口藏好。这里会把所有「会在后台执行命令」的地方扫一遍，按可疑程度排序。"/>
-              <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                <Button x:Name="BtnInspect" Content="开始扫描" Style="{DynamicResource ButtonPrimary}"/>
-                <Button x:Name="BtnInspectFilter" Content="只看会弹黑框的"/>
-                <TextBlock x:Name="InspectSummary" Text="还没扫描" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="13"/>
-              </StackPanel>
-            </StackPanel>
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-              <StackPanel x:Name="InspectPanel"/>
-            </ScrollViewer>
-          </Grid>
-          <Border Grid.Column="1" Background="{DynamicResource PanelBg}" CornerRadius="10" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1">
-            <Grid Margin="16,14,16,14">
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-              </Grid.RowDefinitions>
-              <!-- ★ 这里以前是两张带底色的圆角盒，标题写「① 实时监控」「② 持续记录」 ★
-                     圆圈数字和 ▶ ■ 是拿 Unicode 符号当图标系统 —— 不同字体里长相不一，
-                     而且它们并没有比「第一步」三个字多说任何东西。
-                     改成分区 + 细线，和全app一套语汇。 -->
-              <StackPanel Grid.Row="0">
-                <TextBlock Text="抓现行" FontSize="17" FontWeight="SemiBold"/>
-                <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextDim}" Margin="0,6,0,0"
-                           Text="左边扫的是「开机会自动跑什么」。但弹窗也可能来自某个已经在运行的程序定期开的子进程 —— 那种情况扫任何自启位置都找不到。这里直接盯「新建进程」，不管它藏在哪都跑不掉。"/>
-
-                <TextBlock Text="实时监控" FontSize="14" FontWeight="SemiBold" Margin="0,18,0,0"/>
-                <Rectangle Height="1" Fill="{DynamicResource BorderSoft}" Margin="0,6,0,0"/>
-                <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextDim}" Margin="0,8,0,0"
-                           Text="最快，立等可取。点「开始监控」后正常用电脑，等黑框出现 —— 出现的瞬间就会记下是谁开的、它的父进程是谁。"/>
-                <WrapPanel Margin="0,9,0,0">
-                  <Button x:Name="BtnWatchStart" Content="开始监控" Style="{DynamicResource ButtonPrimary}"/>
-                  <Button x:Name="BtnWatchStop" Content="停止" IsEnabled="False"/>
-                </WrapPanel>
-
-                <TextBlock Text="持续记录" FontSize="14" FontWeight="SemiBold" Margin="0,18,0,0"/>
-                <Rectangle Height="1" Fill="{DynamicResource BorderSoft}" Margin="0,6,0,0"/>
-                <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextDim}" Margin="0,8,0,0"
-                           Text="打开系统自带的进程创建审核，关掉本工具也在记，之后随时回来查，带完整命令行。适合「弹窗不定时、蹲不到」的情况。"/>
-                <WrapPanel Margin="0,9,0,0">
-                  <Button x:Name="BtnProcAudit" Content="开启持续记录"/>
-                  <Button x:Name="BtnProcLog" Content="查看进程记录"/>
-                  <Button x:Name="BtnEnableTaskLog" Content="开启任务记录"/>
-                  <Button x:Name="BtnRecentRuns" Content="查看任务记录"/>
-                </WrapPanel>
-                <TextBlock x:Name="WatchStatus" Text="" FontSize="13" Foreground="{DynamicResource TextMid}" Margin="0,12,0,0" TextWrapping="Wrap"/>
-              </StackPanel>
-              <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,6,0,0">
-                <StackPanel x:Name="RecentRunPanel"/>
-              </ScrollViewer>
-            </Grid>
-          </Border>
-        </Grid>
-      </TabItem>
-
-      <!-- 第五页：启动项管理 -->
-      <TabItem Header="启动项管理">
-        <Grid Margin="16,14,16,14">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-          </Grid.RowDefinitions>
-          <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
-            <Button x:Name="BtnRefreshStartup" Content="刷新列表"/>
-            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="8,0,0,0" FontSize="12"
-                       Text="勾掉复选框 = 禁止开机自启（立即生效，随时能勾回来，不删除任何文件）。标「看情况」的自己判断：认得、且需要它开机就在，就留着；完全没印象的可以先关一天试试。"/>
-          </StackPanel>
-          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel x:Name="StartupPanel" Margin="0,0,10,0"/>
-          </ScrollViewer>
-        </Grid>
-      </TabItem>
-
-      <!-- 自带软件：微软预装的 UWP 应用，哪些能删哪些不能 -->
-      <TabItem Header="自带软件">
-        <Grid Margin="16,14,16,14">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-          </Grid.RowDefinitions>
-          <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-            <Button x:Name="BtnRefreshAppx" Content="刷新列表"/>
-            <Button x:Name="BtnCheckAppxSafe" Content="勾选「可以删」的"/>
-            <Button x:Name="BtnUninstallAppx" Content="卸载勾选的应用" Style="{DynamicResource ButtonPrimary}"/>
-            <TextBlock x:Name="AppxCounter" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12"/>
-          </StackPanel>
-          <Border Grid.Row="1" Background="{DynamicResource AccentTint}" CornerRadius="6" Padding="12,9" Margin="0,0,0,10">
-            <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextMid}"
-                       Text="卸载只针对当前用户，不动系统镜像 —— 任何一个删错了，都能去 Microsoft Store 搜名字原样装回来。标「必须留」的项勾不上，那些是删了会让系统出毛病的（应用商店、安全中心界面、运行库、解码器）。标「看情况」的先点开说明看完再决定，拿不准就别删。"/>
-          </Border>
-          <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel x:Name="AppxPanel" Margin="0,0,10,0"/>
-          </ScrollViewer>
-        </Grid>
-      </TabItem>
-
-      <!-- 个性化：换肤 -->
-      <TabItem Header="个性化">
-        <Grid Margin="16,14,16,14">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-          </Grid.RowDefinitions>
-          <!-- 这里以前是一个带底色的圆角提示条。底色条是「这句话比别的话重要」的意思，
-               而它只是一句背景说明 —— 抬得比内容还高。改成普通正文。 -->
-          <TextBlock Grid.Row="0" TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextMid}" Margin="0,0,10,14"
-                     Text="换肤只改界面的底色、卡片和主色。表示危险程度的那一种墨色是故意不跟着变的 —— 「高危」永远是红的，不能因为换了皮肤看错。选好立刻生效，下次打开自动记住。"/>
-          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel x:Name="ThemePanel" Margin="0,0,10,0"/>
-          </ScrollViewer>
-        </Grid>
-      </TabItem>
-
-      <!-- 第四页：系统体检 -->
-      <TabItem Header="系统体检">
-        <Grid Margin="16,14,16,14">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-          </Grid.RowDefinitions>
-          <!-- ★ 一屏只能有一个主按钮 ★
-                 原来「重新体检」和「为什么我帧数没变？」都是主按钮样式，
-                 两个一样重就等于都不重，用户不知道该先点哪个。
-                 WrapPanel：窗口拉窄的时候按钮换行，不会被顶出可视区。 -->
-          <WrapPanel Grid.Row="0" Margin="0,0,0,10">
-            <Button x:Name="BtnHealthScan" Content="重新体检" Style="{DynamicResource ButtonPrimary}"/>
-            <Button x:Name="BtnFpsDiag" Content="为什么我帧数没变？"/>
-            <Button x:Name="BtnOcCoach" Content="我能超频吗？"/>
-            <Button x:Name="BtnVendor" Content="该装哪个厂商工具"/>
-            <Button x:Name="BtnAddExclusion" Content="把游戏文件夹加入杀毒白名单"/>
-            <Button x:Name="BtnSfc" Content="检查系统文件完整性"/>
-            <Button x:Name="BtnCopyReport" Content="复制体检报告"/>
-            <Button x:Name="BtnExportReport" Content="导出诊断报告到桌面"/>
-          </WrapPanel>
-          <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="460"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <Border Grid.Column="0" Background="{DynamicResource PanelBg}" CornerRadius="10" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1" Margin="0,0,10,0">
-              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,14">
-                <StackPanel x:Name="InfoPanel"/>
-              </ScrollViewer>
-            </Border>
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-              <StackPanel x:Name="AdvicePanel" Margin="0,0,10,0"/>
-            </ScrollViewer>
-          </Grid>
-        </Grid>
-      </TabItem>
-
-      <!-- 第五页：操作日志 -->
-      <TabItem Header="操作日志">
-        <Grid Margin="16,14,16,14">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-          </Grid.RowDefinitions>
-          <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
-            <Button x:Name="BtnOpenBackup" Content="打开备份 / 日志文件夹"/>
-            <Button x:Name="BtnCopyLog" Content="复制全部日志"/>
-            <TextBlock Text="所有修改的原始值都保存在备份文件夹里，「还原」功能依赖它，请不要删除。"
-                       Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="8,0,0,0" FontSize="13"/>
-          </StackPanel>
-          <!-- ★ 这里以前是一个只读 TextBox ★
-                 HandyControl 的输入框样式把内容竖着居中了，几行日志飘在一个大空框正中间，
-                 看着像出了 bug。而且时间、级别、内容挤在一行纯文本里，扫不出任何结构。
-                 改成三列表：时间 | 类别 | 内容，和全app一套语汇。 -->
-          <ScrollViewer Grid.Row="1" x:Name="LogScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel x:Name="LogPanel" Margin="0,0,10,0"/>
-          </ScrollViewer>
-        </Grid>
-      </TabItem>
-    </TabControl>
-
-    <!-- ========== 底部状态栏 ========== -->
-    <Border Grid.Row="2" Background="{DynamicResource CardBg}" Padding="20,9" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0,1,0,0">
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="*"/>
-          <ColumnDefinition Width="Auto"/>
-        </Grid.ColumnDefinitions>
-        <TextBlock Grid.Column="0" x:Name="StatusText" Text="就绪" Foreground="{DynamicResource TextDim}" FontSize="12"
-                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-        <ProgressBar Grid.Column="1" x:Name="BusyBar" Width="150" Height="3" IsIndeterminate="True"
-                     Visibility="Collapsed" VerticalAlignment="Center" Margin="14,0,0,0"/>
-      </Grid>
-    </Border>
-  
-    <!-- ================================================================
-         页签指示条
-
-         一条会滑动的线。切页时它从上一个页签滑到下一个，220ms，缓出。
-         为什么值得专门做：这排页签有十个，瞬间跳的线只告诉你「现在在哪」，
-         滑过去的线还告诉你「你刚从哪儿来」—— 后者是免费的方向感。
-
-         IsHitTestVisible="False"：它压在所有东西上面，绝不能吃掉点击。
-         ================================================================ -->
-    <Canvas Grid.Row="0" Grid.RowSpan="3" x:Name="TabInkLayer" IsHitTestVisible="False">
-      <Rectangle x:Name="TabInk" Height="2.5" Width="0" Fill="{DynamicResource TextMain}" Visibility="Collapsed"/>
-    </Canvas>
-</Grid>
+    <!-- 做完了的提示：底部居中飘一条，3 秒自己消失 -->
+    <md:Snackbar x:Name="Toast" Grid.ColumnSpan="2" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                 Margin="232,0,0,48" MaxWidth="560"/>
+  </Grid>
 </Window>
 '@
 
@@ -2473,18 +2233,7 @@ $xamlText = @'
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $Script:Window = [Windows.Markup.XamlReader]::Load($reader)
 
-# ★ 必须再往窗口上挂一份 HandyControl 主题 ★
-#   XamlReader.Load 构建出来的树，资源查找链接不到 Application.Resources，
-#   只挂在 Application 上的话窗口里的控件照样找不到样式。
-#   这里 new 一个新实例而不是复用 Application 那个 ——
-#   同一个 ResourceDictionary 实例挂到两个父级上会出怪问题。
-if ($Script:HcTheme) {
-    try { $Script:Window.Resources.MergedDictionaries.Add((New-Object HandyControl.Themes.Theme)) } catch { }
-}
-
-# 把随包字体套到整个窗口。
-# 必须在这里做而不是写死在 XAML 里 —— 字体路径是运行时算出来的
-# （取决于程序被解压到哪儿），XAML 里写不了。
+# 把随包字体套到整个窗口。字体路径是运行时算出来的（取决于程序被解压到哪儿），XAML 里写不了。
 try {
     $Script:Window.FontFamily = New-Object System.Windows.Media.FontFamily $Script:FontStack
 } catch { }
@@ -2492,13 +2241,15 @@ try {
 # 把所有命名控件收集到 $Script:UI
 $Script:UI = @{}
 foreach ($n in @(
-        'SubTitle', 'RptNo', 'RptDate', 'ChkRestorePoint', 'BtnRestorePoint', 'Tabs',
-        'DashSummary', 'DashVerdict', 'DashPickHead', 'DashQuickPick', 'DashSignOff',
+        'SubTitle', 'PageTitle', 'AppVerText', 'RptNo', 'RptDate', 'ChkRestorePoint', 'BtnRestorePoint', 'BtnThemeToggle', 'ThemeIcon',
+        'Tabs', 'NavPanel', 'Toast',
+        'DashSummary', 'DashHero', 'DashCell1', 'DashCell2', 'DashCell3', 'DashCell4', 'DashCell5',
+        'DashVerdict', 'DashPickHead', 'DashQuickPick', 'DashSignOff',
         'TweakPanel', 'TweakDetail', 'BtnPickRecommended', 'BtnPickNone', 'BtnRescan', 'PresetBar',
         'PresetHeader', 'PresetToggle', 'PresetBody', 'PresetPrimary', 'PresetMoreHint',
         'BtnApplySelected', 'BtnRevertSelected', 'BtnRevertAll',
         'CleanPanel', 'CleanDetail', 'BtnScanJunk', 'BtnPickCleanRec', 'BtnPickCleanNone', 'BtnClean', 'TotalJunkText',
-        'TweakSearch', 'TweakSearchHint', 'TweakSelCount', 'CleanSearch', 'CleanSearchHint', 'CleanSelCount',
+        'TweakSearch', 'TweakSelCount', 'CleanSearch', 'CleanSelCount',
         'StartupPanel', 'BtnRefreshStartup',
         'AppxPanel', 'BtnRefreshAppx', 'BtnCheckAppxSafe', 'BtnUninstallAppx', 'AppxCounter',
         'ThemePanel',
@@ -2507,9 +2258,104 @@ foreach ($n in @(
         'RecentRunPanel', 'BtnRecentRuns', 'BtnEnableTaskLog',
         'BtnWatchStart', 'BtnWatchStop', 'BtnProcAudit', 'BtnProcLog', 'WatchStatus',
         'InfoPanel', 'AdvicePanel', 'BtnHealthScan', 'BtnFpsDiag', 'BtnOcCoach', 'BtnVendor', 'BtnAddExclusion', 'BtnSfc', 'BtnCopyReport', 'BtnExportReport',
-        'LogPanel', 'LogScroll', 'BtnOpenBackup', 'BtnCopyLog', 'StatusText', 'BusyBar',
-        'TabInkLayer', 'TabInk', 'RptTitle')) {
+        'LogPanel', 'LogScroll', 'BtnOpenBackup', 'BtnCopyLog', 'StatusText', 'BusyBar')) {
     $Script:UI[$n] = $Script:Window.FindName($n)
+}
+
+# 底部提示的消息队列。3 秒自己消失。
+try {
+    $Script:ToastQueue = New-Object MaterialDesignThemes.Wpf.SnackbarMessageQueue ([TimeSpan]::FromSeconds(3))
+    $Script:UI.Toast.MessageQueue = $Script:ToastQueue
+} catch { $Script:ToastQueue = $null }
+
+# =====================================================================
+#  侧边栏导航（design.md 4.5）
+# ---------------------------------------------------------------------
+#  分组顺序是给人看的，和 TabItem 的顺序（出图 -ShotTab 的序号）无关 ——
+#  点哪一项就按页名去找对应的 TabItem。
+# =====================================================================
+$Script:NavGroups = @(
+    @{ G = '总览'; Items = @(@{ T = '概览'; I = 'ViewDashboardOutline' }) },
+    @{ G = '优化'; Items = @(
+            @{ T = '性能优化'; I = 'RocketLaunchOutline' },
+            @{ T = '垃圾清理'; I = 'Broom' },
+            @{ T = '日常维护'; I = 'WrenchOutline' }) },
+    @{ G = '排查'; Items = @(
+            @{ T = '弹窗排查'; I = 'ConsoleLine' },
+            @{ T = '启动项管理'; I = 'PowerSettings' },
+            @{ T = '自带软件'; I = 'PackageVariantClosed' }) },
+    @{ G = '系统'; Items = @(
+            @{ T = '系统体检'; I = 'Stethoscope' },
+            @{ T = '操作日志'; I = 'ClipboardTextClockOutline' },
+            @{ T = '个性化'; I = 'PaletteOutline' }) }
+)
+$Script:NavItems = @{}
+
+function Select-TabByHeader {
+    param([string]$Header)
+    $tabs = $Script:UI.Tabs
+    for ($i = 0; $i -lt $tabs.Items.Count; $i++) {
+        if ("$($tabs.Items[$i].Header)" -eq $Header) { $tabs.SelectedIndex = $i; return }
+    }
+}
+
+function Build-NavUI {
+    $p = $Script:UI.NavPanel
+    if ($null -eq $p) { return }
+    $p.Children.Clear()
+    $Script:NavItems = @{}
+    $first = $true
+    foreach ($grp in $Script:NavGroups) {
+        $gt = New-TextBlock -Text $grp.G -Size 11 -Color 'TextDim'
+        $gt.Margin = New-Thick 12 $(if ($first) { 8 } else { 24 }) 0 8
+        $p.Children.Add($gt) | Out-Null
+        $first = $false
+        foreach ($it in $grp.Items) {
+            $b = New-Object System.Windows.Controls.Border
+            $b.Height = 40
+            $b.CornerRadius = New-Corner 8
+            $b.Padding = New-Thick 12 0 12 0
+            $b.Margin = New-Thick 0 0 0 4
+            $b.Background = [System.Windows.Media.Brushes]::Transparent
+            $b.Cursor = 'Hand'
+            $b.Tag = $it.T
+            $sp = New-Object System.Windows.Controls.StackPanel
+            $sp.Orientation = 'Horizontal'
+            $sp.VerticalAlignment = 'Center'
+            $ic = New-Icon -Kind $it.I -Size 20 -Color 'TextDim'
+            $sp.Children.Add($ic) | Out-Null
+            $tx = New-TextBlock -Text $it.T -Size 13 -Color 'TextMid'
+            $tx.VerticalAlignment = 'Center'
+            $tx.Margin = New-Thick 12 0 0 0
+            $sp.Children.Add($tx) | Out-Null
+            $b.Child = $sp
+            Add-Interactive $b -BgNormal 'Transparent' -BgHover 'CardHover'
+            $b.Add_MouseLeftButtonUp({ Select-TabByHeader "$($this.Tag)" })
+            $p.Children.Add($b) | Out-Null
+            $Script:NavItems[$it.T] = @{ Box = $b; Icon = $ic; Text = $tx }
+        }
+    }
+    Update-NavSelection
+}
+
+function Update-NavSelection {
+    <# 当前页：AccentTint 底 + Accent 图标和字；其余恢复。顶栏标题跟着换。 #>
+    $cur = "$($Script:UI.Tabs.SelectedItem.Header)"
+    foreach ($k in $Script:NavItems.Keys) {
+        $n = $Script:NavItems[$k]
+        $on = ($k -eq $cur)
+        $n.Box.Resources['__sel'] = $on
+        $n.Box.Background = Get-Brush $(if ($on) { 'AccentTint' } else { 'Transparent' })
+        $n.Icon.Foreground = Get-Brush $(if ($on) { 'Accent' } else { 'TextDim' })
+        $n.Text.Foreground = Get-Brush $(if ($on) { 'Accent' } else { 'TextMid' })
+        $n.Text.FontWeight = $(if ($on) { 'SemiBold' } else { 'Normal' })
+    }
+    if ($Script:UI.PageTitle -and $cur) { $Script:UI.PageTitle.Text = $cur }
+}
+
+function Update-ThemeToggleIcon {
+    <# 浅色时显示月亮（点了去深色），深色时显示太阳 #>
+    try { $Script:UI.ThemeIcon.Kind = $(if ($Script:ThemeIsDark) { 'WhiteBalanceSunny' } else { 'WeatherNight' }) } catch { }
 }
 # ---------------------------------------------------------------------
 #  操作日志表
@@ -2529,10 +2375,10 @@ function Add-LogRow {
     $b = New-Object System.Windows.Controls.Border
     $b.BorderBrush = Get-Brush $Script:CARD_BORDER
     $b.BorderThickness = New-Thick 0 0 0 1
-    $b.Padding = New-Thick 0 7 0 7
+    $b.Padding = New-Thick 0 8 0 8
 
     $g = New-Object System.Windows.Controls.Grid
-    foreach ($w in @(28.0, 78.0, 58.0, 0.0)) {
+    foreach ($w in @(28.0, 80.0, 56.0, 0.0)) {
         $cd = New-Object System.Windows.Controls.ColumnDefinition
         $cd.Width = if ($w -eq 0) {
             New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
@@ -2542,25 +2388,25 @@ function Add-LogRow {
         $g.ColumnDefinitions.Add($cd)
     }
 
-    $mk = New-TextBlock -Text $mark -Size 13.5 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+    $mk = New-TextBlock -Text $mark -Size 13 -Color $(if ($abn) { '#8A5750' } else { 'TextDim' })
     if ($abn) { $mk.FontWeight = 'SemiBold' }
     $mk.VerticalAlignment = 'Top'
     $g.Children.Add($mk) | Out-Null
 
     # ★ 表格数位 ★ 时间列不加这句，1 比 8 窄，整列时间对不齐
-    $tm = New-TextBlock -Text $Time -Size 13 -Color '#66635B'
+    $tm = New-TextBlock -Text $Time -Size 12 -Color 'TextDim'
     [System.Windows.Documents.Typography]::SetNumeralAlignment($tm, 'Tabular')
     $tm.VerticalAlignment = 'Top'
     [System.Windows.Controls.Grid]::SetColumn($tm, 1)
     $g.Children.Add($tm) | Out-Null
 
-    $lv = New-TextBlock -Text $Level -Size 13 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+    $lv = New-TextBlock -Text $Level -Size 12 -Color $(if ($abn) { '#8A5750' } else { 'TextDim' })
     if ($abn) { $lv.FontWeight = 'SemiBold' }
     $lv.VerticalAlignment = 'Top'
     [System.Windows.Controls.Grid]::SetColumn($lv, 2)
     $g.Children.Add($lv) | Out-Null
 
-    $ms = New-TextBlock -Text $Message -Size 13.5 -Color '#2B2A26' -Wrap $true
+    $ms = New-TextBlock -Text $Message -Size 13 -Color 'TextMain' -Wrap $true
     if ($abn) { $ms.FontWeight = 'SemiBold' }
     [System.Windows.Controls.Grid]::SetColumn($ms, 3)
     $g.Children.Add($ms) | Out-Null
@@ -2575,11 +2421,11 @@ function Build-LogUI {
     if ($null -eq $p) { return }
     $p.Children.Clear()
     Add-ColHeader -Panel $p -First '内容' -Cols @() -Indent 164
-    # ★ 列名要和行里的列轨对齐 ★ 前三列 28+78+58 = 164
+    # ★ 列名要和行里的列轨对齐 ★ 前三列 28+80+56 = 164
     $hdr = $p.Children[0].Children[0]
-    foreach ($c in @(@{ T = '时间'; X = 28.0 }, @{ T = '类别'; X = 106.0 })) {
-        $t = New-TextBlock -Text $c.T -Size 13 -Color '#66635B'
-        $t.FontWeight = 'SemiBold'
+    $hdr.Margin = New-Thick 0 4 0 8
+    foreach ($c in @(@{ T = '时间'; X = 28.0 }, @{ T = '类别'; X = 108.0 })) {
+        $t = New-TextBlock -Text $c.T -Size 11 -Color 'TextDim'
         $t.Margin = New-Thick $c.X 0 0 0
         $t.HorizontalAlignment = 'Left'
         $hdr.Children.Add($t) | Out-Null
@@ -2664,14 +2510,6 @@ $Script:PresetSubtitle = @{
     BROW3  = '有代价：同站标签页共用进程'
 }
 
-# 分组 -> 色条颜色（用语义色，跟着皮肤走）
-$Script:PresetGroupColor = @{
-    '按用途选'   = '#55606F'
-    '竞技射击'   = '#556B54'
-    '浏览器瘦身' = '#7A6B45'
-}
-
-
 $Script:SelectedPresetCard = $null
 $Script:PresetCardList = New-Object System.Collections.ArrayList
 
@@ -2727,87 +2565,86 @@ function Get-RptMarkFor {
 
 function Build-DashUI {
     <#
-      概览页 = 一张检验报告。
-
-      【这里过去是四张圆角卡 + 76px 大数字 + 走纸曲线】
-        craft-floor 把这三样都点名拒绝了：hero-metric 模板、
-        sparkline 当内容用、同尺寸卡片当页面结构。
-        换成四栏表之后信息反而更多了 —— 多出来的那一栏「参考范围」
-        才是这个产品真正独有的东西。
+      概览页 = 卡片网格（design.md 5.1）。
+        第一行  主角卡（健康度，Update-DashScore 画）+ 处理器温度 + 显卡温度
+        第二行  内存占用 + 系统盘可用 + 实时占用
+        第三行  检验结论（宽）+ 受检类别
+      读数卡的长相见 New-Gauge；读不到一律「—」，绝不编数字。
     #>
     $Script:DashRows = @{}
 
-    # ---------- 摘要：四个指针仪表 ----------
-    #
-    #  老板拍板要仪表盘（「看都看不懂，就得给我改成仪表盘」）。
-    #  做成万用表那种半圆刻度 + 指针，不做霓虹圆环 ——
-    #  弧上分合格段和超标段，指针一指，不用读字就知道在不在绿区。
     $sum = $Script:UI.DashSummary
     $sum.Children.Clear()
     $sum.Children.Add((New-RptSection -Title '本次检验摘要' -Aside '实时读数，每秒刷新')) | Out-Null
 
     $Script:DashGauges = @{}
     $defs = @(
-        @{ K = 'CpuTemp'; N = '处理器温度'; U = '°C' },
-        @{ K = 'GpuTemp'; N = '显卡温度'; U = '°C' },
-        @{ K = 'Ram'; N = '内存占用'; U = '%' },
-        @{ K = 'Disk'; N = '系统盘可用'; U = 'GB' })
-
-    # ★ UniformGrid 在 System.Windows.Controls.Primitives，不在 Controls ★
-    #   写错命名空间时 New-Object 找不到类型，而本脚本的
-    #   $ErrorActionPreference = 'Continue' 会让它**静默跳过**，
-    #   $wrap 变成 $null，后面所有 .Children.Add 全部落空 ——
-    #   界面上就是「四个仪表一个都没出现」，还不报错。
-    #   这里直接用 Grid 定义四等分列，省掉这个坑。
-    $wrap = New-Object System.Windows.Controls.Grid
-    $wrap.Margin = New-Thick 0 10 0 0
-    for ($ci = 0; $ci -lt 4; $ci++) {
-        $cd = New-Object System.Windows.Controls.ColumnDefinition
-        $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
-        $wrap.ColumnDefinitions.Add($cd)
-    }
-    $ci = 0
+        @{ K = 'CpuTemp'; N = '处理器温度'; I = 'Thermometer'; C = 'DashCell1' },
+        @{ K = 'GpuTemp'; N = '显卡温度'; I = 'ExpansionCard'; C = 'DashCell2' },
+        @{ K = 'Ram'; N = '内存占用'; I = 'Memory'; C = 'DashCell3' },
+        @{ K = 'Disk'; N = '系统盘可用'; I = 'Harddisk'; C = 'DashCell4' })
     foreach ($d in $defs) {
-        $g = New-Gauge -Label $d.N
+        $g = New-Gauge -Label $d.N -Icon $d.I
         $Script:DashGauges[$d.K] = $g
-        [System.Windows.Controls.Grid]::SetColumn($g.Host, $ci)
-        $wrap.Children.Add($g.Host) | Out-Null
-        $ci++
+        $Script:UI[$d.C].Child = $g.Host
     }
-    $sum.Children.Add($wrap) | Out-Null
 
-    # 占用率这两项没有合格阈值，不配仪表（配了就等于编一个不存在的阈值），
-    # 放在仪表下面一行当附注读数。
-    $line = New-Object System.Windows.Controls.StackPanel
-    $line.Orientation = 'Horizontal'
-    $line.HorizontalAlignment = 'Center'
-    $line.Margin = New-Thick 0 16 0 0
+    # 占用率这两项没有合格阈值 —— 瞬时读数某一秒 100% 不说明任何问题，
+    # 画安全线就等于编一个不存在的标准。所以只报数、只画填充。
     $Script:DashPlain = @{}
+    $Script:DashLoadMeters = @{}
+    $box = New-Object System.Windows.Controls.StackPanel
+    $head = New-Object System.Windows.Controls.StackPanel
+    $head.Orientation = 'Horizontal'
+    $head.Children.Add((New-Icon -Kind 'ChartLine' -Size 20 -Color 'TextDim')) | Out-Null
+    $hl = New-TextBlock -Text '实时占用' -Size 12 -Color 'TextDim'
+    $hl.VerticalAlignment = 'Center'
+    $hl.Margin = New-Thick 8 0 0 0
+    $head.Children.Add($hl) | Out-Null
+    $box.Children.Add($head) | Out-Null
+    $two = New-Object System.Windows.Controls.Grid
+    $two.Margin = New-Thick 0 12 0 0
+    foreach ($ci in 0, 1, 2) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = if ($ci -eq 1) { New-Object System.Windows.GridLength 16 } else { New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star) }
+        $two.ColumnDefinitions.Add($cd)
+    }
+    $col = 0
     foreach ($d in @(@{ K = 'CpuLoad'; N = '处理器占用' }, @{ K = 'GpuLoad'; N = '显卡占用' })) {
         $sp = New-Object System.Windows.Controls.StackPanel
-        $sp.Orientation = 'Horizontal'
-        $sp.Margin = New-Thick 0 0 36 0
-        $l = New-TextBlock -Text $d.N -Size 13 -Color '#66635B'
-        $l.VerticalAlignment = 'Bottom'
-        $l.Margin = New-Thick 0 0 8 1
-        $sp.Children.Add($l) | Out-Null
-        $v = New-TextBlock -Text ([string][char]0x2014) -Size 18 -Color '#2B2A26'
+        $row = New-Object System.Windows.Controls.StackPanel
+        $row.Orientation = 'Horizontal'
+        $v = New-TextBlock -Text ([string][char]0x2014) -Size 28 -Bold $true
         [System.Windows.Documents.Typography]::SetNumeralAlignment($v, 'Tabular')
-        $sp.Children.Add($v) | Out-Null
-        $u = New-TextBlock -Text '%' -Size 12.5 -Color '#66635B'
+        $row.Children.Add($v) | Out-Null
+        $u = New-TextBlock -Text '%' -Size 11 -Color 'TextDim'
         $u.VerticalAlignment = 'Bottom'
-        $u.Margin = New-Thick 2 0 0 2
-        $sp.Children.Add($u) | Out-Null
+        $u.Margin = New-Thick 4 0 0 8
+        $row.Children.Add($u) | Out-Null
+        $sp.Children.Add($row) | Out-Null
+        $m = New-Meter
+        $m.Host.Margin = New-Thick 0 12 0 0
+        $sp.Children.Add($m.Host) | Out-Null
+        $l = New-TextBlock -Text $d.N -Size 12 -Color 'TextDim'
+        $l.Margin = New-Thick 0 8 0 0
+        $sp.Children.Add($l) | Out-Null
+        [System.Windows.Controls.Grid]::SetColumn($sp, $col)
+        $two.Children.Add($sp) | Out-Null
         $Script:DashPlain[$d.K] = $v
-        $line.Children.Add($sp) | Out-Null
+        $Script:DashLoadMeters[$d.K] = $m
+        $col += 2
     }
-    $sum.Children.Add($line) | Out-Null
+    $box.Children.Add($two) | Out-Null
+    $Script:UI.DashCell5.Child = $box
+
+    # 主角卡先放一个壳，分数算出来之前显示「—」
+    Build-DashHero $null
 
     # ---------- 按用途选（右栏）----------
     $ph = $Script:UI.DashPickHead
     $ph.Children.Clear()
     $ph.Children.Add((New-RptSection -Title '受检类别')) | Out-Null
-    $hint = New-TextBlock -Size 12 -Color '#66635B' -Wrap $true -Text (
+    $hint = New-TextBlock -Size 12 -Color 'TextDim' -Wrap $true -Text (
         '选一类，下面整张表的参考范围和推荐项都会按这一类给 —— ' +
         '同一项对不同用途，合格线本来就不一样。')
     $hint.Margin = New-Thick 0 0 0 4
@@ -2829,21 +2666,21 @@ function Build-DashUI {
     $rule = New-Object System.Windows.Shapes.Rectangle
     $rule.Height = 1
     $rule.Fill = Get-Brush $Script:CARD_BORDER
-    $rule.Margin = New-Thick 0 0 0 10
+    $rule.Margin = New-Thick 0 0 0 12
     $so.Children.Add($rule) | Out-Null
     foreach ($ln in @(
             @{ L = '检验'; V = "电脑调优助手 v$Script:AppVersion" },
             @{ L = '依据'; V = '本机原始值备份' },
             @{ L = '日期'; V = (Get-Date).ToString('yyyy-MM-dd') })) {
         $g = New-Object System.Windows.Controls.Grid
-        $g.Margin = New-Thick 0 0 0 5
+        $g.Margin = New-Thick 0 0 0 4
         $cd1 = New-Object System.Windows.Controls.ColumnDefinition
         $cd1.Width = New-Object System.Windows.GridLength 44
         $cd2 = New-Object System.Windows.Controls.ColumnDefinition
         $cd2.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
         $g.ColumnDefinitions.Add($cd1); $g.ColumnDefinitions.Add($cd2)
-        $a = New-TextBlock -Text $ln.L -Size 11.5 -Color '#66635B'
-        $b = New-TextBlock -Text $ln.V -Size 12 -Color '#4A4842' -Wrap $true
+        $a = New-TextBlock -Text $ln.L -Size 11 -Color 'TextDim'
+        $b = New-TextBlock -Text $ln.V -Size 12 -Color 'TextMid' -Wrap $true
         [System.Windows.Controls.Grid]::SetColumn($b, 1)
         $g.Children.Add($a) | Out-Null
         $g.Children.Add($b) | Out-Null
@@ -2851,82 +2688,139 @@ function Build-DashUI {
     }
 }
 
+function Build-DashHero {
+    <#
+      主角卡（design.md 4.8）：整张填 HeroFill、白字。全应用只有这一张。
+        健康度  分数（hero 44）+「分」
+        量程条  分数在 0~100 里的位置
+        三个计数 已核对 / 合格 / 超差 —— 每一分扣在哪，下面「检验结论」里逐条列
+      $S 是 Get-DashScore 的结果；$null = 还没算出来，数字写「—」。
+    #>
+    param($S)
+    $h = $Script:UI.DashHero
+    if ($null -eq $h) { return }
+    $sp = New-Object System.Windows.Controls.StackPanel
+
+    $head = New-Object System.Windows.Controls.StackPanel
+    $head.Orientation = 'Horizontal'
+    $head.Children.Add((New-Icon -Kind 'HeartPulse' -Size 20 -Color 'OnHeroDim')) | Out-Null
+    $hl = New-TextBlock -Text '健康度' -Size 12 -Color 'OnHeroDim'
+    $hl.VerticalAlignment = 'Center'
+    $hl.Margin = New-Thick 8 0 0 0
+    $head.Children.Add($hl) | Out-Null
+    $sp.Children.Add($head) | Out-Null
+
+    $row = New-Object System.Windows.Controls.StackPanel
+    $row.Orientation = 'Horizontal'
+    $row.Margin = New-Thick 0 8 0 0
+    $prev = if ($Script:DashHeroValue) { "$($Script:DashHeroValue.Text)" } else { '' }
+    $num = New-TextBlock -Text $(if ($prev) { $prev } else { [string][char]0x2014 }) -Size 44 -Color 'OnHero' -Bold $true
+    [System.Windows.Documents.Typography]::SetNumeralAlignment($num, 'Tabular')
+    $row.Children.Add($num) | Out-Null
+    $un = New-TextBlock -Text '分' -Size 11 -Color 'OnHeroDim'
+    $un.VerticalAlignment = 'Bottom'
+    $un.Margin = New-Thick 4 0 0 12
+    $row.Children.Add($un) | Out-Null
+    $sp.Children.Add($row) | Out-Null
+    $Script:DashHeroValue = $num
+
+    $m = New-Meter -Track 'OnHeroTrack' -FillColor 'OnHero' -LineColor 'OnHero'
+    $m.Host.Margin = New-Thick 0 12 0 0
+    $sp.Children.Add($m.Host) | Out-Null
+
+    $total = @($Script:Tweaks).Count
+    $bad = if ($S) { @($S.Items).Count } else { $null }
+    $tally = New-Object System.Windows.Controls.Grid
+    $tally.Margin = New-Thick 0 16 0 0
+    foreach ($ci in 0..2) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        $tally.ColumnDefinitions.Add($cd)
+    }
+    $dash = [string][char]0x2014
+    $cells = @(
+        @{ L = '已核对'; V = "$total" },
+        @{ L = '合格'; V = $(if ($null -ne $bad) { "$([math]::Max(0, $total - $bad))" } else { $dash }) },
+        @{ L = '超差'; V = $(if ($null -ne $bad) { "$bad" } else { $dash }) })
+    $ci = 0
+    foreach ($c in $cells) {
+        $cs = New-Object System.Windows.Controls.StackPanel
+        $v = New-TextBlock -Text $c.V -Size 16 -Color 'OnHero' -Bold $true
+        [System.Windows.Documents.Typography]::SetNumeralAlignment($v, 'Tabular')
+        $cs.Children.Add($v) | Out-Null
+        $l = New-TextBlock -Text $c.L -Size 11 -Color 'OnHeroDim'
+        $l.Margin = New-Thick 0 4 0 0
+        $cs.Children.Add($l) | Out-Null
+        [System.Windows.Controls.Grid]::SetColumn($cs, $ci)
+        $tally.Children.Add($cs) | Out-Null
+        $ci++
+    }
+    $sp.Children.Add($tally) | Out-Null
+    $h.Child = $sp
+
+    if ($S) {
+        Set-Meter $m ([double]$S.Score) 100 $null 'OnHero'
+        Start-CountUp -Target $num -To ([double]$S.Score) -Decimals 0 -Ms 240
+    } else {
+        Set-Meter $m $null 100 $null 'OnHero'
+    }
+}
+
 function Update-DashScore {
     <#
-      检验结论。
-
-      【不做健康度大数字】
-        「96 分」是 hero-metric 模板，而且分数本身不可行动 ——
-        用户拿着 96 分不知道该干什么。
-        报告单的结论是一行计数加一段备注：核对了多少项、合格多少、
-        超差的是哪几项 —— 每一条都能直接点进去处理。
+      健康度 + 检验结论。
+        主角卡：分数和三个计数
+        结论卡：每一条扣分写清楚扣在哪、扣了几分、为什么 ——
+                「一键体检 98 分」那种黑箱分数是先吓人再卖服务，这里每一分都摊开
     #>
     $s = Get-DashScore
     $Script:DashScoreCache = $s
+    Build-DashHero $s
 
     $box = $Script:UI.DashVerdict
     $box.Children.Clear()
-    $box.Children.Add((New-RptSection -Title '检验结论')) | Out-Null
+    $box.Children.Add((New-RptSection -Title '检验结论' -Icon 'ClipboardCheckOutline')) | Out-Null
 
-    $total = @($Script:Tweaks).Count
     $bad = @($s.Items).Count
-    $ok = [math]::Max(0, $total - $bad)
-
-    # 判定行：四个计数横排，只有「超差」那个上法定墨
-    $tally = New-Object System.Windows.Controls.StackPanel
-    $tally.Orientation = 'Horizontal'
-    $tally.Margin = New-Thick 0 2 0 14
-    $cells = @(
-        @{ L = '已核对'; V = "$total"; Bad = $false },
-        @{ L = '合格'; V = "$ok"; Bad = $false },
-        @{ L = '超差'; V = "$bad"; Bad = ($bad -gt 0) })
-    foreach ($c in $cells) {
-        $sp = New-Object System.Windows.Controls.StackPanel
-        $sp.Orientation = 'Horizontal'
-        $sp.Margin = New-Thick 0 0 28 0
-        $l = New-TextBlock -Text $c.L -Size 13 -Color '#66635B'
-        $l.VerticalAlignment = 'Bottom'
-        $l.Margin = New-Thick 0 0 6 1
-        $sp.Children.Add($l) | Out-Null
-        $v = New-TextBlock -Text $c.V -Size 22 -Color $(if ($c.Bad) { '#8A5750' } else { '#2B2A26' })
-        if ($c.Bad) { $v.FontWeight = 'SemiBold' }
-        [System.Windows.Documents.Typography]::SetNumeralAlignment($v, 'Tabular')
-        $sp.Children.Add($v) | Out-Null
-        $tally.Children.Add($sp) | Out-Null
-    }
-    $box.Children.Add($tally) | Out-Null
-
-    # 备注区：超差项逐条列出。★ 备注在表格下方，不塞进表格 ★
     if ($bad -gt 0) {
-        $nh = New-TextBlock -Text '备注' -Size 12 -Color '#66635B'
-        $nh.FontWeight = 'SemiBold'
-        $nh.Margin = New-Thick 0 0 0 6
+        $nh = New-TextBlock -Text '备注' -Size 11 -Color 'TextDim'
+        $nh.Margin = New-Thick 0 0 0 8
         $box.Children.Add($nh) | Out-Null
+        $i = 0
         foreach ($it in $s.Items) {
+            $i++
+            $b = New-Object System.Windows.Controls.Border
+            $b.Padding = New-Thick 0 12 0 12
+            $b.BorderBrush = Get-Brush 'Stroke'
+            $b.BorderThickness = $(if ($i -lt $bad) { New-Thick 0 0 0 1 } else { New-Thick 0 })
             $g = New-Object System.Windows.Controls.Grid
-            $g.Margin = New-Thick 0 0 0 9
-            $cd1 = New-Object System.Windows.Controls.ColumnDefinition
-            $cd1.Width = New-Object System.Windows.GridLength 26
-            $cd2 = New-Object System.Windows.Controls.ColumnDefinition
-            $cd2.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
-            $g.ColumnDefinitions.Add($cd1); $g.ColumnDefinitions.Add($cd2)
-
-            $mk = New-TextBlock -Text '↑' -Size 13 -Color '#8A5750'
-            $mk.FontWeight = 'SemiBold'
+            foreach ($w in @(24.0, 0.0, 64.0)) {
+                $cd = New-Object System.Windows.Controls.ColumnDefinition
+                $cd.Width = if ($w -eq 0) { New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star) } else { New-Object System.Windows.GridLength $w }
+                $g.ColumnDefinitions.Add($cd)
+            }
+            $mk = New-TextBlock -Text '↑' -Size 14 -Color '#8A5750' -Bold $true
             $g.Children.Add($mk) | Out-Null
 
             $sp = New-Object System.Windows.Controls.StackPanel
             [System.Windows.Controls.Grid]::SetColumn($sp, 1)
-            $t1 = New-TextBlock -Text $it.Name -Size 14.5 -Color '#2B2A26' -Wrap $true
+            $t1 = New-TextBlock -Text $it.Name -Size 14 -Wrap $true -Bold $true
             $sp.Children.Add($t1) | Out-Null
-            $t2 = New-TextBlock -Text $it.Why -Size 13 -Color '#66635B' -Wrap $true
-            $t2.Margin = New-Thick 0 2 0 0
+            $t2 = New-TextBlock -Text $it.Why -Size 12 -Color 'TextDim' -Wrap $true
+            $t2.Margin = New-Thick 0 4 0 0
             $sp.Children.Add($t2) | Out-Null
             $g.Children.Add($sp) | Out-Null
-            $box.Children.Add($g) | Out-Null
+
+            $mn = New-TextBlock -Text ("−{0} 分" -f $it.Minus) -Size 12 -Color '#8A5750'
+            $mn.TextAlignment = 'Right'
+            [System.Windows.Documents.Typography]::SetNumeralAlignment($mn, 'Tabular')
+            [System.Windows.Controls.Grid]::SetColumn($mn, 2)
+            $g.Children.Add($mn) | Out-Null
+            $b.Child = $g
+            $box.Children.Add($b) | Out-Null
         }
     } else {
-        $t = New-TextBlock -Size 12.5 -Color '#66635B' -Wrap $true -Text '全部项目在参考范围内，没有需要处理的。'
+        $t = New-TextBlock -Size 13 -Color 'TextDim' -Wrap $true -Text '全部项目在参考范围内，没有需要处理的。'
         $box.Children.Add($t) | Out-Null
     }
 }
@@ -3004,112 +2898,71 @@ function Update-DashUI {
             "$($d.Drive) 共 $($d.TotalGB) GB，已用 $($d.UsedPct)%")
     }
 
-    # 占用率：没有合格阈值，只报数
+    # 占用率：没有合格阈值，只报数、只画填充，不画安全线
     foreach ($p in @(@{ K = 'CpuLoad'; V = $c.Load }, @{ K = 'GpuLoad'; V = $g.Load })) {
         $t = $Script:DashPlain[$p.K]
         if ($null -eq $t) { continue }
+        Set-Meter $Script:DashLoadMeters[$p.K] $p.V 100 $null
         if ($null -eq $p.V) { $t.Text = [string][char]0x2014; continue }
-        Start-CountUp -Target $t -To ([double]$p.V) -Decimals 0 -Ms 220
+        Start-CountUp -Target $t -To ([double]$p.V) -Decimals 0 -Ms 240
     }
 }
 
 function New-PresetCard {
     <#
-      一个「受检类别」选项。返回 Border，Tag 挂着预设对象。
+      一个「受检类别」（使用场景预设）选项。返回 Border，Tag 挂着预设对象。
 
-      【这里过去是圆角卡片 + 4px 彩色左边条 + 阴影】
-        craft-floor 同时拒绝这三样：
-          · 同尺寸卡片（图标+标题+说明）当页面结构 —— 卡片是偷懒的容器
-          · 卡片/列表项上超过 1px 的彩色左右边条
-          · 深色界面上的投影（深度只能来自表面阶梯和发丝线）
-
-      报告单上的「参考人群」不是卡片，是一组勾选行：
-        ○ 大型单机 3A      黑神话 / 艾尔登法环，要的是不卡顿
-        ● 不玩游戏         办公上网刷视频，只想电脑别这么卡
-      选中的那一行换实心记号，并且整行压一条粗下划线 ——
-      层次靠线重和字重，一点颜色都不用。
-
-      【记号用几何图形画，不用 Unicode 字符】
-        craft-floor：「Unicode 字符或 emoji 冒充图标系统」是被禁的。
-        ○ ● 这种字符在不同字体里大小位置都不一样，还会跟着字重变形。
-        这里用 Ellipse 画，描边粗细和直径由模数定死。
+      圆角 8 的一行：单选图标 + 名称（+ 一行说明）。
+        未选  RadioboxBlank，TextDim
+        选中  RadioboxMarked + 名称都换 Accent，整行铺 AccentTint —— 选中态是强调色的三个合法去处之一
+      Compact = 性能优化页顶上那一排：横着排、不带说明（点选后右栏有完整说明）。
     #>
     param($Preset, [bool]$Big = $false, [bool]$Compact = $false)
 
     $row = New-Object System.Windows.Controls.Border
     $row.Background = [System.Windows.Media.Brushes]::Transparent
-    $row.BorderBrush = Get-Brush $Script:CARD_BORDER
-    # 紧凑模式是横排一行，不画行间线（那是竖排列表的语汇）
-    $row.BorderThickness = $(if ($Compact) { New-Thick 0 } else { New-Thick 0 0 0 1 })
-    $row.Padding = $(if ($Compact) { New-Thick 0 5 12 5 } else { New-Thick 2 9 2 9 })
+    $row.CornerRadius = New-Corner 8
+    $row.Padding = $(if ($Compact) { New-Thick 8 4 12 4 } else { New-Thick 8 8 8 8 })
+    $row.Margin = $(if ($Compact) { New-Thick 0 0 4 0 } else { New-Thick 0 0 0 4 })
     $row.Cursor = 'Hand'
     $row.Tag = $Preset
 
     $g = New-Object System.Windows.Controls.Grid
     $cdA = New-Object System.Windows.Controls.ColumnDefinition
-    $cdA.Width = New-Object System.Windows.GridLength 22
+    $cdA.Width = New-Object System.Windows.GridLength 28
     $cdB = New-Object System.Windows.Controls.ColumnDefinition
     $cdB.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
     $g.ColumnDefinitions.Add($cdA); $g.ColumnDefinitions.Add($cdB)
 
-    # --- 勾选记号：空心圆 / 选中时中间加实心点 ---
-    $markBox = New-Object System.Windows.Controls.Grid
-    $markBox.Width = 18; $markBox.Height = 18
-    $markBox.VerticalAlignment = $(if ($Compact) { 'Center' } else { 'Top' })
-    $markBox.Margin = $(if ($Compact) { New-Thick 0 } else { New-Thick 0 2 0 0 })
+    $mark = New-Icon -Kind 'RadioboxBlank' -Size 20 -Color 'TextDim'
+    $mark.HorizontalAlignment = 'Left'
+    $mark.VerticalAlignment = $(if ($Compact) { 'Center' } else { 'Top' })
+    $g.Children.Add($mark) | Out-Null
 
-    $ring = New-Object System.Windows.Shapes.Ellipse
-    $ring.Width = 11; $ring.Height = 11
-    $ring.StrokeThickness = 1.2
-    $ring.Stroke = Get-Brush '#66635B'
-    $ring.HorizontalAlignment = 'Left'
-    $ring.VerticalAlignment = 'Center'
-    $markBox.Children.Add($ring) | Out-Null
-
-    $dot = New-Object System.Windows.Shapes.Ellipse
-    $dot.Width = 5; $dot.Height = 5
-    $dot.Fill = Get-Brush '#2B2A26'
-    $dot.HorizontalAlignment = 'Left'
-    $dot.VerticalAlignment = 'Center'
-    $dot.Margin = New-Thick 3 0 0 0
-    $dot.Visibility = 'Collapsed'
-    $markBox.Children.Add($dot) | Out-Null
-    $g.Children.Add($markBox) | Out-Null
-
-    # --- 名称 + 说明 ---
     $sp = New-Object System.Windows.Controls.StackPanel
+    $sp.VerticalAlignment = 'Center'
     [System.Windows.Controls.Grid]::SetColumn($sp, 1)
-
-    $title = New-TextBlock -Text $Preset.Name -Size 14.5 -Wrap (-not $Compact)
+    $title = New-TextBlock -Text $Preset.Name -Size $(if ($Compact) { 13 } else { 14 }) -Wrap (-not $Compact) -Bold $true
     $title.VerticalAlignment = 'Center'
-    $title.FontWeight = 'SemiBold'
     $sp.Children.Add($title) | Out-Null
-
-    # 紧凑模式不画副标题 —— 信息不丢，点选之后右栏会显示完整说明
     $subText = $Script:PresetSubtitle["$($Preset.Id)"]
     if ($subText -and -not $Compact) {
-        $sub = New-TextBlock -Text $subText -Size 12 -Color '#66635B' -Wrap $true
-        $sub.Margin = New-Thick 0 3 0 0
+        $sub = New-TextBlock -Text $subText -Size 12 -Color 'TextDim' -Wrap $true
+        $sub.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($sub) | Out-Null
     }
     $g.Children.Add($sp) | Out-Null
     $row.Child = $g
 
-    # 记号和标题存起来，选中时要改
-    $row.Resources['__preset'] = @{ Ring = $ring; Dot = $dot; Title = $title }
+    $row.Resources['__preset'] = @{ Mark = $mark; Title = $title }
+    Add-Interactive $row -BgNormal 'Transparent' -BgHover $Script:CARD_HOVER
 
-    Add-Interactive $row -BgNormal 'Transparent' -BgHover $Script:CARD_HOVER -NoLift
-
-    # ★ 按下的瞬间就把记号打上，不等松手 ★
-    #   背景变深和下沉 1px 这两样加起来只有两三个灰阶的变化，太微妙 ——
-    #   而「回答用户『我点上了吗』」是按下反馈唯一的职责。
-    #   在报告单的语汇里，这个回答就是**勾上**：像在纸上打勾，
-    #   笔还没抬起来，记号已经在那儿了。
+    # ★ 按下的瞬间就把记号打上，不等松手 ★ —— 回答「我点上了吗」
     $row.Add_PreviewMouseLeftButtonDown({
             try {
                 $m = $this.Resources['__preset']
-                $m.Dot.Visibility = 'Visible'
-                $m.Ring.Stroke = Get-Brush '#2B2A26'
+                $m.Mark.Kind = 'RadioboxMarked'
+                $m.Mark.Foreground = Get-Brush 'Accent'
             } catch { }
         })
     $row.Add_MouseLeftButtonUp({
@@ -3120,20 +2973,15 @@ function New-PresetCard {
 }
 
 function Select-PresetCard {
-    <#
-      切换选中的「受检类别」。
-      选中的表现：记号填实 + 整行下划线加粗 —— 不换底色、不上强调色。
-      报告单上「当前适用的参考人群」就是这么标的。
-    #>
+    <# 切换选中的预设：选中行 AccentTint 底 + 实心单选 + 名称 Accent；上一行恢复 #>
     param($Card)
     if ($Script:SelectedPresetCard -and $Script:SelectedPresetCard -ne $Card) {
         $old = $Script:SelectedPresetCard
         try {
             $m = $old.Resources['__preset']
-            $m.Dot.Visibility = 'Collapsed'
-            $m.Ring.Stroke = Get-Brush '#66635B'
-            $old.BorderThickness = New-Thick 0 0 0 1
-            $old.BorderBrush = Get-Brush $Script:CARD_BORDER
+            $m.Mark.Kind = 'RadioboxBlank'
+            $m.Mark.Foreground = Get-Brush 'TextDim'
+            $m.Title.Foreground = Get-Brush 'TextMain'
             $old.Background = [System.Windows.Media.Brushes]::Transparent
         } catch { }
     }
@@ -3141,11 +2989,10 @@ function Select-PresetCard {
     if ($null -eq $Card) { return }
     try {
         $m = $Card.Resources['__preset']
-        $m.Dot.Visibility = 'Visible'
-        $m.Ring.Stroke = Get-Brush '#2B2A26'
-        $Card.BorderThickness = New-Thick 0 0 0 2
-        $Card.BorderBrush = Get-Brush '#565349'
-        $Card.Background = [System.Windows.Media.Brushes]::Transparent
+        $m.Mark.Kind = 'RadioboxMarked'
+        $m.Mark.Foreground = Get-Brush 'Accent'
+        $m.Title.Foreground = Get-Brush 'Accent'
+        $Card.Background = Get-Brush 'AccentTint'
     } catch { }
 }
 
@@ -3190,23 +3037,15 @@ function Build-PresetUI {
         # 组标题
         $head = New-Object System.Windows.Controls.StackPanel
         $head.Orientation = 'Horizontal'
-        $head.Margin = New-Thick 2 $(if ($slot.Children.Count -eq 0) { 0 } else { 8 }) 0 7
-        $accent = $Script:PresetGroupColor[$grp]
-        if (-not $accent) { $accent = '#55606F' }
-        $dot = New-Object System.Windows.Controls.Border
-        $dot.Width = 3; $dot.Height = 14
-        $dot.CornerRadius = New-Object System.Windows.CornerRadius 2
-        $dot.Background = Get-Brush $accent
-        $dot.VerticalAlignment = 'Center'
-        $dot.Margin = New-Thick 0 0 8 0
-        $head.Children.Add($dot) | Out-Null
+        # 组名前不再画彩色竖条 —— 语义色只表示状态，不当装饰（design.md 1.2）
+        $head.Margin = New-Thick 8 $(if ($slot.Children.Count -eq 0) { 0 } else { 12 }) 0 8
         $ht = New-TextBlock -Text $grp -Size 13 -Bold $true
         $ht.VerticalAlignment = 'Center'
         $head.Children.Add($ht) | Out-Null
         if ($groupHint[$grp]) {
-            $hh = New-TextBlock -Text $groupHint[$grp] -Size 11.5 -Color '#66635B'
+            $hh = New-TextBlock -Text $groupHint[$grp] -Size 11 -Color 'TextDim'
             $hh.VerticalAlignment = 'Center'
-            $hh.Margin = New-Thick 10 1 0 0
+            $hh.Margin = New-Thick 12 0 0 0
             $head.Children.Add($hh) | Out-Null
         }
         # 第一组的组标题已经写死在 XAML 那一行里，这里不再重复画
@@ -3271,29 +3110,35 @@ function Show-PresetDetail {
     $p.Children.Clear()
     Start-FadeSlideIn $p   # 换内容时淡入 + 轻微上移，避免「啪」地一下跳变
 
-    $p.Children.Add((New-TextBlock -Text $Preset.Name -Size 17 -Bold $true -Wrap $true)) | Out-Null
+    $p.Children.Add((New-TextBlock -Text $Preset.Name -Size 16 -Bold $true -Wrap $true)) | Out-Null
 
     $sub = New-TextBlock -Text ("共勾选 {0} 项 · 这只是勾选，还没有应用" -f $Count) -Size 12 -Color '#7A6B45'
     $sub.Margin = New-Thick 0 8 0 12
     $p.Children.Add($sub) | Out-Null
 
-    $p.Children.Add((New-TextBlock -Text (Format-Reflow $Preset.Desc) -Size 12.5 -Color '#565349' -Wrap $true)) | Out-Null
+    $p.Children.Add((New-TextBlock -Text (Format-Reflow $Preset.Desc) -Size 13 -Color 'TextMid' -Wrap $true)) | Out-Null
 
     # 兼容性提醒
     $warn = @(Get-SelectionWarnings -TweakIds $Preset.Ids)
     if ($warn.Count -gt 0) {
+        # 状态提示：语义底（卡其）+ 语义图标，圆角 8，不再用 3px 彩色左边条
         $wc = New-Object System.Windows.Controls.Border
-        $wc.Background = Get-Brush '#F0EADC'
-        $wc.BorderBrush = Get-Brush '#7A6B45'
-        $wc.BorderThickness = New-Thick 3 0 0 0
-        $wc.CornerRadius = New-Object System.Windows.CornerRadius 4
-        $wc.Padding = New-Thick 12 10 12 10
+        $wc.Background = Get-Brush '#EDE7D9'
+        $wc.CornerRadius = New-Corner 8
+        $wc.Padding = New-Thick 16 12 16 12
         $wc.Margin = New-Thick 0 16 0 0
         $wsp = New-Object System.Windows.Controls.StackPanel
-        $wsp.Children.Add((New-TextBlock -Text '兼容性提醒' -Size 12.5 -Bold $true -Color '#7A6B45')) | Out-Null
+        $wh = New-Object System.Windows.Controls.StackPanel
+        $wh.Orientation = 'Horizontal'
+        $wh.Children.Add((New-Icon -Kind 'AlertOutline' -Size 18 -Color '#7A6B45')) | Out-Null
+        $wt = New-TextBlock -Text '兼容性提醒' -Size 13 -Bold $true -Color '#7A6B45'
+        $wt.Margin = New-Thick 8 0 0 0
+        $wt.VerticalAlignment = 'Center'
+        $wh.Children.Add($wt) | Out-Null
+        $wsp.Children.Add($wh) | Out-Null
         foreach ($w in $warn) {
-            $t = New-TextBlock -Text $w -Size 12 -Color '#4A4842' -Wrap $true
-            $t.Margin = New-Thick 0 6 0 0
+            $t = New-TextBlock -Text $w -Size 12 -Color 'TextMid' -Wrap $true
+            $t.Margin = New-Thick 0 8 0 0
             $wsp.Children.Add($t) | Out-Null
         }
         $wc.Child = $wsp
@@ -3301,14 +3146,14 @@ function Show-PresetDetail {
     }
 
     # 这个预设包含哪些项目
-    $lt = New-TextBlock -Text '包含的项目（点左边任意一项可以看它的详细说明）' -Size 13 -Bold $true -Color '#55606F'
-    $lt.Margin = New-Thick 0 18 0 8
+    $lt = New-TextBlock -Text '包含的项目（点左边任意一项可以看它的详细说明）' -Size 13 -Bold $true
+    $lt.Margin = New-Thick 0 20 0 8
     $p.Children.Add($lt) | Out-Null
     foreach ($id in $Preset.Ids) {
         $tw = $Script:Tweaks | Where-Object { $_.Id -eq $id } | Select-Object -First 1
         if (-not $tw) { continue }
-        $t = New-TextBlock -Text ("· " + $tw.Name) -Size 12 -Color '#565349' -Wrap $true
-        $t.Margin = New-Thick 0 0 0 3
+        $t = New-TextBlock -Text ("· " + $tw.Name) -Size 12 -Color 'TextMid' -Wrap $true
+        $t.Margin = New-Thick 0 0 0 4
         $p.Children.Add($t) | Out-Null
     }
 }
@@ -3320,8 +3165,8 @@ function Show-TweakDetail {
     Start-FadeSlideIn $p   # 换内容时淡入 + 轻微上移，避免「啪」地一下跳变
     if ($Tweak -and $Script:TweakRows[$Tweak.Id]) { Select-Card $Script:TweakRows[$Tweak.Id].Card } else { Select-Card $null }
     if (-not $Tweak) {
-        $p.Children.Add((New-TextBlock -Text '怎么用这一页' -Size 16 -Bold $true)) | Out-Null
-        $tip = New-TextBlock -Wrap $true -Size 12.5 -Color '#565349' -Text @'
+        $p.Children.Add((New-RptSection -Title '怎么用这一页' -Icon 'LightbulbOnOutline')) | Out-Null
+        $tip = New-TextBlock -Wrap $true -Size 13 -Color 'TextMid' -Text @'
 
 最省事的办法：在上面「**按用途选**」那一排里，点你自己属于的那类。
 
@@ -3348,18 +3193,18 @@ function Show-TweakDetail {
         return
     }
 
-    $p.Children.Add((New-TextBlock -Text $Tweak.Name -Size 17 -Bold $true -Wrap $true)) | Out-Null
+    $p.Children.Add((New-TextBlock -Text $Tweak.Name -Size 16 -Bold $true -Wrap $true)) | Out-Null
 
     $wrap = New-Object System.Windows.Controls.WrapPanel
-    $wrap.Margin = New-Thick 0 10 0 12
+    $wrap.Margin = New-Thick 0 12 0 12
     $rc = Get-RiskColors $Tweak.Risk
-    $wrap.Children.Add((New-Badge -Text $Tweak.Category -Fg '#66635B' -Bg '#E8E7E2')) | Out-Null
+    $wrap.Children.Add((New-Badge -Text $Tweak.Category -Fg 'TextDim' -Bg 'SurfaceSunken')) | Out-Null
     $wrap.Children.Add((New-Badge -Text ("风险 " + $Tweak.Risk) -Fg $rc.Fg -Bg $rc.Bg)) | Out-Null
     if ($Tweak.Reboot) { $wrap.Children.Add((New-Badge -Text '需要重启生效' -Fg '#7A6B45' -Bg '#EDE7D9')) | Out-Null }
-    if ($Tweak.Recommended) { $wrap.Children.Add((New-Badge -Text '推荐' -Fg '#55606F' -Bg '#E4E7EC')) | Out-Null }
+    if ($Tweak.Recommended) { $wrap.Children.Add((New-Badge -Text '推荐' -Fg 'TextMid' -Bg 'SurfaceSunken')) | Out-Null }
     $p.Children.Add($wrap) | Out-Null
 
-    $p.Children.Add((New-TextBlock -Text ("预期效果：" + $Tweak.Effect) -Size 12.5 -Color '#4A4842' -Wrap $true)) | Out-Null
+    $p.Children.Add((New-TextBlock -Text ("预期效果：" + $Tweak.Effect) -Size 13 -Color 'TextMid' -Wrap $true)) | Out-Null
 
     # ---- 对各类使用场景的影响 ----
     #
@@ -3369,8 +3214,8 @@ function Show-TweakDetail {
     # 八张卡全平铺会很长，所以分两层：
     #   第一层「一眼看懂」—— 按结论等级把场景名归拢成几行，扫一眼就知道
     #   第二层  详细卡片  —— 结论和理由都相同的场景自动合并成一张
-    $gt = New-TextBlock -Text '这一项对各类使用场景意味着什么' -Size 13 -Bold $true -Color '#55606F'
-    $gt.Margin = New-Thick 0 16 0 8
+    $gt = New-TextBlock -Text '这一项对各类使用场景意味着什么' -Size 13 -Bold $true
+    $gt.Margin = New-Thick 0 24 0 12
     $p.Children.Add($gt) | Out-Null
 
     $merged = @(Get-MergedVerdicts -Notes $Script:GameNotes -TweakId $Tweak.Id)
@@ -3384,12 +3229,10 @@ function Show-TweakDetail {
         foreach ($nm in $m.Names) { [void]$byVerdict[$m.V].Add($nm) }
     }
     $sumBox = New-Object System.Windows.Controls.Border
-    $sumBox.Background = Get-Brush '#FBFAF8'
-    $sumBox.BorderBrush = Get-Brush '#E0DED8'
-    $sumBox.BorderThickness = New-Thick 1
-    $sumBox.CornerRadius = New-Object System.Windows.CornerRadius 6
-    $sumBox.Padding = New-Thick 11 9 11 6
-    $sumBox.Margin = New-Thick 0 0 0 10
+    $sumBox.Background = Get-Brush 'SurfaceAlt'
+    $sumBox.CornerRadius = New-Corner 8
+    $sumBox.Padding = New-Thick 12 12 12 8
+    $sumBox.Margin = New-Thick 0 0 0 12
     $sumSp = New-Object System.Windows.Controls.StackPanel
     foreach ($vk in ($byVerdict.Keys | Sort-Object { $order["$_"] })) {
         $row = New-Object System.Windows.Controls.StackPanel
@@ -3399,7 +3242,7 @@ function Show-TweakDetail {
         $b = New-Badge -Text $vk -Fg $vcol -Bg (Get-TintBg $vcol)
         $b.Margin = New-Thick 0 0 8 0
         $row.Children.Add($b) | Out-Null
-        $names = New-TextBlock -Text (($byVerdict[$vk]) -join ' · ') -Size 12 -Color '#4A4842' -Wrap $true
+        $names = New-TextBlock -Text (($byVerdict[$vk]) -join ' · ') -Size 12 -Color 'TextMid' -Wrap $true
         $names.VerticalAlignment = 'Center'
         $row.Children.Add($names) | Out-Null
         $sumSp.Children.Add($row) | Out-Null
@@ -3411,25 +3254,23 @@ function Show-TweakDetail {
     foreach ($m in $merged) {
         $col = Get-VerdictColor $m.V
 
+        # 逐条理由：灰底圆角块，结论用徽章表达 —— 不再用 3px 彩色左边条
         $gc = New-Object System.Windows.Controls.Border
-        $gc.Background = Get-Brush '#FBFAF8'
-        $gc.BorderBrush = Get-Brush $col
-        $gc.BorderThickness = New-Thick 3 0 0 0
-        $gc.CornerRadius = New-Object System.Windows.CornerRadius 4
-        $gc.Padding = New-Thick 11 8 11 9
-        $gc.Margin = New-Thick 0 0 0 6
+        $gc.Background = Get-Brush 'SurfaceAlt'
+        $gc.CornerRadius = New-Corner 8
+        $gc.Padding = New-Thick 12 12 12 12
+        $gc.Margin = New-Thick 0 0 0 8
 
         $gsp = New-Object System.Windows.Controls.StackPanel
-        $hdr = New-Object System.Windows.Controls.StackPanel
-        $hdr.Orientation = 'Horizontal'
-        $gname = New-TextBlock -Text (($m.Names) -join ' / ') -Size 12.5 -Bold $true -Wrap $true
-        $hdr.Children.Add($gname) | Out-Null
+        $hdr = New-Object System.Windows.Controls.WrapPanel
         $vb = New-Badge -Text $m.V -Fg $col -Bg (Get-TintBg $col)
-        $vb.Margin = New-Thick 8 0 0 0
         $hdr.Children.Add($vb) | Out-Null
+        $gname = New-TextBlock -Text (($m.Names) -join ' / ') -Size 13 -Bold $true -Wrap $true
+        $gname.VerticalAlignment = 'Center'
+        $hdr.Children.Add($gname) | Out-Null
         $gsp.Children.Add($hdr) | Out-Null
 
-        $gn = New-TextBlock -Text $m.N -Size 12 -Color '#565349' -Wrap $true
+        $gn = New-TextBlock -Text $m.N -Size 12 -Color 'TextMid' -Wrap $true
         $gn.Margin = New-Thick 0 4 0 0
         $gsp.Children.Add($gn) | Out-Null
 
@@ -3438,13 +3279,13 @@ function Show-TweakDetail {
     }
 
     $sep = New-Object System.Windows.Controls.Border
-    $sep.Height = 1; $sep.Background = Get-Brush '#DDDBD5'; $sep.Margin = New-Thick 0 14 0 12
+    $sep.Height = 1; $sep.Background = Get-Brush 'Stroke'; $sep.Margin = New-Thick 0 16 0 16
     $p.Children.Add($sep) | Out-Null
 
-    $p.Children.Add((New-TextBlock -Text (Format-Reflow $Tweak.Detail) -Size 12.5 -Color '#565349' -Wrap $true)) | Out-Null
+    $p.Children.Add((New-TextBlock -Text (Format-Reflow $Tweak.Detail) -Size 13 -Color 'TextMid' -Wrap $true)) | Out-Null
 
     $bar = New-Object System.Windows.Controls.StackPanel
-    $bar.Orientation = 'Horizontal'; $bar.Margin = New-Thick 0 18 0 0
+    $bar.Orientation = 'Horizontal'; $bar.Margin = New-Thick 0 20 0 0
     $bApply = New-Object System.Windows.Controls.Button
     $bApply.Content = '只应用这一项'; $bApply.Tag = $Tweak
     $bApply.Add_Click({ Invoke-ApplyTweaks @($this.Tag) })
@@ -3470,7 +3311,6 @@ function Update-TweakFilter {
       按「名称 / 分类 / 效果 / 说明」一起匹配，整条分类都没命中就连标题一起隐藏。
     #>
     $q = "$($Script:UI.TweakSearch.Text)".Trim()
-    $Script:UI.TweakSearchHint.Visibility = if ($q) { 'Collapsed' } else { 'Visible' }
 
     foreach ($cat in $Script:TweakCatOrder) {
         $shown = 0
@@ -3509,25 +3349,35 @@ function Build-TweakUI {
 
         # 分类标题做成可点击的一行：显示条数，点一下折叠/展开整组
         $hb = New-Object System.Windows.Controls.Border
-        $hb.Padding = New-Thick 2 9 2 7
-        $hb.Margin = New-Thick 0 8 0 4
-        $hb.Background = Get-Brush '#00FFFFFF'
+        $hb.Padding = New-Thick 8 8 8 8
+        $hb.Margin = New-Thick 0 $(if ($panel.Children.Count -eq 0) { 0 } else { 12 }) 0 4
+        $hb.CornerRadius = New-Corner 8
+        $hb.Background = Get-Brush 'Transparent'
         $hb.Cursor = 'Hand'
         $hrow = New-Object System.Windows.Controls.StackPanel
         $hrow.Orientation = 'Horizontal'
-        $arrow = New-TextBlock -Text '▾' -Size 11 -Color '#55606F'
-        $arrow.Margin = New-Thick 0 1 6 0
+        $arrow = New-Icon -Kind 'ChevronDown' -Size 18 -Color 'TextDim'
+        $arrow.Margin = New-Thick 0 0 8 0
         $hrow.Children.Add($arrow) | Out-Null
-        $hrow.Children.Add((New-TextBlock -Text $cat -Size 14 -Bold $true -Color '#55606F')) | Out-Null
-        $cnt = New-TextBlock -Text '' -Size 11.5 -Color '#66635B'
-        $cnt.Margin = New-Thick 8 2 0 0
-        $hrow.Children.Add($cnt) | Out-Null
+        $ct = New-TextBlock -Text $cat -Size 13 -Bold $true
+        $ct.VerticalAlignment = 'Center'
+        $hrow.Children.Add($ct) | Out-Null
+        $cntBox = New-Object System.Windows.Controls.Border
+        $cntBox.CornerRadius = New-Corner 6
+        $cntBox.Padding = New-Thick 8 0 8 0
+        $cntBox.Margin = New-Thick 8 0 0 0
+        $cntBox.Background = Get-Brush 'SurfaceSunken'
+        $cntBox.VerticalAlignment = 'Center'
+        $cnt = New-TextBlock -Text '' -Size 11 -Color 'TextDim'
+        $cntBox.Child = $cnt
+        $hrow.Children.Add($cntBox) | Out-Null
         $hb.Child = $hrow
         $hb.Tag = $cat
+        Add-Interactive $hb -BgNormal 'Transparent' -BgHover 'CardHover'
         $hb.Add_MouseLeftButtonUp({
                 $c = $this.Tag
                 $Script:TweakCatCollapsed[$c] = -not $Script:TweakCatCollapsed[$c]
-                $Script:TweakCatHeaders[$c].Arrow.Text = if ($Script:TweakCatCollapsed[$c]) { '▸' } else { '▾' }
+                $Script:TweakCatHeaders[$c].Arrow.Kind = if ($Script:TweakCatCollapsed[$c]) { 'ChevronRight' } else { 'ChevronDown' }
                 Update-TweakFilter
             })
         $panel.Children.Add($hb) | Out-Null
@@ -3542,7 +3392,7 @@ function Build-TweakUI {
             # 后三列定宽，整列右边缘对齐，一眼能顺着扫下来 ——
             # 这是表格相对于卡片最实在的好处。
             $g = New-Object System.Windows.Controls.Grid
-            foreach ($w in @(0, -1, 66, 24, 76)) {
+            foreach ($w in @(0, -1, 72, 24, 80)) {
                 $cd = New-Object System.Windows.Controls.ColumnDefinition
                 $cd.Width = if ($w -eq -1) {
                     New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
@@ -3555,19 +3405,20 @@ function Build-TweakUI {
             }
 
             $cb = New-Object System.Windows.Controls.CheckBox
-            $cb.Margin = New-Thick 0 0 2 0
+            $cb.Margin = New-Thick 0 0 8 0
+            $cb.VerticalAlignment = 'Top'
             $cb.Tag = $tw
             $cb.Add_Click({ Show-TweakDetail $this.Tag; Update-TweakSelCount })
             [System.Windows.Controls.Grid]::SetColumn($cb, 0)
             $g.Children.Add($cb) | Out-Null
 
             $sp = New-Object System.Windows.Controls.StackPanel
-            $nameTb = New-TextBlock -Text $tw.Name -Size 15
+            $nameTb = New-TextBlock -Text $tw.Name -Size 14
             $nameTb.TextWrapping = 'Wrap'
             $sp.Children.Add($nameTb) | Out-Null
-            $meta = New-TextBlock -Text ("风险 {0}　{1}" -f $tw.Risk, $tw.Effect) -Size 12.5 -Color '#66635B'
+            $meta = New-TextBlock -Text ("风险 {0}　{1}" -f $tw.Risk, $tw.Effect) -Size 12 -Color 'TextDim'
             $meta.TextWrapping = 'Wrap'
-            $meta.Margin = New-Thick 0 3 0 0
+            $meta.Margin = New-Thick 0 4 0 0
             $sp.Children.Add($meta) | Out-Null
             [System.Windows.Controls.Grid]::SetColumn($sp, 1)
             $g.Children.Add($sp) | Out-Null
@@ -3583,19 +3434,19 @@ function Build-TweakUI {
             #    只有「该开却没开」的行才上法定墨和 ↑，
             #    满页平静，真要处理的那几行才跳出来。
             # ================================================================
-            $res = New-TextBlock -Text '检测中' -Size 15 -Color '#2B2A26'
+            $res = New-TextBlock -Text '检测中' -Size 13 -Color 'TextMain'
             $res.TextAlignment = 'Right'
             $res.VerticalAlignment = 'Center'
             [System.Windows.Controls.Grid]::SetColumn($res, 2)
             $g.Children.Add($res) | Out-Null
 
-            $mk = New-TextBlock -Text '' -Size 15 -Color '#66635B'
+            $mk = New-TextBlock -Text '' -Size 14 -Color 'TextDim'
             $mk.TextAlignment = 'Center'
             $mk.VerticalAlignment = 'Center'
             [System.Windows.Controls.Grid]::SetColumn($mk, 3)
             $g.Children.Add($mk) | Out-Null
 
-            $rf = New-TextBlock -Size 13 -Color '#66635B' -Text $(if ($tw.Recommended) { '建议 开启' } else { '可选' })
+            $rf = New-TextBlock -Size 12 -Color 'TextDim' -Text $(if ($tw.Recommended) { '建议 开启' } else { '可选' })
             $rf.TextAlignment = 'Right'
             $rf.VerticalAlignment = 'Center'
             [System.Windows.Controls.Grid]::SetColumn($rf, 4)
@@ -3622,7 +3473,7 @@ function Update-TweakStates {
             # 本机不适用的项用「未上墨」表达：结果写一个长横、整行降到 0.45。
             # 化验单上没做的项目是留白，不会专门涂一块灰遮罩。
             $row.Badge.Text = [char]0x2014
-            $row.Badge.Foreground = Get-Brush '#66635B'
+            $row.Badge.Foreground = Get-Brush 'TextDim'
             $row.Badge.FontWeight = 'Normal'
             $row.Mark.Text = ''
             $row.Ref.Text = '本机不适用'
@@ -3637,10 +3488,10 @@ function Update-TweakStates {
         $row.Ref.Text = $(if ($tw.Recommended) { '建议 开启' } else { '可选' })
         if ($applied) {
             $row.Badge.Text = '已开启'
-            $row.Badge.Foreground = Get-Brush '#2B2A26'
+            $row.Badge.Foreground = Get-Brush 'TextMain'
             $row.Badge.FontWeight = 'Normal'
             $row.Mark.Text = ''
-            $row.Mark.Foreground = Get-Brush '#66635B'
+            $row.Mark.Foreground = Get-Brush 'TextDim'
             $row.Mark.FontWeight = 'Normal'
         } elseif ($tw.Recommended) {
             # 该开却没开 = 超出参考范围。整行唯一上法定墨的情况。
@@ -3652,10 +3503,10 @@ function Update-TweakStates {
             $row.Mark.FontWeight = 'SemiBold'
         } else {
             $row.Badge.Text = '未开启'
-            $row.Badge.Foreground = Get-Brush '#2B2A26'
+            $row.Badge.Foreground = Get-Brush 'TextMain'
             $row.Badge.FontWeight = 'Normal'
             $row.Mark.Text = ''
-            $row.Mark.Foreground = Get-Brush '#66635B'
+            $row.Mark.Foreground = Get-Brush 'TextDim'
             $row.Mark.FontWeight = 'Normal'
         }
         if ($PreselectRecommended) {
@@ -3702,8 +3553,7 @@ function Invoke-ApplyTweaks {
         $warn += "`r`n`r`n【游戏兼容性】`r`n" + (($gw | ForEach-Object { '· ' + $_ }) -join "`r`n")
     }
 
-    $r = [System.Windows.MessageBox]::Show("即将应用以下 $($List.Count) 项优化：`r`n`r`n$names$warn`r`n`r`n所有修改都会先备份原值，之后随时可以还原。确定继续吗？",
-        '确认应用', 'YesNo', 'Question')
+    $r = Show-Msg -Text ("即将应用以下 $($List.Count) 项优化：`r`n`r`n$names$warn`r`n`r`n所有修改都会先备份原值，之后随时可以还原。确定继续吗？") -Title '确认应用' -Kind Ask
     if ($r -ne 'Yes') { return }
 
     if ($Script:UI.ChkRestorePoint.IsChecked) {
@@ -3734,8 +3584,7 @@ function Invoke-RevertTweaks {
         return
     }
     $names = ($List | ForEach-Object { '· ' + $_.Name }) -join "`r`n"
-    $r = [System.Windows.MessageBox]::Show("即将把以下 $($List.Count) 项还原为修改前的状态：`r`n`r`n$names`r`n`r`n确定吗？",
-        '确认还原', 'YesNo', 'Question')
+    $r = Show-Msg -Text ("即将把以下 $($List.Count) 项还原为修改前的状态：`r`n`r`n$names`r`n`r`n确定吗？") -Title '确认还原' -Kind Ask
     if ($r -ne 'Yes') { return }
 
     $ok = 0
@@ -3763,17 +3612,18 @@ function Show-CleanDetail {
     Start-FadeSlideIn $p   # 换内容时淡入 + 轻微上移，避免「啪」地一下跳变
     if ($Item -and $Script:CleanRows[$Item.Id]) { Select-Card $Script:CleanRows[$Item.Id].Card } else { Select-Card $null }
     if (-not $Item) {
-        $p.Children.Add((New-TextBlock -Text "点左边任意一项，这里会说明它清的是什么、安不安全。`r`n`r`n建议先点「扫描可清理的垃圾」看看各项能清多少，再决定。" -Color '#66635B' -Wrap $true)) | Out-Null
+        $p.Children.Add((New-RptSection -Title '清理说明' -Icon 'Broom')) | Out-Null
+        $p.Children.Add((New-TextBlock -Text "点左边任意一项，这里会说明它清的是什么、安不安全。`r`n`r`n建议先点「扫描可清理的垃圾」看看各项能清多少，再决定。" -Color 'TextDim' -Wrap $true)) | Out-Null
         return
     }
-    $p.Children.Add((New-TextBlock -Text $Item.Name -Size 17 -Bold $true -Wrap $true)) | Out-Null
+    $p.Children.Add((New-TextBlock -Text $Item.Name -Size 16 -Bold $true -Wrap $true)) | Out-Null
     $wrap = New-Object System.Windows.Controls.WrapPanel
-    $wrap.Margin = New-Thick 0 10 0 12
+    $wrap.Margin = New-Thick 0 12 0 12
     $rc = Get-RiskColors $Item.Risk
     $wrap.Children.Add((New-Badge -Text ("风险 " + $Item.Risk) -Fg $rc.Fg -Bg $rc.Bg)) | Out-Null
-    if ($Item.Recommended) { $wrap.Children.Add((New-Badge -Text '推荐' -Fg '#55606F' -Bg '#E4E7EC')) | Out-Null }
+    if ($Item.Recommended) { $wrap.Children.Add((New-Badge -Text '推荐' -Fg 'TextMid' -Bg 'SurfaceSunken')) | Out-Null }
     $p.Children.Add($wrap) | Out-Null
-    $p.Children.Add((New-TextBlock -Text (Format-Reflow $Item.Detail) -Size 12.5 -Color '#565349' -Wrap $true)) | Out-Null
+    $p.Children.Add((New-TextBlock -Text (Format-Reflow $Item.Detail) -Size 13 -Color 'TextMid' -Wrap $true)) | Out-Null
 }
 
 function Update-CleanSelCount {
@@ -3785,7 +3635,6 @@ function Update-CleanSelCount {
 
 function Update-CleanFilter {
     $q = "$($Script:UI.CleanSearch.Text)".Trim()
-    $Script:UI.CleanSearchHint.Visibility = if ($q) { 'Collapsed' } else { 'Visible' }
     foreach ($it in $Script:CleanItems) {
         $row = $Script:CleanRows[$it.Id]
         if (-not $row) { continue }
@@ -3798,7 +3647,7 @@ function Build-CleanUI {
     $panel = $Script:UI.CleanPanel
     $panel.Children.Clear()
     $Script:CleanRows = @{}
-    Add-ColHeader $panel -First '清理项目' -Cols @(@{ T = '可清理'; W = 92 })
+    Add-ColHeader $panel -First '清理项目' -Cols @(@{ T = '可清理'; W = 96 })
 
     foreach ($it in $Script:CleanItems) {
         $card = New-ListCard
@@ -3806,7 +3655,7 @@ function Build-CleanUI {
         $card.Add_MouseLeftButtonUp({ Show-CleanDetail $this.Tag })
 
         $g = New-Object System.Windows.Controls.Grid
-        foreach ($w in @(0, -1, 92)) {
+        foreach ($w in @(0, -1, 96)) {
             $cd = New-Object System.Windows.Controls.ColumnDefinition
             $cd.Width = if ($w -eq -1) {
                 New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
@@ -3819,7 +3668,7 @@ function Build-CleanUI {
         }
 
         $cb = New-Object System.Windows.Controls.CheckBox
-        $cb.Margin = New-Thick 0 0 2 0
+        $cb.Margin = New-Thick 0 0 8 0
         $cb.IsChecked = [bool]$it.Recommended
         $cb.Tag = $it
         $cb.Add_Click({ Show-CleanDetail $this.Tag; Update-CleanSelCount })
@@ -3827,7 +3676,7 @@ function Build-CleanUI {
         $g.Children.Add($cb) | Out-Null
 
         $sp = New-Object System.Windows.Controls.StackPanel
-        $nameTb = New-TextBlock -Text $it.Name -Size 15
+        $nameTb = New-TextBlock -Text $it.Name -Size 14
         $nameTb.TextWrapping = 'Wrap'
         $sp.Children.Add($nameTb) | Out-Null
         [System.Windows.Controls.Grid]::SetColumn($sp, 1)
@@ -3835,7 +3684,7 @@ function Build-CleanUI {
 
         # 扫描结果：等宽数位右对齐，和别的表一个语汇。
         # 不加粗 —— 加粗是留给「超出参考范围」的。
-        $size = New-TextBlock -Text ([string][char]0x2014) -Size 16 -Color '#2B2A26'
+        $size = New-TextBlock -Text ([string][char]0x2014) -Size 14 -Color 'TextMain' -Bold $true
         $size.VerticalAlignment = 'Center'
         $size.TextAlignment = 'Right'
         [System.Windows.Documents.Typography]::SetNumeralAlignment($size, 'Tabular')
@@ -3860,10 +3709,10 @@ function Invoke-ScanJunk {
         $sz = Measure-CleanupItem $it
         if ($sz -lt 0) {
             $row.Size.Text = '执行后才知道'
-            $row.Size.Foreground = Get-Brush '#66635B'
+            $row.Size.Foreground = Get-Brush 'TextDim'
         } elseif ($sz -eq 0) {
             $row.Size.Text = '无'
-            $row.Size.Foreground = Get-Brush '#66635B'
+            $row.Size.Foreground = Get-Brush 'TextDim'
         } else {
             $row.Size.Text = Format-Size $sz
             $row.Size.Foreground = Get-Brush '#7A6B45'
@@ -3888,9 +3737,7 @@ function Invoke-CleanSelected {
         return
     }
     $names = ($sel | ForEach-Object { '· ' + $_.Name }) -join "`r`n"
-    $r = [System.Windows.MessageBox]::Show(
-        "即将清理以下 $($sel.Count) 项：`r`n`r`n$names`r`n`r`n建议先关闭浏览器和游戏平台客户端，正在使用的文件删不掉。`r`n清理不可撤销，确定继续吗？",
-        '确认清理', 'YesNo', 'Warning')
+    $r = Show-Msg -Text ("即将清理以下 $($sel.Count) 项：`r`n`r`n$names`r`n`r`n建议先关闭浏览器和游戏平台客户端，正在使用的文件删不掉。`r`n清理不可撤销，确定继续吗？") -Title '确认清理' -Kind AskWarn
     if ($r -ne 'Yes') { return }
 
     Set-Busy $true
@@ -3924,37 +3771,42 @@ function Invoke-CleanSelected {
 # ---------------------------------------------------------------------
 function New-ThemeSwatchBar {
     <#
-      一套皮肤的色带：窗口底 / 面板底 / 主色三段拼成一条，满格宽。
+      一套皮肤的缩略图：画布底色上放一张白卡 + 一粒强调色，像这套皮肤下的界面剖面。
 
       ★ 必须直接 ConvertFromString，不能走 Get-Brush ★
-        Get-Brush 会按当前皮肤做重映射，那样每条预览都会被改成
-        当前皮肤的颜色，十二套皮肤长得一模一样。（踩过。）
-
-      ★ 方角，不是圆角小块 ★
-        圆角小色块是「标签」的样子；这里要的是一段真实的界面剖面，
-        像油漆色卡那样三段贴在一起，边界清楚才好比。
+        Get-Brush 按**当前**皮肤取色，那样两张预览会被画成同一套颜色。（踩过。）
     #>
-    param([string[]]$Colors, [double]$H = 44)
-    $g = New-Object System.Windows.Controls.Grid
-    $g.Height = $H
-    for ($i = 0; $i -lt $Colors.Count; $i++) {
-        $cd = New-Object System.Windows.Controls.ColumnDefinition
-        $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
-        $g.ColumnDefinitions.Add($cd)
-        $r = New-Object System.Windows.Shapes.Rectangle
-        $r.Fill = New-Object System.Windows.Media.SolidColorBrush (
-            [System.Windows.Media.ColorConverter]::ConvertFromString($Colors[$i]))
-        [System.Windows.Controls.Grid]::SetColumn($r, $i)
-        $g.Children.Add($r) | Out-Null
+    param([string[]]$Colors, [double]$H = 96)
+    $bg = New-Object System.Windows.Controls.Border
+    $bg.Height = $H
+    $bg.CornerRadius = New-Corner 8
+    $bg.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($Colors[0]))
+    $bg.BorderBrush = Get-Brush 'Stroke'
+    $bg.BorderThickness = New-Thick 1
+    $bg.Padding = New-Thick 16 16 16 16
+    $card = New-Object System.Windows.Controls.Border
+    $card.CornerRadius = New-Corner 8
+    $card.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($Colors[1]))
+    $card.Padding = New-Thick 12 12 12 12
+    $sp = New-Object System.Windows.Controls.StackPanel
+    foreach ($w in 64, 40) {
+        $ln = New-Object System.Windows.Controls.Border
+        $ln.Width = $w; $ln.Height = 6
+        $ln.CornerRadius = New-Corner 3
+        $ln.HorizontalAlignment = 'Left'
+        $ln.Margin = New-Thick 0 0 0 8
+        $ln.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($Colors[0]))
+        $sp.Children.Add($ln) | Out-Null
     }
-    # 浅色皮肤的色带贴在浅色纸上会糊掉边界，描一条细线圈住
-    $frame = New-Object System.Windows.Shapes.Rectangle
-    $frame.Stroke = Get-Brush '#D2D0C9'
-    $frame.StrokeThickness = 1
-    $frame.Fill = [System.Windows.Media.Brushes]::Transparent
-    [System.Windows.Controls.Grid]::SetColumnSpan($frame, $Colors.Count)
-    $g.Children.Add($frame) | Out-Null
-    return $g
+    $pill = New-Object System.Windows.Controls.Border
+    $pill.Width = 48; $pill.Height = 12
+    $pill.CornerRadius = New-Corner 6
+    $pill.HorizontalAlignment = 'Left'
+    $pill.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($Colors[2]))
+    $sp.Children.Add($pill) | Out-Null
+    $card.Child = $sp
+    $bg.Child = $card
+    return $bg
 }
 
 function Add-SubItem {
@@ -3972,7 +3824,7 @@ function Add-SubItem {
     param($Panel, $Element)
     if ($null -eq $Panel -or $null -eq $Element) { return }
     $b = New-Object System.Windows.Controls.Border
-    $b.BorderBrush = Get-Brush '#DDDBD5'
+    $b.BorderBrush = Get-Brush 'Stroke'
     $b.BorderThickness = New-Thick 1 0 0 0
     $b.Padding = New-Thick 16 0 0 0
     $b.Child = $Element
@@ -3984,7 +3836,7 @@ function New-SettingCheck {
       一个带说明的开关。返回可以直接塞进面板的那一块（勾 + 说明）。
 
       ★ 说明不能塞进 CheckBox.Content ★
-        试过了：HandyControl 的模板里那个方框是**垂直居中**的，内容再高它也不跟，
+        试过了：控件库的模板里那个方框是**垂直居中**的，内容再高它也不跟，
         于是「标题 + 说明」两行下去，方框就对到了说明那一行 ——
         看起来像方框是说明的、跟标题没关系。
         所以勾里只放标题（永远一行，方框自然对齐），说明另起一行。
@@ -4009,7 +3861,7 @@ function New-SettingCheck {
 
     $cb = New-Object System.Windows.Controls.CheckBox
     $cb.Content = $Title
-    $cb.FontSize = 13.5
+    $cb.FontSize = 13
     $cb.IsChecked = $Checked
     $cb.IsEnabled = $Enabled
     if ($OnClick) { $cb.Add_Click($OnClick) }
@@ -4017,9 +3869,9 @@ function New-SettingCheck {
 
     $noteText = if ($Enabled) { $Note } else { $WhyOff }
     if ($noteText) {
-        $n = New-TextBlock -Text $noteText -Size 13 -Color '#66635B' -Wrap $true
-        # 左边缩到和标题文字对齐（方框 16 + 间距 8），说明才像是这个勾的
-        $n.Margin = New-Thick 24 5 0 0
+        $n = New-TextBlock -Text $noteText -Size 12 -Color 'TextDim' -Wrap $true
+        # 左边缩到和标题文字对齐（MDIX 勾选框 20 + 间距 8），说明才像是这个勾的
+        $n.Margin = New-Thick 28 4 0 0
         # 一行 90 个字没人读，压到一个正常的阅读宽度
         $n.MaxWidth = 720
         $n.HorizontalAlignment = 'Left'
@@ -4040,42 +3892,36 @@ function New-SettingCheck {
 }
 
 function Build-ThemeUI {
+    <#
+      个性化页：三张卡 —— 皮肤（浅色 / 深色）、背景图、界面动画。
+      v6.0 只有两套皮肤：浅色默认，深色备选（design.md 1.1）。
+    #>
     $panel = $Script:UI.ThemePanel
     $panel.Children.Clear()
     $cur = Get-ThemeSetting
 
-    # ==================== 纯色皮肤 ====================
-    #   ★ 三列网格，不是十二张竖排的卡 ★
-    #     选皮肤要做的是「一眼比完」。上一版一行一张卡、一屏只看得见五张，
-    #     等于逼用户滚着比色差 —— 比色最忌讳的就是不能并排看。
-    $panel.Children.Add((New-RptSection -Title '皮肤' -Aside '点一下立刻生效，下次打开自动记住')) | Out-Null
-
+    # ==================== 皮肤 ====================
+    $c1 = New-Card -Title '皮肤' -Aside '点一下立刻生效，下次打开自动记住' -Icon 'PaletteOutline'
     $themes = Get-BuiltinThemes
     $names = @($themes.Keys)
-    $cols = 3
     $grid = New-Object System.Windows.Controls.Grid
-    $grid.Margin = New-Thick 0 4 0 0
-    for ($c = 0; $c -lt $cols; $c++) {
+    for ($c = 0; $c -lt ($names.Count * 2 - 1); $c++) {
         $cd = New-Object System.Windows.Controls.ColumnDefinition
-        $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        $cd.Width = if ($c % 2 -eq 1) { New-Object System.Windows.GridLength 16 } else { New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star) }
         $grid.ColumnDefinitions.Add($cd)
     }
-    $rows = [math]::Ceiling($names.Count / [double]$cols)
-    for ($r = 0; $r -lt $rows; $r++) {
-        $rd = New-Object System.Windows.Controls.RowDefinition
-        $rd.Height = New-Object System.Windows.GridLength -1, ([System.Windows.GridUnitType]::Auto)
-        $grid.RowDefinitions.Add($rd)
-    }
-
     for ($i = 0; $i -lt $names.Count; $i++) {
         $name = $names[$i]
         $th = $themes[$name]
         $on = ($name -eq $cur.Name)
 
+        # 选中 = 2px 强调色描边 + 名字前一个勾（选中态是强调色的合法去处）
         $cell = New-Object System.Windows.Controls.Border
+        $cell.CornerRadius = New-Corner 12
+        $cell.Padding = New-Thick 12 12 12 12
+        $cell.BorderThickness = New-Thick 2
+        $cell.BorderBrush = Get-Brush $(if ($on) { 'Accent' } else { 'Stroke' })
         $cell.Background = [System.Windows.Media.Brushes]::Transparent
-        $cell.Padding = New-Thick 0 0 0 16
-        $cell.Margin = New-Thick $(if ($i % $cols -eq 0) { 0 } else { 14 }) 0 0 0
         $cell.Cursor = 'Hand'
         $cell.Tag = $name
         $cell.Add_MouseLeftButtonUp({
@@ -4083,67 +3929,59 @@ function Build-ThemeUI {
                 Redraw-AllPages
                 Set-Status "皮肤已换成「$($this.Tag)」"
             })
-        # 色样格值得端详一下，给它光斑跟随
-        Add-Interactive -Border $cell -BgNormal '#E4E3DE' -BgHover '#EDECE8' -NoLift -Spotlight
+        Add-Interactive $cell -BgNormal 'Transparent' -BgHover 'CardHover'
+        if ($on) { $cell.Resources['__sel'] = $true }
 
         $sp = New-Object System.Windows.Controls.StackPanel
         $sp.Children.Add((New-ThemeSwatchBar -Colors $th.Swatch)) | Out-Null
-
-        # 选中就在色带底下压一条实线 —— 不用彩色描边，
-        # 那会和「法定墨只有一种含义」打架。
-        $ul = New-Object System.Windows.Shapes.Rectangle
-        $ul.Height = 3
-        $ul.Fill = Get-Brush $(if ($on) { '#2B2A26' } else { '#00000000' })
-        if (-not $on) { $ul.Visibility = 'Hidden' }
-        $sp.Children.Add($ul) | Out-Null
-
         $head = New-Object System.Windows.Controls.StackPanel
         $head.Orientation = 'Horizontal'
-        $head.Margin = New-Thick 0 8 0 0
-        $nm = New-TextBlock -Text $name -Size 15 -Color '#2B2A26'
-        if ($on) { $nm.FontWeight = 'SemiBold' }
+        $head.Margin = New-Thick 0 12 0 0
+        if ($on) {
+            $ck = New-Icon -Kind 'CheckCircle' -Size 18 -Color 'Accent'
+            $ck.Margin = New-Thick 0 0 8 0
+            $head.Children.Add($ck) | Out-Null
+        }
+        $nm = New-TextBlock -Text $name -Size 14 -Bold $true -Color $(if ($on) { 'Accent' } else { 'TextMain' })
+        $nm.VerticalAlignment = 'Center'
         $head.Children.Add($nm) | Out-Null
         $tagBits = @()
         if ($on) { $tagBits += '使用中' }
         if (Test-ThemeIsDark $name) { $tagBits += '深色' }
         if ($tagBits.Count -gt 0) {
-            $tg = New-TextBlock -Text ($tagBits -join ' · ') -Size 13 -Color '#66635B'
+            $tg = New-TextBlock -Text ($tagBits -join ' · ') -Size 12 -Color 'TextDim'
             $tg.VerticalAlignment = 'Center'
             $tg.Margin = New-Thick 8 0 0 0
             $head.Children.Add($tg) | Out-Null
         }
         $sp.Children.Add($head) | Out-Null
-
-        $ds = New-TextBlock -Text $th.Desc -Size 13 -Color '#66635B' -Wrap $true
-        $ds.Margin = New-Thick 0 3 0 0
+        $ds = New-TextBlock -Text $th.Desc -Size 12 -Color 'TextDim' -Wrap $true
+        $ds.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($ds) | Out-Null
 
         $cell.Child = $sp
-        [System.Windows.Controls.Grid]::SetColumn($cell, $i % $cols)
-        [System.Windows.Controls.Grid]::SetRow($cell, [math]::Floor($i / $cols))
+        [System.Windows.Controls.Grid]::SetColumn($cell, $i * 2)
         $grid.Children.Add($cell) | Out-Null
     }
-    $panel.Children.Add($grid) | Out-Null
+    $c1.Body.Children.Add($grid) | Out-Null
+    $panel.Children.Add($c1.Card) | Out-Null
 
     # ==================== 背景图 ====================
-    $sec2 = New-RptSection -Title '背景图' -Aside '可选'
-    $sec2.Margin = New-Thick 0 22 0 8
-    $panel.Children.Add($sec2) | Out-Null
-
-    $tip = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text (
+    $c2 = New-Card -Title '背景图' -Aside '可选' -Icon 'ImageOutline'
+    $c2.Card.Margin = New-Thick 0 16 0 0
+    $pb = $c2.Body
+    $tip = New-TextBlock -Size 13 -Color 'TextDim' -Wrap $true -Text (
         '选一张图铺在窗口背景上。图片会被复制到工具自己的文件夹里保存，' +
         '所以选完之后原图删掉、U 盘拔掉都不影响。' + "`r`n" +
         '建议选颜色比较淡、内容不太花的图 —— 太花的图会让上面的字看不清。' +
         '下面的「面板不透明度」就是用来调这个的：拉低一点图更明显，拉高一点字更清楚。')
-    $panel.Children.Add($tip) | Out-Null
+    $pb.Children.Add($tip) | Out-Null
 
     $row = New-Object System.Windows.Controls.StackPanel
     $row.Orientation = 'Horizontal'
-    $row.Margin = New-Thick 0 10 0 0
-
+    $row.Margin = New-Thick 0 16 0 0
     $btnPick = New-Object System.Windows.Controls.Button
     $btnPick.Content = '选择图片…'
-    $btnPick.Margin = New-Thick 0 0 8 0
     $btnPick.Add_Click({
             $dlg = New-Object Microsoft.Win32.OpenFileDialog
             $dlg.Title = '选一张背景图'
@@ -4156,10 +3994,8 @@ function Build-ThemeUI {
             Set-Status '背景图已设置'
         })
     $row.Children.Add($btnPick) | Out-Null
-
     $btnClear = New-Object System.Windows.Controls.Button
     $btnClear.Content = '取消背景图'
-    $btnClear.Margin = New-Thick 0
     $btnClear.Add_Click({
             $st = Get-ThemeSetting
             Set-AppTheme -Name $st.Name -Image '' -Opacity $st.Opacity -Frost $st.Frost
@@ -4167,26 +4003,20 @@ function Build-ThemeUI {
             Set-Status '已恢复纯色背景'
         })
     $row.Children.Add($btnClear) | Out-Null
-    $panel.Children.Add($row) | Out-Null
+    $pb.Children.Add($row) | Out-Null
 
-    # ★ PowerShell 5.1 里 if 不能当表达式用在参数位置上 ★
-    #   写成 -Text (if (...) {...} else {...}) 会静默传进去一个 $null，
-    #   然后在下一行 .Margin 上炸掉。先算到变量里再传。
-    # ★ 这一句决定下面两项能不能用 ★
-    #   没有背景图的时候，「面板不透明度」和「磨砂」一个都不起作用。
-    #   上一版它们照样是完全可用的样子 —— 点磨砂会重绘闪一下、
-    #   状态栏报「已开磨砂」，但什么都没发生。有反应而反应是假的，
-    #   比没反应更坏。
+    # ★ PowerShell 5.1 里 if 不能当表达式用在参数位置上 ★ 先算到变量里再传。
+    # ★ 没有背景图的时候下面两项一个都不起作用 —— 必须禁用，有反应而反应是假的比没反应更坏 ★
     $hasImg = [bool]$cur.Image -and (Test-Path -LiteralPath "$($cur.Image)")
     $nowText = if ($hasImg) { "当前背景图：$($cur.Image)" } else { '当前是纯色背景。下面两项要选了图才用得上。' }
-    $now = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text $nowText
-    $now.Margin = New-Thick 0 10 0 0
-    $panel.Children.Add($now) | Out-Null
+    $now = New-TextBlock -Size 12 -Color 'TextDim' -Wrap $true -Text $nowText
+    $now.Margin = New-Thick 0 12 0 0
+    $pb.Children.Add($now) | Out-Null
 
-    $ol = New-TextBlock -Size 14 -Bold $true -Text ('面板不透明度　{0}%' -f [int]($cur.Opacity * 100))
-    $ol.Margin = New-Thick 0 18 0 6
-    $ol.Foreground = Get-Brush $(if ($hasImg) { '#2B2A26' } else { '#66635B' })
-    Add-SubItem $panel $ol
+    $ol = New-TextBlock -Size 13 -Bold $true -Text ('面板不透明度　{0}%' -f [int]($cur.Opacity * 100))
+    $ol.Margin = New-Thick 0 20 0 8
+    $ol.Foreground = Get-Brush $(if ($hasImg) { 'TextMain' } else { 'TextDim' })
+    Add-SubItem $pb $ol
 
     $sld = New-Object System.Windows.Controls.Slider
     $sld.Minimum = 0.35; $sld.Maximum = 1.0
@@ -4196,9 +4026,6 @@ function Build-ThemeUI {
     $sld.Width = 320
     $sld.HorizontalAlignment = 'Left'
     $sld.Tag = $ol
-    # ★ 没背景图就禁用 ★
-    #   拖一个此刻不影响任何东西的滑块，是在浪费用户的动作。
-    #   守我们自己定的「禁用即未上墨」：用不上的控件不能长得跟能用的一样。
     $sld.IsEnabled = $hasImg
     $sld.Add_ValueChanged({
             $this.Tag.Text = ('面板不透明度　{0}%' -f [int]($this.Value * 100))
@@ -4210,14 +4037,13 @@ function Build-ThemeUI {
             Apply-PanelOpacity
             Set-Status ('面板不透明度已设为 {0}%' -f [int]($this.Value * 100))
         })
-    Add-SubItem $panel $sld
+    Add-SubItem $pb $sld
 
-    $on2 = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text (
+    $on2 = New-TextBlock -Size 12 -Color 'TextDim' -Wrap $true -Text (
         '100% = 完全挡住背景图（和纯色一样），拉低才能看见图。')
     $on2.Margin = New-Thick 0 8 0 0
-    Add-SubItem $panel $on2
+    Add-SubItem $pb $on2
 
-    # 磨砂：背景图那一组的第二个子项
     $fcb = New-SettingCheck -Title '磨砂 —— 把背景图模糊掉' `
         -Note '图上的细节会糊成大块的颜色，压在上面的字就清楚了。想看清自己那张图就关掉它。' `
         -WhyOff '选了背景图才用得上。' `
@@ -4227,23 +4053,24 @@ function Build-ThemeUI {
         Redraw-AllPages
         Set-Status $(if ($this.IsChecked) { '已开磨砂' } else { '已关磨砂，背景图恢复原清晰度' })
     }
-    $fcb.Margin = New-Thick 0 18 0 2
-    Add-SubItem $panel $fcb
+    $fcb.Margin = New-Thick 0 20 0 0
+    Add-SubItem $pb $fcb
+    $panel.Children.Add($c2.Card) | Out-Null
 
     # ==================== 界面动画 ====================
-    $sec3 = New-RptSection -Title '界面动画'
-    $sec3.Margin = New-Thick 0 22 0 8
-    $panel.Children.Add($sec3) | Out-Null
-
+    $c3 = New-Card -Title '界面动画' -Icon 'AnimationOutline'
+    $c3.Card.Margin = New-Thick 0 16 0 0
     $acb = New-SettingCheck -Title '开启界面动画' `
-        -Note '切换页面、点开详情时淡入，页签底下那条线也会滑过去。如果你的机器点哪都要等一下，关掉它操作反馈会更干脆 —— 关了之后所有切换都是瞬间完成，功能一模一样。' `
+        -Note '切换页面、点开详情时淡入。如果你的机器点哪都要等一下，关掉它操作反馈会更干脆 —— 关了之后所有切换都是瞬间完成，功能一模一样。' `
         -Checked ([bool]$Script:AnimEnabled) -OnClick {
         $Script:AnimEnabled = [bool]$this.IsChecked
+        Sync-TransitionSwitch
         $st = Get-ThemeSetting
         Save-ThemeSetting -Name $st.Name -Image $st.Image -Opacity $st.Opacity -Anim $Script:AnimEnabled -Frost $st.Frost
         Set-Status $(if ($Script:AnimEnabled) { '界面动画已开启 —— 切一下页签就能看见' } else { '界面动画已关闭' })
     }
-    $panel.Children.Add($acb) | Out-Null
+    $c3.Body.Children.Add($acb) | Out-Null
+    $panel.Children.Add($c3.Card) | Out-Null
 }
 
 function Apply-PanelOpacity {
@@ -4267,11 +4094,17 @@ function Redraw-AllPages {
       但卡片是代码里 Get-Brush 画的，不重绘不会变色。
     #>
     Apply-PanelOpacity
-    try { Build-TweakUI } catch { }
+    Update-ThemeToggleIcon
+    try { Build-NavUI } catch { }
+    # 重建列表会丢掉勾选状态 —— 先记下来、建完再勾回去，换个皮肤不该让用户重勾一遍
+    $keepTweak = @{}; foreach ($k in $Script:TweakRows.Keys) { $keepTweak[$k] = [bool]$Script:TweakRows[$k].Check.IsChecked }
+    $keepClean = @{}; foreach ($k in $Script:CleanRows.Keys) { $keepClean[$k] = [bool]$Script:CleanRows[$k].Check.IsChecked }
+    try { Build-TweakUI; Update-TweakStates; foreach ($k in $keepTweak.Keys) { if ($Script:TweakRows[$k] -and $Script:TweakRows[$k].Check.IsEnabled) { $Script:TweakRows[$k].Check.IsChecked = $keepTweak[$k] } }; Update-TweakSelCount } catch { }
     try { Build-PresetUI } catch { }
-    # ★ 概览页也必须重建 ★ 漏了它的话换皮肤之后整张摘要表还是旧配色
-    try { if ($Script:DashRows -and $Script:DashRows.Count -gt 0) { Build-DashUI; Update-DashScore; Update-DashUI } } catch { }
-    try { Build-CleanUI } catch { }
+    # ★ 概览页也必须重建 ★ 漏了它的话换皮肤之后读数卡还是旧配色
+    #   （v5.1 这里判断的是一个永远为空的表，概览页换肤后其实从没重画过）
+    try { if ($Script:DashGauges -and $Script:DashGauges.Count -gt 0) { Build-DashUI; Update-DashScore; Update-DashUI } } catch { }
+    try { Build-CleanUI; foreach ($k in $keepClean.Keys) { if ($Script:CleanRows[$k]) { $Script:CleanRows[$k].Check.IsChecked = $keepClean[$k] } }; Update-CleanSelCount } catch { }
     try { Build-ThemeUI } catch { }
     try { if ($Script:UI.StartupPanel.Children.Count -gt 0) { Build-StartupUI } } catch { }
     try { if ($Script:UI.AppxPanel.Children.Count -gt 0) { Build-AppxUI } } catch { }
@@ -4324,7 +4157,7 @@ function Build-AppxUI {
         } elseif ($Script:AppxFailReason) {
             $why = "原因：$Script:AppxFailReason"
         }
-        $panel.Children.Add((New-TextBlock -Wrap $true -Color '#66635B' -Text (
+        $panel.Children.Add((New-TextBlock -Wrap $true -Color 'TextDim' -Text (
                     '没读到自带应用列表。' + "`r`n`r`n" + $why))) | Out-Null
         Set-Status '就绪'
         return
@@ -4343,12 +4176,12 @@ function Build-AppxUI {
         $card.Background = [System.Windows.Media.Brushes]::Transparent
         $card.BorderBrush = Get-Brush $Script:CARD_BORDER
         $card.BorderThickness = New-Thick 0 0 0 1
-        $card.Padding = New-Thick 4 10 4 10
+        $card.Padding = New-Thick 12 12 12 12
         $card.Margin = New-Thick 0 0 0 0
 
         # 列轨：勾选框 / 项目 / 结果 / 参考范围
         $g = New-Object System.Windows.Controls.Grid
-        foreach ($w in @(0, -1, 76, 88)) {
+        foreach ($w in @(0, -1, 80, 88)) {
             $cd = New-Object System.Windows.Controls.ColumnDefinition
             $cd.Width = if ($w -eq -1) {
                 New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
@@ -4361,7 +4194,7 @@ function Build-AppxUI {
         }
 
         $cb = New-Object System.Windows.Controls.CheckBox
-        $cb.Margin = New-Thick 0 0 2 0
+        $cb.Margin = New-Thick 0 0 8 0
         $cb.VerticalAlignment = 'Top'
         $cb.IsChecked = $false
         $cb.Tag = $it          # 整个对象挂上去，取 Verdict / Name 都方便
@@ -4379,22 +4212,22 @@ function Build-AppxUI {
         $sp = New-Object System.Windows.Controls.StackPanel
         $head = New-Object System.Windows.Controls.StackPanel
         $head.Orientation = 'Horizontal'
-        $head.Children.Add((New-TextBlock -Text $it.Label -Size 13.5 -Bold $true)) | Out-Null
+        $head.Children.Add((New-TextBlock -Text $it.Label -Size 14 -Bold $true)) | Out-Null
         $bd = New-Badge -Text $it.Verdict -Fg $c.Fg -Bg $c.Bg
         $bd.Margin = New-Thick 8 0 0 0
         $head.Children.Add($bd) | Out-Null
         if ($it.Size -and $it.Size -ne '—') {
-            $sz = New-Badge -Text $it.Size -Fg '#66635B' -Bg '#E8E7E2'
+            $sz = New-Badge -Text $it.Size -Fg 'TextDim' -Bg 'SurfaceSunken'
             $sz.Margin = New-Thick 4 0 0 0
             $head.Children.Add($sz) | Out-Null
         }
         $sp.Children.Add($head) | Out-Null
 
-        $tx = New-TextBlock -Text (Format-Reflow $it.Text) -Size 12 -Color '#66635B' -Wrap $true
-        $tx.Margin = New-Thick 0 5 0 0
+        $tx = New-TextBlock -Text (Format-Reflow $it.Text) -Size 12 -Color 'TextDim' -Wrap $true
+        $tx.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($tx) | Out-Null
 
-        $pn = New-TextBlock -Text $it.Name -Size 11 -Color '#8A877F' -Wrap $true
+        $pn = New-TextBlock -Text $it.Name -Size 11 -Color 'TextDim' -Wrap $true
         $pn.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($pn) | Out-Null
 
@@ -4404,6 +4237,7 @@ function Build-AppxUI {
         $panel.Children.Add($card) | Out-Null
     }
 
+    Close-CardRows $panel
     $safe = @($items | Where-Object { $_.Verdict -eq '可以删' }).Count
     Update-AppxCounter
     Set-Status ("自带应用 {0} 个，其中 {1} 个可以放心删" -f $items.Count, $safe)
@@ -4421,10 +4255,8 @@ function Invoke-AppxUninstall {
         return
     }
 
-    $r = [System.Windows.MessageBox]::Show(
-        ("确定要卸载这 {0} 个自带应用吗？`r`n`r`n{1}`r`n`r`n卸载只影响当前用户，任何一个都能去 Microsoft Store 搜名字装回来。" -f `
-                $names.Count, ($names -join "`r`n")),
-        '确认卸载', 'YesNo', 'Question')
+    $r = Show-Msg -Text (("确定要卸载这 {0} 个自带应用吗？`r`n`r`n{1}`r`n`r`n卸载只影响当前用户，任何一个都能去 Microsoft Store 搜名字装回来。" -f `
+                $names.Count, ($names -join "`r`n"))) -Title '确认卸载' -Kind Ask
     if ($r -ne 'Yes') { return }
 
     Set-Busy $true
@@ -4436,9 +4268,7 @@ function Invoke-AppxUninstall {
     }
     Set-Busy $false
     Build-AppxUI
-    [System.Windows.MessageBox]::Show(
-        ("卸载完成：成功 {0} 个，失败 {1} 个。`r`n`r`n失败的多半是系统保护的包，日志页有具体原因。" -f $ok, $fail),
-        '电脑调优助手') | Out-Null
+    Show-Msg -Text (("卸载完成：成功 {0} 个，失败 {1} 个。`r`n`r`n失败的多半是系统保护的包，日志页有具体原因。" -f $ok, $fail)) -Title '电脑调优助手' -Kind Info | Out-Null
 }
 
 function Build-StartupUI {
@@ -4447,12 +4277,12 @@ function Build-StartupUI {
     Set-Status '正在读取开机启动项…'
     $items = @(Get-StartupItems)
     if ($items.Count -eq 0) {
-        $panel.Children.Add((New-TextBlock -Text '没有发现任何开机启动项，很干净。' -Color '#66635B')) | Out-Null
+        $panel.Children.Add((New-TextBlock -Text '没有发现任何开机启动项，很干净。' -Color 'TextDim')) | Out-Null
         Set-Status '就绪'
         return
     }
 
-    Add-ColHeader $panel -First '开机启动项' -Cols @(@{ T = '结果'; W = 76 }, @{ T = '安全范围'; W = 88 })
+    Add-ColHeader $panel -First '开机启动项' -Cols @(@{ T = '结果'; W = 80 }, @{ T = '安全范围'; W = 88 })
     foreach ($it in $items) {
         # 行式表，和别的页一个语汇：没有圆角、没有底色、没有边框盒子，
         # 只有一条行间细线。深度靠表面阶梯，不靠盒子。
@@ -4460,12 +4290,12 @@ function Build-StartupUI {
         $card.Background = [System.Windows.Media.Brushes]::Transparent
         $card.BorderBrush = Get-Brush $Script:CARD_BORDER
         $card.BorderThickness = New-Thick 0 0 0 1
-        $card.Padding = New-Thick 4 10 4 10
+        $card.Padding = New-Thick 12 12 12 12
         $card.Margin = New-Thick 0 0 0 0
 
         # 列轨：勾选框 / 项目 / 结果 / 参考范围
         $g = New-Object System.Windows.Controls.Grid
-        foreach ($w in @(0, -1, 76, 88)) {
+        foreach ($w in @(0, -1, 80, 88)) {
             $cd = New-Object System.Windows.Controls.ColumnDefinition
             $cd.Width = if ($w -eq -1) {
                 New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
@@ -4478,7 +4308,7 @@ function Build-StartupUI {
         }
 
         $cb = New-Object System.Windows.Controls.CheckBox
-        $cb.Margin = New-Thick 0 0 2 0
+        $cb.Margin = New-Thick 0 0 8 0
         $cb.VerticalAlignment = 'Top'
         $cb.IsChecked = [bool]$it.Enabled
         $cb.Tag = $it
@@ -4493,18 +4323,18 @@ function Build-StartupUI {
         $sp = New-Object System.Windows.Controls.StackPanel
         $head = New-Object System.Windows.Controls.StackPanel
         $head.Orientation = 'Horizontal'
-        $nm = New-TextBlock -Text $it.Name -Size 15
+        $nm = New-TextBlock -Text $it.Name -Size 14 -Bold $true
         $head.Children.Add($nm) | Out-Null
-        $sc = New-TextBlock -Text $it.Scope -Size 11.5 -Color '#66635B'
-        $sc.Margin = New-Thick 10 2 0 0
+        $sc = New-Badge -Text $it.Scope -Fg 'TextDim' -Bg 'SurfaceSunken'
+        $sc.Margin = New-Thick 8 0 0 0
         $head.Children.Add($sc) | Out-Null
         $sp.Children.Add($head) | Out-Null
 
-        $adv = New-TextBlock -Text $it.AdviceText -Size 12 -Color '#66635B' -Wrap $true
-        $adv.Margin = New-Thick 0 5 0 0
+        $adv = New-TextBlock -Text $it.AdviceText -Size 12 -Color 'TextDim' -Wrap $true
+        $adv.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($adv) | Out-Null
 
-        $cmd = New-TextBlock -Text $it.Command -Size 11 -Color '#66635B' -Wrap $true
+        $cmd = New-TextBlock -Text $it.Command -Size 11 -Color 'TextDim' -Wrap $true
         $cmd.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($cmd) | Out-Null
 
@@ -4519,13 +4349,13 @@ function Build-StartupUI {
         #    在检验单皮肤里被映射成法定墨，等于把好事标成了问题。
         #    颜色一旦用错，整套「扫过去只有真问题在发光」的机制就废了。
         # ================================================================
-        $res = New-TextBlock -Size 15 -Color '#2B2A26' -Text $(if ($it.Enabled) { '已开启' } else { '已关闭' })
+        $res = New-TextBlock -Size 13 -Color 'TextMain' -Text $(if ($it.Enabled) { '已开启' } else { '已关闭' })
         $res.TextAlignment = 'Right'
         $res.VerticalAlignment = 'Center'
         [System.Windows.Controls.Grid]::SetColumn($res, 2)
 
         # AdviceLevel 本身就是「建议保留」这种说法，前面再拼一个「建议」就重了
-        $rf = New-TextBlock -Text $(if ($it.AdviceLevel -like '建议*') { $it.AdviceLevel } else { '建议 ' + $it.AdviceLevel }) -Size 12 -Color '#66635B'
+        $rf = New-TextBlock -Text $(if ($it.AdviceLevel -like '建议*') { $it.AdviceLevel } else { '建议 ' + $it.AdviceLevel }) -Size 12 -Color 'TextDim'
         $rf.TextAlignment = 'Right'
         $rf.VerticalAlignment = 'Center'
         [System.Windows.Controls.Grid]::SetColumn($rf, 3)
@@ -4538,9 +4368,10 @@ function Build-StartupUI {
         $g.Children.Add($res) | Out-Null
         $g.Children.Add($rf) | Out-Null
 
-$card.Child = $g
+        $card.Child = $g
         $panel.Children.Add($card) | Out-Null
     }
+    Close-CardRows $panel
     Set-Status ("共 {0} 个开机启动项" -f $items.Count)
 }
 
@@ -4552,7 +4383,7 @@ function New-ToolButton {
     param([string]$Text, [scriptblock]$OnClick, $Tag = $null)
     $b = New-Object System.Windows.Controls.Button
     $b.Content = $Text
-    $b.Margin = New-Thick 0 0 8 6
+    $b.Margin = New-Thick 0 0 8 8
     # 不加这句的话，按钮放进竖排 StackPanel 会被拉成整行宽，非常难看
     $b.HorizontalAlignment = 'Left'
     if ($null -ne $Tag) { $b.Tag = $Tag }
@@ -4562,9 +4393,7 @@ function New-ToolButton {
 
 function Invoke-DailyMaintenance {
     <# 「一键日常维护」：清理 + 刷新DNS + 系统盘 TRIM，一条龙 #>
-    $r = [System.Windows.MessageBox]::Show(
-        "一键日常维护会依次做三件事：`r`n`r`n1. 清理「垃圾清理」页里所有推荐项（临时文件、缓存、日志…）`r`n2. 刷新 DNS 缓存`r`n3. 对系统盘执行 TRIM / 碎片整理`r`n`r`n全程不会改动任何性能设置，也不会碰你的文件。`r`n建议先关掉浏览器和游戏平台。`r`n`r`n现在开始吗？",
-        '一键日常维护', 'YesNo', 'Question')
+    $r = Show-Msg -Text ("一键日常维护会依次做三件事：`r`n`r`n1. 清理「垃圾清理」页里所有推荐项（临时文件、缓存、日志…）`r`n2. 刷新 DNS 缓存`r`n3. 对系统盘执行 TRIM / 碎片整理`r`n`r`n全程不会改动任何性能设置，也不会碰你的文件。`r`n建议先关掉浏览器和游戏平台。`r`n`r`n现在开始吗？") -Title '一键日常维护' -Kind Ask
     if ($r -ne 'Yes') { return }
 
     Set-Busy $true
@@ -4621,17 +4450,17 @@ function Invoke-SetRefresh {
     $win.Width = 420; $win.SizeToContent = 'Height'
     $win.WindowStartupLocation = 'CenterScreen'
     $win.ResizeMode = 'NoResize'
-    $win.Background = Get-Brush '#F6F5F2'
+    $win.Background = Get-Brush 'Card'
     # ★ 子窗口不继承主窗口的 FontFamily ★
     #   WPF 的属性继承走的是可视树，而新建的 Window 是另一棵树的根。
     #   不显式设的话，弹窗会退回系统默认字 —— 主界面是随包字体、
     #   弹窗是微软雅黑，一眼就看出是两套东西拼的。
     $win.FontFamily = New-Object System.Windows.Media.FontFamily $Script:FontStack
     $sp = New-Object System.Windows.Controls.StackPanel
-    $sp.Margin = New-Thick 22 20 22 18
+    $sp.Margin = New-Thick 24 20 24 20
     $sp.Children.Add((New-TextBlock -Text ("已切换到 {0} Hz" -f $Hz) -Size 16 -Bold $true)) | Out-Null
-    $tip = New-TextBlock -Wrap $true -Size 12.5 -Color '#4A4842' -Text '画面正常吗？正常就点「保持」。如果黑屏或花屏，什么都不用做 —— 倒计时结束会自动切回去。'
-    $tip.Margin = New-Thick 0 10 0 12
+    $tip = New-TextBlock -Wrap $true -Size 12 -Color 'TextMid' -Text '画面正常吗？正常就点「保持」。如果黑屏或花屏，什么都不用做 —— 倒计时结束会自动切回去。'
+    $tip.Margin = New-Thick 0 12 0 12
     $sp.Children.Add($tip) | Out-Null
     $row = New-Object System.Windows.Controls.StackPanel
     $row.Orientation = 'Horizontal'
@@ -4721,7 +4550,7 @@ function Export-DiagnosticReport {
         Set-Busy $false
         Set-Status ('诊断报告已保存到桌面')
         Write-Log "诊断报告已导出：$path" '成功'
-        $r = [System.Windows.MessageBox]::Show("报告已保存到桌面：`r`n$(Split-Path $path -Leaf)`r`n`r`n里面有硬件信息、体检结论、优化项状态和操作日志，可以直接发给别人看。`r`n`r`n现在打开它吗？", '电脑调优助手', 'YesNo', 'Question')
+        $r = Show-Msg -Text ("报告已保存到桌面：`r`n$(Split-Path $path -Leaf)`r`n`r`n里面有硬件信息、体检结论、优化项状态和操作日志，可以直接发给别人看。`r`n`r`n现在打开它吗？") -Title '电脑调优助手' -Kind Ask
         if ($r -eq 'Yes') { Start-Process notepad.exe -ArgumentList "`"$path`"" }
     } catch {
         Set-Busy $false
@@ -4736,27 +4565,31 @@ function Build-MaintainUI {
       ★ 全页只有两种行 ★
         New-RptRow  —— 有数可报的项（刷新率、硬盘寿命、占用）
         New-ActRow  —— 只有动作的项（一键维护、开关、打开某个设置）
-      上一版是四张一模一样的圆角卡，四件轻重完全不同的事看起来一样重。
+      每一节是一张卡（design.md 4.4），节里的行用细线分开。
     #>
-    $p = $Script:UI.MaintainPanel
-    $p.Children.Clear()
+    $root = $Script:UI.MaintainPanel
+    $root.Children.Clear()
+    $p = $root
 
     function Add-Sec {
-        param([string]$Title, [string]$Aside = '', [bool]$First = $false)
-        $sec = New-RptSection -Title $Title -Aside $Aside
-        $sec.Margin = New-Thick 0 $(if ($First) { 0 } else { 24 }) 0 8
-        $p.Children.Add($sec) | Out-Null
+        <# 开一张新卡，之后往 $p 里加的东西都进这张卡 #>
+        param([string]$Title, [string]$Aside = '', [bool]$First = $false, [string]$Icon = '')
+        $prev = (Get-Variable -Name p -Scope 1).Value
+        if ($prev -ne $root) { Close-CardRows $prev }
+        $c = New-Card -Title $Title -Aside $Aside -Icon $Icon
+        $c.Card.Margin = New-Thick 0 $(if ($First) { 0 } else { 16 }) 0 0
+        $root.Children.Add($c.Card) | Out-Null
+        Set-Variable -Name p -Value $c.Body -Scope 1
     }
 
     # ==================== 例行处置 ====================
-    Add-Sec -Title '例行处置' -Aside '每月一次就够' -First $true
+    Add-Sec -Title '例行处置' -Aside '每月一次就够' -First $true -Icon 'CalendarCheckOutline'
 
     $r1 = New-ActRow -Name '一键日常维护' `
         -Note '清垃圾 + 刷新 DNS + 优化系统盘，一条龙。不会改任何性能设置，也不碰你的文件。'
     $bAll = New-ToolButton -Text '开始维护' -OnClick { Invoke-DailyMaintenance }
     try { $bAll.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
-    # ★ 别给它加 Padding ★ HandyControl 的按钮模板自己算高度，
-    #   再塞上下内边距，文字会超出按钮高度被竖着切掉。
+    # ★ 别给按钮加上下 Padding ★ 要改高度改 Height（design.md 4.3）
     $bAll.Margin = New-Thick 0
     $r1.Slot.Children.Add($bAll) | Out-Null
     $p.Children.Add($r1.Row) | Out-Null
@@ -4765,7 +4598,7 @@ function Build-MaintainUI {
         -Note '建一个计划任务，每周日 12:00 在后台静默跑一遍「垃圾清理」页的推荐项。不弹窗、不影响你用电脑、不碰性能设置。人不在电脑前错过了，下次开机自动补跑。'
     $cbAuto = New-Object System.Windows.Controls.CheckBox
     $cbAuto.Content = '开启'
-    $cbAuto.FontSize = 13.5
+    $cbAuto.FontSize = 13
     $cbAuto.VerticalAlignment = 'Center'
     $cbAuto.IsChecked = (Test-AutoCleanEnabled)
     $cbAuto.Add_Click({
@@ -4788,7 +4621,7 @@ function Build-MaintainUI {
     $opts = @(Get-DisplayRefreshOptions)
     if ($cur -and $opts.Count -gt 0) {
         $maxHz = $opts[0]
-        Add-Sec -Title '显示器' -Aside ("{0} × {1}" -f $cur.Width, $cur.Height)
+        Add-Sec -Title '显示器' -Aside ("{0} × {1}" -f $cur.Width, $cur.Height) -Icon 'Monitor'
         $p.Children.Add((New-RptHeader -First '项目')) | Out-Null
 
         # 没跑满最高刷新率 = 没达到参考范围，正是法定墨该管的那一件事
@@ -4808,22 +4641,22 @@ function Build-MaintainUI {
                 $b.IsEnabled = $false
                 $b.Content = "{0} Hz（当前）" -f $hz
             } elseif ($hz -eq $maxHz) {
-                try { $b.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
+                # 一屏只许一个主按钮（「开始维护」），这里靠「（最高）」三个字点明
                 $b.Content = "{0} Hz（最高）" -f $hz
             }
             Add-RptAct $rHz $b
         }
         $p.Children.Add($rHz.Row) | Out-Null
 
-        $t15 = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text '切换后会弹一个 15 秒倒计时确认框。万一切完黑屏或花屏，什么都别动，倒计时结束会自动切回原来的设置 —— 和 Windows 自己改分辨率时的行为一样。'
-        $t15.Margin = New-Thick 0 9 0 0
+        $t15 = New-TextBlock -Size 13 -Color 'TextDim' -Wrap $true -Text '切换后会弹一个 15 秒倒计时确认框。万一切完黑屏或花屏，什么都别动，倒计时结束会自动切回原来的设置 —— 和 Windows 自己改分辨率时的行为一样。'
+        $t15.Margin = New-Thick 0 8 0 0
         $p.Children.Add($t15) | Out-Null
     }
 
     # ==================== 硬盘健康 ====================
     $disks = @(Get-DiskHealthReport)
     if ($disks.Count -gt 0) {
-        Add-Sec -Title '硬盘健康' -Aside '读 SMART 数据'
+        Add-Sec -Title '硬盘健康' -Aside '读 SMART 数据' -Icon 'Harddisk'
         $p.Children.Add((New-RptHeader -First '硬盘')) | Out-Null
         foreach ($d in $disks) {
             $abn = ($d.Level -ne '良好')
@@ -4858,8 +4691,8 @@ function Build-MaintainUI {
     # ==================== 磁盘优化 ====================
     $vols = @(Get-VolumesToOptimize)
     if ($vols.Count -gt 0) {
-        Add-Sec -Title '磁盘优化' -Aside '半年一次'
-        $sd = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text '自动认介质：固态做 TRIM（恢复写入速度），机械做碎片整理。不会对固态盘做碎片整理 —— 那只会白白消耗寿命。'
+        Add-Sec -Title '磁盘优化' -Aside '半年一次' -Icon 'Speedometer'
+        $sd = New-TextBlock -Size 13 -Color 'TextDim' -Wrap $true -Text '自动认介质：固态做 TRIM（恢复写入速度），机械做碎片整理。不会对固态盘做碎片整理 —— 那只会白白消耗寿命。'
         $sd.Margin = New-Thick 0 0 0 4
         $p.Children.Add($sd) | Out-Null
         foreach ($v in $vols) {
@@ -4879,7 +4712,7 @@ function Build-MaintainUI {
     }
 
     # ==================== 微信 / QQ 占用 ====================
-    Add-Sec -Title '微信 / QQ 占用' -Aside '只统计，不删'
+    Add-Sec -Title '微信 / QQ 占用' -Aside '只统计，不删' -Icon 'ChatOutline'
     $rc = New-ActRow -Name '统计聊天软件占了多少空间' `
         -Note '这两个是国内 C 盘杀手的常客，几十个 GB 很常见。这里只统计不删 —— 聊天图片和文件是你的资料，该不该删只有你自己知道。「垃圾清理」页的微信/QQ 那一项只清纯缓存，绝不碰聊天内容。'
     $chatHost = New-Object System.Windows.Controls.StackPanel
@@ -4890,8 +4723,8 @@ function Build-MaintainUI {
         $holder.Children.Clear()
         $rows = @(Get-ChatAppUsage)
         if ($rows.Count -eq 0) {
-            $t = New-TextBlock -Text '没有找到微信或 QQ 的数据目录（可能没装，或者装在非默认位置）。' -Size 13 -Color '#66635B' -Wrap $true
-            $t.Margin = New-Thick 0 10 0 0
+            $t = New-TextBlock -Text '没有找到微信或 QQ 的数据目录（可能没装，或者装在非默认位置）。' -Size 13 -Color 'TextDim' -Wrap $true
+            $t.Margin = New-Thick 0 12 0 0
             $holder.Children.Add($t) | Out-Null
         } else {
             $holder.Children.Add((New-RptHeader -First '软件')) | Out-Null
@@ -4902,8 +4735,8 @@ function Build-MaintainUI {
                 $rr = New-RptRow -Name $r.App -Result ([string]$gb) -Unit 'GB' -Note $r.Path -NoBar $true
                 $holder.Children.Add($rr.Row) | Out-Null
             }
-            $h = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text '嫌大的话用软件自带的清理挑着删：微信 → 设置 → 文件管理 → 清理微信存储空间；QQ → 设置 → 文件管理 → 清理。它们能按聊天对象和时间筛选，比无脑全删安全得多。'
-            $h.Margin = New-Thick 0 10 0 0
+            $h = New-TextBlock -Size 13 -Color 'TextDim' -Wrap $true -Text '嫌大的话用软件自带的清理挑着删：微信 → 设置 → 文件管理 → 清理微信存储空间；QQ → 设置 → 文件管理 → 清理。它们能按聊天对象和时间筛选，比无脑全删安全得多。'
+            $h.Margin = New-Thick 0 12 0 0
             $holder.Children.Add($h) | Out-Null
         }
         Set-Status '统计完成'
@@ -4916,7 +4749,7 @@ function Build-MaintainUI {
     # ==================== 快捷工具 ====================
     # 上一版这里是五个光溜溜的按钮排一行，没写各自什么时候用 ——
     # 「刷新 DNS 缓存」对不懂的人等于一个不敢按的按钮。一项一行，写清场合。
-    Add-Sec -Title '快捷工具' -Aside '藏得很深的系统功能'
+    Add-Sec -Title '快捷工具' -Aside '藏得很深的系统功能' -Icon 'Toolbox'
 
     $tools = @(
         @{ N = '刷新 DNS 缓存'; B = '执行'
@@ -4942,12 +4775,12 @@ function Build-MaintainUI {
         $rt = New-ActRow -Name $t.N -Note $t.D
         $bt = New-ToolButton -Text $t.B -OnClick $t.A
         $bt.Margin = New-Thick 0
-        $bt.MinWidth = 76
+        $bt.MinWidth = 80
         $rt.Slot.Children.Add($bt) | Out-Null
         $p.Children.Add($rt.Row) | Out-Null
     }
-    $tip2 = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text '顺带一提：游戏里画面卡死、显卡驱动假死的时候，按 Win + Ctrl + Shift + B 可以直接重启显卡驱动，屏幕会黑一下然后恢复，不用重启电脑。这是 Windows 自带的快捷键，不需要本工具。'
-    $tip2.Margin = New-Thick 0 10 0 0
+    $tip2 = New-TextBlock -Size 13 -Color 'TextDim' -Wrap $true -Text '顺带一提：游戏里画面卡死、显卡驱动假死的时候，按 Win + Ctrl + Shift + B 可以直接重启显卡驱动，屏幕会黑一下然后恢复，不用重启电脑。这是 Windows 自带的快捷键，不需要本工具。'
+    $tip2.Margin = New-Thick 0 12 0 0
     $p.Children.Add($tip2) | Out-Null
 }
 
@@ -4973,13 +4806,13 @@ function Set-BigFileEmpty {
     $panel.Children.Clear()
     $sp = New-Object System.Windows.Controls.StackPanel
     $sp.Margin = New-Thick 0 28 0 0
-    $t1 = New-TextBlock -Text '还没扫描' -Size 15 -Color '#4A4842'
+    $t1 = New-TextBlock -Text '还没扫描' -Size 14 -Color 'TextMid'
     $sp.Children.Add($t1) | Out-Null
-    $t2 = New-TextBlock -Wrap $true -Size 13 -Color '#66635B' -Text '点上面的盘符开始。扫描期间可以切到别的页干活，结果出来会留在这儿。'
-    $t2.Margin = New-Thick 0 6 0 0
+    $t2 = New-TextBlock -Wrap $true -Size 13 -Color 'TextDim' -Text '点上面的盘符开始。扫描期间可以切到别的页干活，结果出来会留在这儿。'
+    $t2.Margin = New-Thick 0 8 0 0
     $sp.Children.Add($t2) | Out-Null
-    $t3 = New-TextBlock -Wrap $true -Size 13 -Color '#66635B' -Text '扫的是「超过 300MB 的文件」，最大的 40 个。WinSxS、回收站、系统卷信息这三处跳过 —— 它们的大小是假的（硬链接），或者有专门的清理入口。'
-    $t3.Margin = New-Thick 0 14 0 0
+    $t3 = New-TextBlock -Wrap $true -Size 13 -Color 'TextDim' -Text '扫的是「超过 300MB 的文件」，最大的 40 个。WinSxS、回收站、系统卷信息这三处跳过 —— 它们的大小是假的（硬链接），或者有专门的清理入口。'
+    $t3.Margin = New-Thick 0 16 0 0
     $sp.Children.Add($t3) | Out-Null
     $panel.Children.Add($sp) | Out-Null
 }
@@ -4988,7 +4821,7 @@ function Invoke-BigFileScan {
     param([string]$Root)
     $panel = $Script:UI.BigFilePanel
     $panel.Children.Clear()
-    $panel.Children.Add((New-TextBlock -Text '正在扫描，请稍候…' -Size 13.5 -Color '#66635B')) | Out-Null
+    $panel.Children.Add((New-TextBlock -Text '正在扫描，请稍候…' -Size 13 -Color 'TextDim')) | Out-Null
     Sync-UI
 
     $progress = {
@@ -5002,33 +4835,31 @@ function Invoke-BigFileScan {
 
     $panel.Children.Clear()
     if ($files.Count -eq 0) {
-        $panel.Children.Add((New-TextBlock -Text ("{0} 里没有找到超过 300MB 的文件。" -f $Root) -Size 13.5 -Color '#66635B' -Wrap $true)) | Out-Null
+        $panel.Children.Add((New-TextBlock -Text ("{0} 里没有找到超过 300MB 的文件。" -f $Root) -Size 13 -Color 'TextDim' -Wrap $true)) | Out-Null
         Set-Status '扫描完成'
         return
     }
 
-    $hint = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text '点任意一行会在资源管理器里定位到它。删之前想清楚：大文件里有很多是系统必需的（pagefile.sys 虚拟内存、hiberfil.sys 休眠文件、install.wim 等），别乱删。游戏安装包、下载的视频、旧的备份文件才是该清的。'
+    $hint = New-TextBlock -Size 13 -Color 'TextDim' -Wrap $true -Text '点任意一行会在资源管理器里定位到它。删之前想清楚：大文件里有很多是系统必需的（pagefile.sys 虚拟内存、hiberfil.sys 休眠文件、install.wim 等），别乱删。游戏安装包、下载的视频、旧的备份文件才是该清的。'
     $hint.Margin = New-Thick 0 0 0 12
     $panel.Children.Add($hint) | Out-Null
 
     # 列名 + 表头线。四十个文件是一张表，不是四十张卡片 ——
     # 卡片会让每个文件看起来都是一件独立的事，而用户要做的是**比大小**。
-    Add-ColHeader -Panel $panel -First '文件' -Cols @(@{ T = '大小'; W = 96 }) -Indent 0
+    Add-ColHeader -Panel $panel -First '文件' -Cols @(@{ T = '大小'; W = 96 }) -Indent 12
 
     foreach ($f in $files) {
         $b = New-Object System.Windows.Controls.Border
         $b.Background = [System.Windows.Media.Brushes]::Transparent
-        $b.BorderBrush = Get-Brush $Script:CARD_BORDER
-        $b.BorderThickness = New-Thick 0 0 0 1
-        $b.Padding = New-Thick 0 9 0 9
+        $b.CornerRadius = New-Corner 8
+        $b.Padding = New-Thick 12 8 12 8
         $b.Cursor = 'Hand'
         $b.Tag = $f.Path
         $b.Add_MouseLeftButtonUp({
                 try { Start-Process explorer.exe -ArgumentList ('/select,"{0}"' -f $this.Tag) } catch { }
             })
-        # 底色给的是右栏面板自己的底色（= 看着透明），悬停才浮出一层。
-        # -NoLift：表格行不该上下浮动，那是卡片的语汇。
-        Add-Interactive -Border $b -BgNormal '#FBFAF8' -BgHover '#F0EFEB' -NoLift
+        # 可点的行：圆角 8，悬停浮出 CardHover（design.md 4.4 列表卡）
+        Add-Interactive -Border $b -BgNormal 'Transparent' -BgHover 'CardHover'
 
         $g = New-Object System.Windows.Controls.Grid
         $cdA = New-Object System.Windows.Controls.ColumnDefinition
@@ -5041,18 +4872,17 @@ function Invoke-BigFileScan {
         $sp = New-Object System.Windows.Controls.StackPanel
         $leaf = try { [System.IO.Path]::GetFileName($f.Path) } catch { $f.Path }
         if (-not $leaf) { $leaf = $f.Path }
-        $sp.Children.Add((New-TextBlock -Text $leaf -Size 14 -Color '#2B2A26' -Wrap $true)) | Out-Null
+        $sp.Children.Add((New-TextBlock -Text $leaf -Size 14 -Color 'TextMain' -Wrap $true)) | Out-Null
         $dir = try { [System.IO.Path]::GetDirectoryName($f.Path) } catch { '' }
         if ($dir) {
-            $t = New-TextBlock -Text $dir -Size 12.5 -Color '#66635B' -Wrap $true
-            $t.Margin = New-Thick 0 2 0 0
+            $t = New-TextBlock -Text $dir -Size 12 -Color 'TextDim' -Wrap $true
+            $t.Margin = New-Thick 0 4 0 0
             $sp.Children.Add($t) | Out-Null
         }
         $g.Children.Add($sp) | Out-Null
 
         # ★ 表格数位 ★ 不加的话 1 比 8 窄，整列大小对不齐，比大小就费劲
-        $sz = New-TextBlock -Text (Format-Size $f.Size) -Size 14.5 -Color '#2B2A26'
-        $sz.FontWeight = 'SemiBold'
+        $sz = New-TextBlock -Text (Format-Size $f.Size) -Size 14 -Color 'TextMain' -Bold $true
         $sz.TextAlignment = 'Right'
         $sz.VerticalAlignment = 'Center'
         [System.Windows.Documents.Typography]::SetNumeralAlignment($sz, 'Tabular')
@@ -5076,9 +4906,9 @@ function Get-LevelColor {
     switch ($L) {
         '高危'     { return '#8A5750' }
         '可疑'     { return '#7A6B45' }
-        '无用'     { return '#66635B' }
-        '已知打扰' { return '#55606F' }
-        default    { return '#66635B' }
+        '无用'     { return 'TextDim' }
+        '已知打扰' { return 'TextMid' }
+        default    { return 'TextDim' }
     }
 }
 
@@ -5087,15 +4917,15 @@ function Set-InspectEmpty {
     $p = $Script:UI.InspectPanel
     if ($null -eq $p -or $p.Children.Count -gt 0) { return }
     $sp = New-Object System.Windows.Controls.StackPanel
-    $sp.Margin = New-Thick 0 30 0 0
-    $t1 = New-TextBlock -Text '还没扫描' -Size 15 -Color '#4A4842'
+    $sp.Margin = New-Thick 0 32 0 0
+    $t1 = New-TextBlock -Text '还没扫描' -Size 14 -Color 'TextMid'
     $sp.Children.Add($t1) | Out-Null
     foreach ($line in @(
             '点上面的「开始扫描」。全程只读不改，扫完你再决定关谁。',
             '会扫这些地方：计划任务、注册表 Run、启动文件夹、服务、WMI 事件订阅 —— 也就是所有「能让一个程序自己跑起来」的位置。',
             '扫完按可疑程度排序：会弹黑框的排最前，然后是高危、可疑，最后是「无用」和「已知打扰」（不危险，只是没必要留着）。',
             '扫不出来也别慌 —— 定期弹的黑框多半来自某个已经在跑的程序，那种要用右边的「抓现行」。')) {
-        $t = New-TextBlock -Wrap $true -Size 13 -Color '#66635B' -Text $line
+        $t = New-TextBlock -Wrap $true -Size 13 -Color 'TextDim' -Text $line
         $t.Margin = New-Thick 0 12 0 0
         $sp.Children.Add($t) | Out-Null
     }
@@ -5104,7 +4934,7 @@ function Set-InspectEmpty {
 
 function Invoke-Inspect {
     $Script:UI.InspectPanel.Children.Clear()
-    $Script:UI.InspectPanel.Children.Add((New-TextBlock -Text '正在扫描，请稍候…' -Size 13.5 -Color '#66635B')) | Out-Null
+    $Script:UI.InspectPanel.Children.Add((New-TextBlock -Text '正在扫描，请稍候…' -Size 13 -Color 'TextDim')) | Out-Null
     Sync-UI
     Set-Busy $true
     $Script:Findings = @(Get-SuspiciousFindings -OnProgress { param($m) Set-Status $m; Sync-UI })
@@ -5136,12 +4966,12 @@ function Show-Findings {
     $Script:UI.InspectSummary.Text = ("会弹黑框 {0} · 高危 {1} · 可疑 {2} · 无用 {3} · 已知打扰 {4}" -f $n弹框, $n高危, $n可疑, $n无用, $n打扰)
 
     if ($Script:Findings.Count -eq 0) {
-        $p.Children.Add((New-TextBlock -Wrap $true -Size 13.5 -Color '#4A4842' -Text "扫描完成，没有发现可疑项。`r`n`r`n如果还是会弹黑框，用右边的「抓现行」：先点「开启持续记录」，等下次黑框出现之后马上回来点「查看进程记录」，就能看到那一刻到底是谁在跑。")) | Out-Null
+        $p.Children.Add((New-TextBlock -Wrap $true -Size 13 -Color 'TextMid' -Text "扫描完成，没有发现可疑项。`r`n`r`n如果还是会弹黑框，用右边的「抓现行」：先点「开启持续记录」，等下次黑框出现之后马上回来点「查看进程记录」，就能看到那一刻到底是谁在跑。")) | Out-Null
         Set-Status '扫描完成，没有发现可疑项'
         return
     }
     if ($list.Count -eq 0) {
-        $p.Children.Add((New-TextBlock -Wrap $true -Size 13.5 -Color '#4A4842' -Text '按当前筛选条件没有内容 —— 也就是说没有「高危」和「会弹黑框」的项，这是好事。点「显示全部」可以看其余条目。')) | Out-Null
+        $p.Children.Add((New-TextBlock -Wrap $true -Size 13 -Color 'TextMid' -Text '按当前筛选条件没有内容 —— 也就是说没有「高危」和「会弹黑框」的项，这是好事。点「显示全部」可以看其余条目。')) | Out-Null
         return
     }
 
@@ -5160,7 +4990,7 @@ function Show-Findings {
         $row.BorderBrush = Get-Brush $Script:CARD_BORDER
         $row.BorderThickness = New-Thick 0 0 0 1
         # 右边留 14px：竖滚动条要占位，不留的话「判定」那一列会被裁掉
-        $row.Padding = New-Thick 0 12 14 13
+        $row.Padding = New-Thick 0 12 16 12
 
         $g = New-Object System.Windows.Controls.Grid
         foreach ($w in @(34.0, 0.0, 96.0)) {
@@ -5174,24 +5004,24 @@ function Show-Findings {
         }
 
         # --- 标记 ---
-        $mk = New-TextBlock -Text $mark -Size 15 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+        $mk = New-TextBlock -Text $mark -Size 14 -Color $(if ($abn) { '#8A5750' } else { 'TextDim' })
         if ($abn) { $mk.FontWeight = 'SemiBold' }
         $mk.VerticalAlignment = 'Top'
-        $mk.Margin = New-Thick 0 1 0 0
+        $mk.Margin = New-Thick 0 0 0 0
         $g.Children.Add($mk) | Out-Null
 
         $sp = New-Object System.Windows.Controls.StackPanel
         [System.Windows.Controls.Grid]::SetColumn($sp, 1)
 
-        $nm = New-TextBlock -Text $f.Name -Size 15 -Color '#2B2A26' -Wrap $true
+        $nm = New-TextBlock -Text $f.Name -Size 14 -Color 'TextMain' -Wrap $true
         if ($abn) { $nm.FontWeight = 'SemiBold' }
         $sp.Children.Add($nm) | Out-Null
 
         # 来源 + 会不会弹黑框，一行小字说清，不用药丸
         $kindBits = @($f.Kind)
         if ($f.Extra) { $kindBits += $f.Extra }
-        $kd = New-TextBlock -Text ($kindBits -join '   ·   ') -Size 13 -Color '#66635B' -Wrap $true
-        $kd.Margin = New-Thick 0 3 0 0
+        $kd = New-TextBlock -Text ($kindBits -join '   ·   ') -Size 13 -Color 'TextDim' -Wrap $true
+        $kd.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($kd) | Out-Null
 
         if ($f.Command) {
@@ -5199,24 +5029,25 @@ function Show-Findings {
             # 不换字体：随包字体的意义就在于不依赖系统装了什么，
             # 而且 craft-floor 拒绝「拿等宽当技术感的戏服」。
             $cb = New-Object System.Windows.Controls.Border
-            $cb.Background = Get-Brush '#E5E3DC'
-            $cb.Padding = New-Thick 10 7 10 7
+            $cb.Background = Get-Brush 'SurfaceSunken'
+            $cb.CornerRadius = New-Corner 8
+            $cb.Padding = New-Thick 12 8 12 8
             $cb.Margin = New-Thick 0 8 0 0
-            $ct = New-TextBlock -Text $f.Command -Size 12.5 -Color '#565349' -Wrap $true
+            $ct = New-TextBlock -Text $f.Command -Size 12 -Color 'TextMid' -Wrap $true
             [System.Windows.Documents.Typography]::SetNumeralAlignment($ct, 'Tabular')
             $cb.Child = $ct
             $sp.Children.Add($cb) | Out-Null
         }
 
         foreach ($r in $f.Reasons) {
-            $rt = New-TextBlock -Text ('· ' + $r) -Size 13 -Color '#565349' -Wrap $true
-            $rt.Margin = New-Thick 0 6 0 0
+            $rt = New-TextBlock -Text ('· ' + $r) -Size 13 -Color 'TextMid' -Wrap $true
+            $rt.Margin = New-Thick 0 8 0 0
             $sp.Children.Add($rt) | Out-Null
         }
 
         # 建议。★ 只有真该警觉的那两档上墨 ★
         # 建议只在最高档上墨。「可疑」也上墨的话一页下来红字太多，真高危就不跳了。
-        $ad = New-TextBlock -Text $f.Advice -Size 13 -Color $(if ($mark -eq '↑↑') { '#8A5750' } else { '#565349' }) -Wrap $true
+        $ad = New-TextBlock -Text $f.Advice -Size 13 -Color $(if ($mark -eq '↑↑') { '#8A5750' } else { 'TextMid' }) -Wrap $true
         $ad.Margin = New-Thick 0 8 0 0
         $sp.Children.Add($ad) | Out-Null
 
@@ -5224,17 +5055,17 @@ function Show-Findings {
         if ($f.Target.Type -eq 'WmiConsumer') {
             $b = New-ToolButton -Text '删除这个 WMI 订阅' -Tag $f -OnClick {
                 $ff = $this.Tag
-                $r = [System.Windows.MessageBox]::Show("即将删除 WMI 事件订阅：`r`n$($ff.Name)`r`n`r`n注意：这一项删掉之后工具无法帮你恢复。`r`n而且删掉它只是切断了自动执行，真正的恶意文件还在硬盘上 ——`r`n删完请务必用 Windows Defender 做一次完全扫描。`r`n`r`n确定删除吗？", '确认删除', 'YesNo', 'Warning')
+                $r = Show-Msg -Text ("即将删除 WMI 事件订阅：`r`n$($ff.Name)`r`n`r`n注意：这一项删掉之后工具无法帮你恢复。`r`n而且删掉它只是切断了自动执行，真正的恶意文件还在硬盘上 ——`r`n删完请务必用 Windows Defender 做一次完全扫描。`r`n`r`n确定删除吗？") -Title '确认删除' -Kind AskWarn
                 if ($r -ne 'Yes') { return }
                 if (Set-FindingEnabled -Finding $ff -Enabled $false) { $this.IsEnabled = $false; $this.Content = '已删除' }
             }
-            $b.Margin = New-Thick 0 10 0 0
+            $b.Margin = New-Thick 0 12 0 0
             $sp.Children.Add($b) | Out-Null
         } elseif ($f.Target.Type -ne 'None') {
             $cbx = New-Object System.Windows.Controls.CheckBox
             $cbx.Content = '保持启用（取消勾选 = 禁用它，随时可以再勾回来）'
             $cbx.FontSize = 13
-            $cbx.Margin = New-Thick 0 10 0 0
+            $cbx.Margin = New-Thick 0 12 0 0
             $cbx.IsChecked = [bool]$f.Enabled
             $cbx.Tag = $f
             $cbx.Add_Click({
@@ -5248,8 +5079,8 @@ function Show-Findings {
                 })
             $sp.Children.Add($cbx) | Out-Null
         } else {
-            $t = New-TextBlock -Text '这一项工具不会自动改动 —— 涉及系统核心设置，误改会开不了机。请先杀毒，确认之后手动处理。' -Size 13 -Color '#66635B' -Wrap $true
-            $t.Margin = New-Thick 0 10 0 0
+            $t = New-TextBlock -Text '这一项工具不会自动改动 —— 涉及系统核心设置，误改会开不了机。请先杀毒，确认之后手动处理。' -Size 13 -Color 'TextDim' -Wrap $true
+            $t.Margin = New-Thick 0 12 0 0
             $sp.Children.Add($t) | Out-Null
         }
 
@@ -5259,7 +5090,7 @@ function Show-Findings {
         # 会弹黑框的那条就把「会弹黑框」写在判定里 ——
         # 标记是 ↑↑ 而判定写「可疑」，两处对不上，读者会先以为自己看错了。
         $lvText = if ($f.Flash) { '会弹黑框' } else { $f.Level }
-        $lv = New-TextBlock -Text $lvText -Size 13.5 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+        $lv = New-TextBlock -Text $lvText -Size 13 -Color $(if ($abn) { '#8A5750' } else { 'TextDim' })
         if ($abn) { $lv.FontWeight = 'SemiBold' }
         $lv.TextAlignment = 'Right'
         $lv.VerticalAlignment = 'Top'
@@ -5269,6 +5100,7 @@ function Show-Findings {
         $row.Child = $g
         $p.Children.Add($row) | Out-Null
     }
+    Close-CardRows $p
     Set-Status ("扫描完成：" + $Script:UI.InspectSummary.Text)
 }
 
@@ -5278,23 +5110,22 @@ $Script:WatchTimer = $null
 function New-ProcRow {
     <# 一条进程记录的卡片。会弹黑框的用醒目颜色标出来。 #>
     param([string]$Head, [string]$Sub, [string]$Cmd, [bool]$Hot)
+    # 会弹黑框的那条铺卡其底（语义色：需要注意），其余灰底；不再用 3px 彩色左边条
     $b = New-Object System.Windows.Controls.Border
-    $b.Background = Get-Brush $(if ($Hot) { '#F0EADC' } else { '#FBFAF8' })
-    $b.BorderBrush = Get-Brush $(if ($Hot) { '#7A6B45' } else { '#DDDBD5' })
-    $b.BorderThickness = New-Thick $(if ($Hot) { 3 } else { 0 }) 0 0 0
-    $b.CornerRadius = New-Object System.Windows.CornerRadius 4
-    $b.Padding = New-Thick 10 7 10 8
-    $b.Margin = New-Thick 0 0 0 5
+    $b.Background = Get-Brush $(if ($Hot) { '#EDE7D9' } else { 'SurfaceAlt' })
+    $b.CornerRadius = New-Corner 8
+    $b.Padding = New-Thick 12 8 12 8
+    $b.Margin = New-Thick 0 0 0 4
     $sp = New-Object System.Windows.Controls.StackPanel
-    $sp.Children.Add((New-TextBlock -Text $Head -Size 12 -Bold $true -Color $(if ($Hot) { '#89694F' } else { '#4A4842' }) -Wrap $true)) | Out-Null
+    $sp.Children.Add((New-TextBlock -Text $Head -Size 12 -Bold $true -Color $(if ($Hot) { '#89694F' } else { 'TextMid' }) -Wrap $true)) | Out-Null
     if ($Sub) {
-        $t = New-TextBlock -Text $Sub -Size 11.5 -Color '#66635B' -Wrap $true
-        $t.Margin = New-Thick 0 3 0 0
+        $t = New-TextBlock -Text $Sub -Size 11 -Color 'TextDim' -Wrap $true
+        $t.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($t) | Out-Null
     }
     if ($Cmd) {
-        $t2 = New-TextBlock -Text $Cmd -Size 10.5 -Color '#66635B' -Wrap $true
-        $t2.Margin = New-Thick 0 3 0 0
+        $t2 = New-TextBlock -Text $Cmd -Size 11 -Color 'TextDim' -Wrap $true
+        $t2.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($t2) | Out-Null
     }
     $b.Child = $sp
@@ -5307,7 +5138,7 @@ function Start-LiveWatch {
         return
     }
     $Script:UI.RecentRunPanel.Children.Clear()
-    $Script:UI.RecentRunPanel.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color '#66635B' -Text '监控已启动。现在正常用电脑，等黑框出现——出现的瞬间这里就会多出几条记录。带橙色标记的就是控制台进程（也就是黑框本身），看它的「父进程」是谁，那就是元凶。')) | Out-Null
+    $Script:UI.RecentRunPanel.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color 'TextDim' -Text '监控已启动。现在正常用电脑，等黑框出现——出现的瞬间这里就会多出几条记录。带橙色标记的就是控制台进程（也就是黑框本身），看它的「父进程」是谁，那就是元凶。')) | Out-Null
     $Script:UI.BtnWatchStart.IsEnabled = $false
     $Script:UI.BtnWatchStop.IsEnabled = $true
 
@@ -5365,12 +5196,12 @@ function Show-ProcLog {
     $rows = @(Get-RecentProcessCreations -Minutes 180 -ConsoleOnly $true)
     Set-Busy $false
     if ($rows.Count -eq 0) {
-        $p.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color '#66635B' -Text '最近 3 小时没有记录到控制台进程。如果刚开启记录，要等下次弹窗之后再来看。')) | Out-Null
+        $p.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color 'TextDim' -Text '最近 3 小时没有记录到控制台进程。如果刚开启记录，要等下次弹窗之后再来看。')) | Out-Null
         Set-Status '就绪'
         return
     }
-    $h = New-TextBlock -Wrap $true -Size 11.5 -Color '#66635B' -Text '最近 3 小时内创建过的控制台进程（也就是黑框），按次数从多到少排。次数特别多的那条，基本就是你看到的规律性弹窗。重点看「父进程」——那是真正开出黑框的程序。'
-    $h.Margin = New-Thick 0 0 0 10
+    $h = New-TextBlock -Wrap $true -Size 11 -Color 'TextDim' -Text '最近 3 小时内创建过的控制台进程（也就是黑框），按次数从多到少排。次数特别多的那条，基本就是你看到的规律性弹窗。重点看「父进程」——那是真正开出黑框的程序。'
+    $h.Margin = New-Thick 0 0 0 12
     $p.Children.Add($h) | Out-Null
     foreach ($r in $rows) {
         $head = "{0}   ×{1} 次   最近 {2}" -f $r.Name, $r.Count, $r.Last.ToString('HH:mm:ss')
@@ -5385,9 +5216,9 @@ function Build-RecentRuns {
     $p.Children.Clear()
 
     if (-not (Test-TaskLogEnabled)) {
-        $t1 = New-TextBlock -Wrap $true -Size 12.5 -Color '#7A6B45' -Text '任务运行记录当前是【关闭】的，所以查不到历史。'
+        $t1 = New-TextBlock -Wrap $true -Size 12 -Color '#7A6B45' -Text '任务运行记录当前是【关闭】的，所以查不到历史。'
         $p.Children.Add($t1) | Out-Null
-        $t2 = New-TextBlock -Wrap $true -Size 12 -Color '#565349' -Text @'
+        $t2 = New-TextBlock -Wrap $true -Size 12 -Color 'TextMid' -Text @'
 点上面的「开启运行记录」把它打开，然后：
 
 1. 该干嘛干嘛，等下次黑框弹出来
@@ -5396,36 +5227,36 @@ function Build-RecentRuns {
 
 这个记录只占几 MB，平时对性能没有影响。
 '@
-        $t2.Margin = New-Thick 0 10 0 0
+        $t2.Margin = New-Thick 0 12 0 0
         $p.Children.Add($t2) | Out-Null
         return
     }
 
     $runs = @(Get-RecentTaskRuns -Hours 24)
     if ($runs.Count -eq 0) {
-        $p.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color '#66635B' -Text '过去 24 小时没有任务运行记录。如果刚刚才开启记录，那要等下次任务运行才会有内容。')) | Out-Null
+        $p.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color 'TextDim' -Text '过去 24 小时没有任务运行记录。如果刚刚才开启记录，那要等下次任务运行才会有内容。')) | Out-Null
         return
     }
 
-    $h = New-TextBlock -Wrap $true -Size 11.5 -Color '#66635B' -Text '按最近运行时间排序。跑得特别频繁（次数很多）的那几条，最可能就是你看到的规律性弹窗。'
-    $h.Margin = New-Thick 0 0 0 10
+    $h = New-TextBlock -Wrap $true -Size 11 -Color 'TextDim' -Text '按最近运行时间排序。跑得特别频繁（次数很多）的那几条，最可能就是你看到的规律性弹窗。'
+    $h.Margin = New-Thick 0 0 0 12
     $p.Children.Add($h) | Out-Null
 
     foreach ($r in $runs) {
         $b = New-Object System.Windows.Controls.Border
-        $b.Background = Get-Brush '#FBFAF8'
-        $b.CornerRadius = New-Object System.Windows.CornerRadius 4
-        $b.Padding = New-Thick 10 7 10 8
-        $b.Margin = New-Thick 0 0 0 5
+        $b.Background = Get-Brush 'SurfaceAlt'
+        $b.CornerRadius = New-Corner 8
+        $b.Padding = New-Thick 12 8 12 8
+        $b.Margin = New-Thick 0 0 0 4
         $sp = New-Object System.Windows.Controls.StackPanel
-        $col = if ($r.Count -ge 10) { '#7A6B45' } else { '#4A4842' }
+        $col = if ($r.Count -ge 10) { '#7A6B45' } else { 'TextMid' }
         $sp.Children.Add((New-TextBlock -Text ("{0}   ·   24 小时内跑了 {1} 次" -f $r.Last.ToString('MM-dd HH:mm:ss'), $r.Count) -Size 12 -Bold $true -Color $col)) | Out-Null
-        $t1 = New-TextBlock -Text $r.TaskName -Size 11.5 -Color '#565349' -Wrap $true
-        $t1.Margin = New-Thick 0 3 0 0
+        $t1 = New-TextBlock -Text $r.TaskName -Size 11 -Color 'TextMid' -Wrap $true
+        $t1.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($t1) | Out-Null
         if ($r.Exe) {
-            $t2 = New-TextBlock -Text $r.Exe -Size 10.5 -Color '#66635B' -Wrap $true
-            $t2.Margin = New-Thick 0 2 0 0
+            $t2 = New-TextBlock -Text $r.Exe -Size 11 -Color 'TextDim' -Wrap $true
+            $t2.Margin = New-Thick 0 4 0 0
             $sp.Children.Add($t2) | Out-Null
         }
         $b.Child = $sp
@@ -5448,13 +5279,13 @@ function Build-HealthUI {
     # ==================== 登记信息 ====================
     #   化验单最上面那一栏：姓名、年龄、送检科室。
     #   两列对齐（标签 | 值），细线分隔 —— 这样才扫得快。
-    $info.Children.Add((New-RptSection -Title '受检机器')) | Out-Null
+    $info.Children.Add((New-RptSection -Title '受检机器' -Icon 'Laptop')) | Out-Null
 
     foreach ($row in (Get-SystemReport)) {
         $b = New-Object System.Windows.Controls.Border
         $b.BorderBrush = Get-Brush $Script:CARD_BORDER
         $b.BorderThickness = New-Thick 0 0 0 1
-        $b.Padding = New-Thick 0 9 0 9
+        $b.Padding = New-Thick 0 12 0 12
 
         $g = New-Object System.Windows.Controls.Grid
         $cdK = New-Object System.Windows.Controls.ColumnDefinition
@@ -5464,11 +5295,11 @@ function Build-HealthUI {
         $cdV.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
         $g.ColumnDefinitions.Add($cdV)
 
-        $k = New-TextBlock -Text $row.Key -Size 13 -Color '#66635B' -Wrap $true
+        $k = New-TextBlock -Text $row.Key -Size 12 -Color 'TextDim' -Wrap $true
         $k.VerticalAlignment = 'Top'
         $g.Children.Add($k) | Out-Null
 
-        $v = New-TextBlock -Text $row.Value -Size 14 -Color '#2B2A26' -Wrap $true
+        $v = New-TextBlock -Text $row.Value -Size 13 -Color 'TextMain' -Wrap $true
         [System.Windows.Documents.Typography]::SetNumeralAlignment($v, 'Tabular')
         [System.Windows.Controls.Grid]::SetColumn($v, 1)
         $g.Children.Add($v) | Out-Null
@@ -5481,9 +5312,11 @@ function Build-HealthUI {
     # ==================== 体检结论 ====================
     Set-Status '正在做系统体检…'
     Sync-UI
-    $ap = $Script:UI.AdvicePanel
-    $ap.Children.Clear()
-    $ap.Children.Add((New-RptSection -Title '检验结论' -Aside '按性价比从高到低排')) | Out-Null
+    $apRoot = $Script:UI.AdvicePanel
+    $apRoot.Children.Clear()
+    $adviceCard = New-Card -Title '检验结论' -Aside '按性价比从高到低排' -Icon 'ClipboardCheckOutline'
+    $apRoot.Children.Add($adviceCard.Card) | Out-Null
+    $ap = $adviceCard.Body
     [void]$sb.AppendLine()
     [void]$sb.AppendLine('===== 体检结论 =====')
 
@@ -5498,7 +5331,7 @@ function Build-HealthUI {
         $row.Background = [System.Windows.Media.Brushes]::Transparent
         $row.BorderBrush = Get-Brush $Script:CARD_BORDER
         $row.BorderThickness = New-Thick 0 0 0 1
-        $row.Padding = New-Thick 0 13 14 14
+        $row.Padding = New-Thick 0 12 16 16
 
         $g = New-Object System.Windows.Controls.Grid
         foreach ($w in @(34.0, 0.0, 64.0)) {
@@ -5511,23 +5344,23 @@ function Build-HealthUI {
             $g.ColumnDefinitions.Add($cd)
         }
 
-        $mk = New-TextBlock -Text $mark -Size 15 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+        $mk = New-TextBlock -Text $mark -Size 14 -Color $(if ($abn) { '#8A5750' } else { 'TextDim' })
         if ($abn) { $mk.FontWeight = 'SemiBold' }
         $mk.VerticalAlignment = 'Top'
-        $mk.Margin = New-Thick 0 1 0 0
+        $mk.Margin = New-Thick 0 0 0 0
         $g.Children.Add($mk) | Out-Null
 
         $sp = New-Object System.Windows.Controls.StackPanel
         [System.Windows.Controls.Grid]::SetColumn($sp, 1)
-        $ttl = New-TextBlock -Text $a.Title -Size 15.5 -Color '#2B2A26' -Wrap $true
+        $ttl = New-TextBlock -Text $a.Title -Size 14 -Color 'TextMain' -Wrap $true
         if ($abn) { $ttl.FontWeight = 'SemiBold' }
         $sp.Children.Add($ttl) | Out-Null
-        $bd = New-TextBlock -Text (Format-Reflow $a.Text) -Size 13.5 -Color '#565349' -Wrap $true
-        $bd.Margin = New-Thick 0 7 0 0
+        $bd = New-TextBlock -Text (Format-Reflow $a.Text) -Size 13 -Color 'TextMid' -Wrap $true
+        $bd.Margin = New-Thick 0 8 0 0
         $sp.Children.Add($bd) | Out-Null
         $g.Children.Add($sp) | Out-Null
 
-        $lv = New-TextBlock -Text $a.Level -Size 13.5 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+        $lv = New-TextBlock -Text $a.Level -Size 13 -Color $(if ($abn) { '#8A5750' } else { 'TextDim' })
         if ($abn) { $lv.FontWeight = 'SemiBold' }
         $lv.TextAlignment = 'Right'
         $lv.VerticalAlignment = 'Top'
@@ -5541,6 +5374,7 @@ function Build-HealthUI {
         [void]$sb.AppendLine("[$($a.Level)] $($a.Title)")
         [void]$sb.AppendLine($a.Text)
     }
+    Close-CardRows $ap
     $Script:LastReportText = $sb.ToString()
     Set-Busy $false
     Set-Status '体检完成'
@@ -5558,10 +5392,10 @@ function Build-FpsDiagUI {
     $ap = $Script:UI.AdvicePanel
     $ap.Children.Clear()
 
-    $t = New-TextBlock -Text '帧数瓶颈诊断' -Size 15 -Bold $true
-    $t.Margin = New-Thick 0 0 0 4
+    $t = New-TextBlock -Text '帧数瓶颈诊断' -Size 16 -Bold $true
+    $t.Margin = New-Thick 0 0 0 8
     $ap.Children.Add($t) | Out-Null
-    $sub = New-TextBlock -Size 12.5 -Color '#565349' -Wrap $true -Text (
+    $sub = New-TextBlock -Size 12 -Color 'TextMid' -Wrap $true -Text (
         '按影响大小排序。标「瓶颈」的是真正卡住你帧数的东西，' +
         '标「已到顶」的说明这一环本来就是最优的 —— 点了也不会变，' +
         '那通常就是「感觉没用」的原因。')
@@ -5573,16 +5407,18 @@ function Build-FpsDiagUI {
         $c = switch ($d.Level) {
             '瓶颈'   { @{ Line = '#8A5750'; Bg = '#EFE3E0' } }
             '待优化' { @{ Line = '#7A6B45'; Bg = '#F0EADC' } }
-            '信息'   { @{ Line = '#55606F'; Bg = '#E4E7EC' } }
+            '信息'   { @{ Line = 'TextMid'; Bg = 'SurfaceSunken' } }
             default  { @{ Line = '#556B54'; Bg = '#E7EBE4' } }
         }
+        # 状态卡（design.md 4.4）：白卡 + 左上语义徽章。
+        #   不再是「整块语义底色 + 4px 彩色左边条」—— 满屏色块时真正的瓶颈反而不显眼
         $card = New-Object System.Windows.Controls.Border
-        $card.Background      = Get-Brush $c.Bg
-        $card.BorderBrush     = Get-Brush $c.Line
-        $card.BorderThickness = New-Thick 4 0 0 0
-        $card.CornerRadius    = New-Object System.Windows.CornerRadius 6
-        $card.Padding         = New-Thick 14 12 14 12
-        $card.Margin          = New-Thick 0 0 0 10
+        $card.Background      = Get-Brush 'Card'
+        $card.BorderBrush     = Get-Brush 'Stroke'
+        $card.BorderThickness = New-Thick 1
+        $card.CornerRadius    = New-Corner 12
+        $card.Padding         = New-Thick 20 16 20 16
+        $card.Margin          = New-Thick 0 0 0 12
 
         $sp = New-Object System.Windows.Controls.StackPanel
         $h  = New-Object System.Windows.Controls.StackPanel
@@ -5590,9 +5426,9 @@ function Build-FpsDiagUI {
         $h.Children.Add((New-Badge -Text $d.Level -Fg $c.Line -Bg (Get-TintBg $c.Line))) | Out-Null
         $sp.Children.Add($h) | Out-Null
         $ttl = New-TextBlock -Text $d.Title -Size 14 -Bold $true -Wrap $true
-        $ttl.Margin = New-Thick 0 4 0 6
+        $ttl.Margin = New-Thick 0 8 0 8
         $sp.Children.Add($ttl) | Out-Null
-        $sp.Children.Add((New-TextBlock -Text (Format-Reflow $d.Text) -Size 12.5 -Color '#565349' -Wrap $true)) | Out-Null
+        $sp.Children.Add((New-TextBlock -Text (Format-Reflow $d.Text) -Size 13 -Color 'TextMid' -Wrap $true)) | Out-Null
         $card.Child = $sp
         $ap.Children.Add($card) | Out-Null
     }
@@ -5614,11 +5450,11 @@ function Build-AdviceCards {
     $ap = $Script:UI.AdvicePanel
     $ap.Children.Clear()
 
-    $t = New-TextBlock -Text $Head -Size 15 -Bold $true
-    $t.Margin = New-Thick 0 0 0 4
+    $t = New-TextBlock -Text $Head -Size 16 -Bold $true
+    $t.Margin = New-Thick 0 0 0 8
     $ap.Children.Add($t) | Out-Null
     if ($Sub) {
-        $s = New-TextBlock -Text $Sub -Size 12.5 -Color '#565349' -Wrap $true
+        $s = New-TextBlock -Text $Sub -Size 12 -Color 'TextMid' -Wrap $true
         $s.Margin = New-Thick 0 0 0 12
         $ap.Children.Add($s) | Out-Null
     }
@@ -5629,15 +5465,17 @@ function Build-AdviceCards {
             '当心' { @{ Line = '#8A5750'; Bg = '#EFE3E0' } }
             '动手' { @{ Line = '#7A6B45'; Bg = '#F0EADC' } }
             '步骤' { @{ Line = '#556B54'; Bg = '#E7EBE4' } }
-            default { @{ Line = '#55606F'; Bg = '#E4E7EC' } }
+            default { @{ Line = 'TextMid'; Bg = 'SurfaceSunken' } }
         }
+        # 状态卡（design.md 4.4）：白卡 + 左上语义徽章。
+        #   不再是「整块语义底色 + 4px 彩色左边条」—— 满屏色块时真正的瓶颈反而不显眼
         $card = New-Object System.Windows.Controls.Border
-        $card.Background      = Get-Brush $c.Bg
-        $card.BorderBrush     = Get-Brush $c.Line
-        $card.BorderThickness = New-Thick 4 0 0 0
-        $card.CornerRadius    = New-Object System.Windows.CornerRadius 6
-        $card.Padding         = New-Thick 14 12 14 12
-        $card.Margin          = New-Thick 0 0 0 10
+        $card.Background      = Get-Brush 'Card'
+        $card.BorderBrush     = Get-Brush 'Stroke'
+        $card.BorderThickness = New-Thick 1
+        $card.CornerRadius    = New-Corner 12
+        $card.Padding         = New-Thick 20 16 20 16
+        $card.Margin          = New-Thick 0 0 0 12
 
         $sp = New-Object System.Windows.Controls.StackPanel
         $h = New-Object System.Windows.Controls.StackPanel
@@ -5645,9 +5483,9 @@ function Build-AdviceCards {
         $h.Children.Add((New-Badge -Text $d.Kind -Fg $c.Line -Bg (Get-TintBg $c.Line))) | Out-Null
         $sp.Children.Add($h) | Out-Null
         $ttl = New-TextBlock -Text $d.Title -Size 14 -Bold $true -Wrap $true
-        $ttl.Margin = New-Thick 0 4 0 6
+        $ttl.Margin = New-Thick 0 8 0 8
         $sp.Children.Add($ttl) | Out-Null
-        $sp.Children.Add((New-TextBlock -Text (Format-Reflow $d.Text) -Size 12.5 -Color '#565349' -Wrap $true)) | Out-Null
+        $sp.Children.Add((New-TextBlock -Text (Format-Reflow $d.Text) -Size 13 -Color 'TextMid' -Wrap $true)) | Out-Null
         $card.Child = $sp
         $ap.Children.Add($card) | Out-Null
     }
@@ -5757,11 +5595,11 @@ $Script:UI.BtnWatchStop.Add_Click({ Stop-LiveWatch })
 $Script:UI.BtnProcLog.Add_Click({ Show-ProcLog })
 $Script:UI.BtnProcAudit.Add_Click({
         if (Test-ProcAuditEnabled) {
-            $r = [System.Windows.MessageBox]::Show("「持续记录」当前是开启的。`r`n`r`n要关掉吗？`r`n（排查完建议关掉——开着的时候每创建一个进程都会写一条安全日志，量很大。）", '持续记录', 'YesNo', 'Question')
+            $r = Show-Msg -Text ("「持续记录」当前是开启的。`r`n`r`n要关掉吗？`r`n（排查完建议关掉——开着的时候每创建一个进程都会写一条安全日志，量很大。）") -Title '持续记录' -Kind Ask
             if ($r -eq 'Yes') { Disable-ProcAudit | Out-Null; $this.Content = '开启持续记录'; Set-Status '持续记录已关闭' }
             return
         }
-        $r = [System.Windows.MessageBox]::Show(@"
+        $r = Show-Msg -Text (@"
 即将打开 Windows 自带的「进程创建审核」，之后系统会把每一次进程创建都记进安全日志，包含完整命令行和父进程。
 
 【为什么要开】
@@ -5776,7 +5614,7 @@ $Script:UI.BtnProcAudit.Add_Click({
 安全日志写入量会变大（每开一个程序一条）。排查完记得关掉。
 
 现在开启吗？
-"@, '开启持续记录', 'YesNo', 'Question')
+"@) -Title '开启持续记录' -Kind Ask
         if ($r -ne 'Yes') { return }
         if (Enable-ProcAudit) {
             $this.Content = '关闭持续记录'
@@ -5824,16 +5662,14 @@ $Script:UI.BtnAddExclusion.Add_Click({
         try {
             Add-MpPreference -ExclusionPath $path -ErrorAction Stop
             Write-Log "已把 $path 加入 Windows Defender 扫描白名单" '成功'
-            [System.Windows.MessageBox]::Show(
-                "已添加白名单：`r`n$path`r`n`r`n作用：Windows Defender 以后不再实时扫描这个文件夹里的文件。游戏读取大量资源文件时不用每个都过一遍杀毒，加载速度和帧数稳定性都会改善。`r`n`r`n注意：白名单里的文件不再被保护，所以只加你信任的游戏目录，不要加下载文件夹。", '电脑调优助手') | Out-Null
+            Show-Msg -Text ("已添加白名单：`r`n$path`r`n`r`n作用：Windows Defender 以后不再实时扫描这个文件夹里的文件。游戏读取大量资源文件时不用每个都过一遍杀毒，加载速度和帧数稳定性都会改善。`r`n`r`n注意：白名单里的文件不再被保护，所以只加你信任的游戏目录，不要加下载文件夹。") -Title '电脑调优助手' -Kind Info | Out-Null
         } catch {
             Show-Msg -Text "添加失败：$($_.Exception.Message)`r`n`r`n如果你装了第三方杀毒软件（360/火绒/腾讯管家），Windows Defender 会被自动关闭，这个功能就用不了了 —— 请去那个杀毒软件里手动添加信任目录。" | Out-Null
         }
     })
 
 $Script:UI.BtnSfc.Add_Click({
-        $r = [System.Windows.MessageBox]::Show(
-            "将在新窗口里运行 sfc /scannow，它会扫描并自动修复损坏的系统文件。`r`n`r`n· 需要 5~20 分钟`r`n· 期间不要关掉那个黑窗口`r`n· 扫完如果提示「已修复」，建议重启一次`r`n`r`n什么时候该用：系统莫名其妙报错、某些功能打不开、蓝屏频繁。`r`n`r`n现在开始吗？", '检查系统文件', 'YesNo', 'Question')
+        $r = Show-Msg -Text ("将在新窗口里运行 sfc /scannow，它会扫描并自动修复损坏的系统文件。`r`n`r`n· 需要 5~20 分钟`r`n· 期间不要关掉那个黑窗口`r`n· 扫完如果提示「已修复」，建议重启一次`r`n`r`n什么时候该用：系统莫名其妙报错、某些功能打不开、蓝屏频繁。`r`n`r`n现在开始吗？") -Title '检查系统文件' -Kind Ask
         if ($r -ne 'Yes') { return }
         Start-Process 'cmd.exe' -ArgumentList '/k', 'sfc /scannow' -Verb RunAs
         Write-Log '已启动 sfc /scannow 系统文件检查' '信息'
@@ -5850,30 +5686,40 @@ $Script:UI.BtnCopyReport.Add_Click({
     })
 
 $Script:UI.BtnOpenBackup.Add_Click({ Start-Process explorer.exe -ArgumentList $Script:BackupDir })
+# 顶栏的换肤按钮：浅色 <-> 深色一键切换（个性化页里是同一件事的完整版）
+$Script:UI.BtnThemeToggle.Add_Click({
+        $st = Get-ThemeSetting
+        $to = if ($Script:ThemeIsDark) { '浅色' } else { '深色' }
+        Set-AppTheme -Name $to -Image $st.Image -Opacity $st.Opacity -Frost $st.Frost
+        Redraw-AllPages
+        Set-Status "皮肤已换成「$to」"
+    })
 $Script:UI.BtnExportReport.Add_Click({ Export-DiagnosticReport })
 
 # ---- 快捷键 ----
 # Ctrl+F 跳到当前页的搜索框，F5 重新检测。都是用惯了的习惯，省得去找鼠标。
 $Script:Window.Add_PreviewKeyDown({
         $ctrl = [System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control
+        # ★ 按页名分派，不按序号 ★ v4.1 在最前面插了「概览」之后，按序号写的快捷键全体错位了一格
+        $pg = "$($Script:UI.Tabs.SelectedItem.Header)"
         if ($ctrl -and $_.Key -eq 'F') {
-            switch ($Script:UI.Tabs.SelectedIndex) {
-                0 { $Script:UI.TweakSearch.Focus() | Out-Null; $_.Handled = $true }
-                1 { $Script:UI.CleanSearch.Focus() | Out-Null; $_.Handled = $true }
+            switch ($pg) {
+                '性能优化' { $Script:UI.TweakSearch.Focus() | Out-Null; $_.Handled = $true }
+                '垃圾清理' { $Script:UI.CleanSearch.Focus() | Out-Null; $_.Handled = $true }
             }
         } elseif ($_.Key -eq 'F5') {
-            switch ($Script:UI.Tabs.SelectedIndex) {
-                0 { Update-TweakStates }
-                1 { Invoke-ScanJunk }
-                3 { Invoke-Inspect }
-                4 { Build-StartupUI }
-                5 { Build-HealthUI }
+            switch ($pg) {
+                '性能优化' { Update-TweakStates }
+                '垃圾清理' { Invoke-ScanJunk }
+                '弹窗排查' { Invoke-Inspect }
+                '启动项管理' { Build-StartupUI }
+                '系统体检' { Build-HealthUI }
             }
             $_.Handled = $true
         } elseif ($_.Key -eq 'Escape') {
             # Esc 清空搜索，回到完整列表
-            if ($Script:UI.Tabs.SelectedIndex -eq 0 -and $Script:UI.TweakSearch.Text) { $Script:UI.TweakSearch.Text = ''; $_.Handled = $true }
-            if ($Script:UI.Tabs.SelectedIndex -eq 1 -and $Script:UI.CleanSearch.Text) { $Script:UI.CleanSearch.Text = ''; $_.Handled = $true }
+            if ($pg -eq '性能优化' -and $Script:UI.TweakSearch.Text) { $Script:UI.TweakSearch.Text = ''; $_.Handled = $true }
+            if ($pg -eq '垃圾清理' -and $Script:UI.CleanSearch.Text) { $Script:UI.CleanSearch.Text = ''; $_.Handled = $true }
         }
     })
 
@@ -5881,8 +5727,7 @@ $Script:Window.Add_PreviewKeyDown({
 #  10. 启动
 # ---------------------------------------------------------------------
 $osCaption = (Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).Caption
-# 套用上次选的皮肤（读不到就是默认的暖灰）
-$Script:ColorRemap = @{}
+# 套用上次选的皮肤（读不到就是默认的浅色）
 $Script:ThemeImage = ''
 $Script:ThemeOpacity = 0.88
 try {
@@ -5895,8 +5740,11 @@ try {
     Set-AppTheme -Name $savedTheme.Name -Image $savedTheme.Image -Opacity $savedTheme.Opacity -Frost $savedTheme.Frost
     Apply-PanelOpacity
 } catch { Write-Log "套用皮肤失败，用默认配色：$($_.Exception.Message)" '警告' }
+Sync-TransitionSwitch
+Update-ThemeToggleIcon
 
 $Script:Window.Title = "电脑调优助手 v$Script:AppVersion"
+$Script:UI.AppVerText.Text = "v$Script:AppVersion · $Script:AppVersionDate"
 
 # 页眉那四个事实。★ 受检机器要写真机型 ★
 #   报告单的抬头写的是「谁的报告」，不是「谁出的报告」。
@@ -5929,6 +5777,7 @@ if ($Script:FontLoaded) {
     Write-Log "随包字体没加载上，退回系统字体。$Script:FontLoadError" '警告'
 }
 
+Build-NavUI
 Build-TweakUI
 Build-PresetUI
 $Script:PresetExpanded = $false
@@ -5940,18 +5789,13 @@ Update-TweakStates -PreselectRecommended $true
 
 # 启动项和体检比较慢，等窗口显示出来之后再在后台补上
 $Script:Window.Add_ContentRendered({
-        # 所有按钮挂上按下反馈。
-        # HandyControl 自带的是颜色变化，在这套完全消色的界面上几乎看不出来；
-        # 缩放是尺寸变化，任何配色下都能感知，而且走 RenderTransform 不触发重排。
-        try { Add-PressFeedbackAll $Script:Window } catch { }
+        # 按钮的按下反馈是 MDIX 的水波纹（压淡），不用再给每个按钮挂缩放
         Build-StartupUI
         Build-MaintainUI
         Build-BigFileDrives
         Build-RecentRuns
         Set-InspectEmpty        # 弹窗排查页扫描前的空状态
         Build-LogUI             # 把窗口出来之前记下的那几条日志补画出来
-        try { Update-TabInk $false } catch { }
-        try { Start-TitleReveal } catch { }
         Build-ThemeUI
         # 概览页：先建壳子再开硬件监控。
         # Initialize-Dash 要枚举全部硬件，实测约 3 秒，所以放在
@@ -5977,154 +5821,13 @@ $Script:Window.Add_ContentRendered({
 #    页面里任何一个下拉框、列表变了选择都会触发到这里，
 #    所以必须判断事件源是不是 TabControl 本身，否则会反复重扫。
 # ---------------------------------------------------------------------
-# ---------------------------------------------------------------------
-#  头部标题逐字淡入
-# ---------------------------------------------------------------------
-function Start-TitleReveal {
-    <#
-      「系统检验报告」六个字逐个淡入 + 上移，每字错开 38ms。
-      照 React Bits 的 SplitText 做的克制版。
-
-      ★ 只在程序启动时跑这一次 ★
-        每切一次页都演一遍就成了表演。开场演一次是「报告正在出」，
-        演第二次就是在耽误人干活。
-
-      ★ 做法是把整块标题换成一串单字 ★
-        换完之后每个字自带同一个隐式 TextBlock 样式，
-        换肤时照样跟着 DynamicResource 走，不会留旧配色。
-    #>
-    if ($Script:TitleRevealed) { return }
-    $Script:TitleRevealed = $true
-    $old = $Script:UI.RptTitle
-    if ($null -eq $old) { return }
-    $parent = $old.Parent -as [System.Windows.Controls.StackPanel]
-    if ($null -eq $parent) { return }
-    $text = "$($old.Text)"
-    if (-not $text) { return }
-
-    $strip = New-Object System.Windows.Controls.StackPanel
-    $strip.Orientation = 'Horizontal'
-    $idx = $parent.Children.IndexOf($old)
-    $parent.Children.Remove($old)
-    $parent.Children.Insert($idx, $strip)
-
-    $anim = [bool]$Script:AnimEnabled
-    $i = 0
-    foreach ($ch in $text.ToCharArray()) {
-        $t = New-Object System.Windows.Controls.TextBlock
-        $t.Text = "$ch"
-        $t.FontSize = $old.FontSize
-        $t.FontWeight = $old.FontWeight
-        $t.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'TextMain')
-        $strip.Children.Add($t) | Out-Null
-
-        if (-not $anim) { $i++; continue }
-
-        $t.Opacity = 0
-        $tt = New-Object System.Windows.Media.TranslateTransform 0, 10
-        $t.RenderTransform = $tt
-
-        $ease = New-Object System.Windows.Media.Animation.CubicEase
-        $ease.EasingMode = 'EaseOut'
-        $begin = [TimeSpan]::FromMilliseconds(38 * $i)
-        $dur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(300))
-
-        $fa = New-Object System.Windows.Media.Animation.DoubleAnimation
-        $fa.From = 0; $fa.To = 1; $fa.Duration = $dur; $fa.BeginTime = $begin
-        $t.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fa)
-
-        $ya = New-Object System.Windows.Media.Animation.DoubleAnimation
-        $ya.From = 10; $ya.To = 0; $ya.Duration = $dur; $ya.BeginTime = $begin
-        $ya.EasingFunction = $ease
-        $tt.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $ya)
-
-        $i++
-    }
-}
-
-# ---------------------------------------------------------------------
-#  页签指示条：滑过去，不是跳过去
-# ---------------------------------------------------------------------
-function Update-TabInk {
-    <#
-      把指示条挪到当前页签底下。
-        $Animate = $false 时直接落位（窗口刚出来、拉伸窗口时用），
-        $true 时用 220ms 缓出滑过去。
-
-      ★ 位置必须现算 ★
-        页签宽度随字数变，窗口一拉伸整排都会挪。
-        写死坐标的话换一套字体、改一个页签名就全歪了。
-    #>
-    param([bool]$Animate = $true)
-    $ink = $Script:UI.TabInk
-    $layer = $Script:UI.TabInkLayer
-    if ($null -eq $ink -or $null -eq $layer) { return }
-    $item = $Script:UI.Tabs.SelectedItem -as [System.Windows.Controls.TabItem]
-    if ($null -eq $item -or -not $item.IsVisible) { return }
-
-    # ★ 不能向 $layer 求变换 ★
-    #   TransformToAncestor 要求对方真是祖先，而这层 Canvas 是页签的**兄弟**。
-    #   向它求会抛异常，而且被 catch 吞掉 —— 表现是指示条永远不出现，不报错。
-    #   改向根 Grid 求；Canvas 跨满整个根 Grid，两者原点重合，坐标直接用。
-    $root = $layer.Parent
-    if ($null -eq $root) { return }
-    try {
-        $pt = $item.TransformToAncestor($root).Transform((New-Object System.Windows.Point 0, 0))
-    } catch { return }
-    $w = $item.ActualWidth
-    $h = $item.ActualHeight
-    if ($w -le 0) { return }
-
-    # 线画在页签文字下面一点，不贴着底边 —— 贴着会和下面的内容挤在一起
-    $top = $pt.Y + $h - 3
-    [System.Windows.Controls.Canvas]::SetTop($ink, $top)
-    $ink.Visibility = 'Visible'
-
-    $fromX = [double][System.Windows.Controls.Canvas]::GetLeft($ink)
-    if ([double]::IsNaN($fromX)) { $fromX = $pt.X }
-
-    if (-not $Animate -or -not $Script:AnimEnabled) {
-        [System.Windows.Controls.Canvas]::SetLeft($ink, $pt.X)
-        $ink.Width = $w
-        return
-    }
-
-    # ★ 动 Canvas.Left 而不是 RenderTransform ★
-    #   Canvas 上的元素不参与布局，改 Left 不会触发任何重排；
-    #   而且 Left 是附加属性，动画目标要写成 (Canvas.Left)。
-    $ease = New-Object System.Windows.Media.Animation.CubicEase
-    $ease.EasingMode = 'EaseOut'
-    $dur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(220))
-
-    $aL = New-Object System.Windows.Media.Animation.DoubleAnimation
-    $aL.From = $fromX; $aL.To = $pt.X; $aL.Duration = $dur; $aL.EasingFunction = $ease
-    $aW = New-Object System.Windows.Media.Animation.DoubleAnimation
-    $aW.From = $ink.ActualWidth; $aW.To = $w; $aW.Duration = $dur; $aW.EasingFunction = $ease
-
-    $sb = New-Object System.Windows.Media.Animation.Storyboard
-    [System.Windows.Media.Animation.Storyboard]::SetTarget($aL, $ink)
-    [System.Windows.Media.Animation.Storyboard]::SetTargetProperty($aL,
-        (New-Object System.Windows.PropertyPath '(Canvas.Left)'))
-    [System.Windows.Media.Animation.Storyboard]::SetTarget($aW, $ink)
-    [System.Windows.Media.Animation.Storyboard]::SetTargetProperty($aW,
-        (New-Object System.Windows.PropertyPath 'Width'))
-    $sb.Children.Add($aL) | Out-Null
-    $sb.Children.Add($aW) | Out-Null
-    $sb.Begin()
-}
-
 $Script:AppxBuilt = $false
 $Script:UI.Tabs.Add_SelectionChanged({
         param($sender, $e)
         if ($e.OriginalSource -ne $Script:UI.Tabs) { return }
-        # 切页签时让新页面淡入，比瞬间闪过去舒服
-        try { Start-FadeSlideIn $Script:UI.Tabs.SelectedContent -Ms 160 -SlideY 6 } catch { }
-        # 指示条滑到新页签底下。要排到布局算完之后，不然拿到的是旧宽度。
-        try {
-            $Script:Window.Dispatcher.BeginInvoke(
-                [System.Windows.Threading.DispatcherPriority]::Loaded,
-                [action] { Update-TabInk $true }) | Out-Null
-        } catch { }
+        # 切页动画：重播 PageHost 模板里那个 TransitioningContent 的进场效果（淡入 + 上移）
+        Invoke-PageTransition
+        Update-NavSelection
         $header = "$($Script:UI.Tabs.SelectedItem.Header)"
         # 只有停在概览页才轮询传感器，切走立刻停 ——
         # 全量刷新一次 100ms，一直跑等于工具自己变成最大的后台负担
@@ -6147,21 +5850,44 @@ $Script:UI.Tabs.Add_SelectionChanged({
 # ---------------------------------------------------------------------
 if ($SelfTest) {
     $styleBad = @()
+    # ---- MDIX 真的挂上了、样式真的解得出来 ----
+    #   「加载成功但样式一个不生效」是这类库最常见的死法，而且不报错 ——
+    #   v4 的 HandyControl 就这么静默失效过（根因见 design.md 7）。所以直接查。
+    if (-not $Script:MdLoaded) { $styleBad += "界面库 MDIX 没加载上：$Script:MdLoadError" }
+    if (-not $Script:AppStyles -or $Script:AppStyles.MergedDictionaries.Count -lt 2) { $styleBad += '全局样式字典没挂上（MDIX 主题 + 默认样式应为 2 个合并字典）' }
+    elseif ($Script:AppStyles.MergedDictionaries[1].MergedDictionaries.Count -eq 0) { $styleBad += 'MaterialDesign3.Defaults 是空的 —— 多半是有人把 Source 写成了 $rd.Source = …' }
+    foreach ($k in 'ButtonPrimary', 'ButtonDanger', 'ButtonIcon', 'SearchBox', 'CardBorder', 'PageHost', 'MaterialDesignOutlinedButton') {
+        try { if ($null -eq $Script:Window.FindResource($k)) { $styleBad += "样式 $k 解不出来" } } catch { $styleBad += "样式 $k 解不出来" }
+    }
     try {
         $bp = $Script:Window.FindResource('ButtonPrimary')
-        $tpl = ($bp.Setters | Where-Object { $_.Property.Name -eq 'Template' }).Value
-        if (-not $tpl) { $styleBad += 'ButtonPrimary 没有 Template' }
-        else {
-            $hit = @($tpl.Triggers | Where-Object { "$($_.Property)" -eq 'IsMouseOver' -and $_.EnterActions.Count -gt 0 })
-            if ($hit.Count -eq 0) { $styleBad += 'ButtonPrimary 的悬停高光没挂上（可能又被库的同名键盖了）' }
-        }
-    } catch { $styleBad += "ButtonPrimary 解不出来：$($_.Exception.Message)" }
+        if ($null -eq $bp.BasedOn) { $styleBad += 'ButtonPrimary 没有基于 MDIX 的按钮样式' }
+        $el = ($bp.Setters | Where-Object { "$($_.Property.Name)" -eq 'Elevation' })
+        if (-not $el -or "$($el.Value)" -ne 'Dp0') { $styleBad += 'ButtonPrimary 的阴影没压成 Dp0（扁平风格要求零阴影）' }
+    } catch { $styleBad += "ButtonPrimary 查不了：$($_.Exception.Message)" }
     try {
-        $ics = $Script:UI.Tabs.ItemContainerStyle
-        if ($null -eq $ics) { $styleBad += '页签没有用我们的 ItemContainerStyle，会退回库的默认蓝下划线' }
-    } catch { $styleBad += '页签容器样式查不了' }
-    # 点「说明文字」能不能切勾。
-    # 老板点名的就是这个交互 —— 转发不生效等于根本没改。
+        [void]$Script:UI.Tabs.ApplyTemplate()
+        $tc = $Script:UI.Tabs.Template.FindName('PageTransition', $Script:UI.Tabs)
+        if ($null -eq $tc) { $styleBad += '页面容器没用 PageHost 模板，页签条会露出来、切页没有动画' }
+        $fx = [MaterialDesignThemes.Wpf.Transitions.TransitioningContentBase].GetMethod('RunOpeningEffects', [System.Reflection.BindingFlags]'NonPublic,Public,Instance')
+        if ($null -eq $fx) { $styleBad += 'MDIX 里找不到 RunOpeningEffects（升级改名了？）—— 切页动画会静默失效，见 Invoke-PageTransition' }
+    } catch { $styleBad += "切页动画检查报错：$($_.Exception.Message)" }
+    # 色槽：每个槽都得在资源里，且是真正的 Brush（存成 PSObject 会在 ShowDialog 时崩）
+    foreach ($k in $Script:Palettes['浅色'].Keys) {
+        $v = [System.Windows.Application]::Current.Resources[$k]
+        if ($v -isnot [System.Windows.Media.Brush]) { $styleBad += "色槽 $k 不是 Brush（是 $($v.GetType().Name)）" }
+    }
+    # 深色皮肤切一个来回：MDIX 的 BaseTheme 要真的跟着变
+    try {
+        $keepName = $Script:ThemeName
+        Set-AppTheme -Name '深色' -NoSave
+        $bgDark = "$([System.Windows.Application]::Current.Resources['MaterialDesign.Brush.Background'])"
+        Set-AppTheme -Name '浅色' -NoSave
+        $bgLight = "$([System.Windows.Application]::Current.Resources['MaterialDesign.Brush.Background'])"
+        if ($bgDark -eq $bgLight) { $styleBad += "深浅切换没生效（两次底色都是 $bgLight）" }
+        Set-AppTheme -Name $keepName -NoSave
+    } catch { $styleBad += "深浅切换报错：$($_.Exception.Message)" }
+    # 点「说明文字」能不能切勾。老板点名的就是这个交互 —— 转发不生效等于根本没改。
     try {
         $blk = New-SettingCheck -Title '探针' -Note '点我' -Checked $false
         $pcb = $blk.Children[0]
@@ -6172,18 +5898,8 @@ if ($SelfTest) {
         $pnt.RaiseEvent($ev)
         if (-not $pcb.IsChecked) { $styleBad += '点设置项的说明文字切不动那个勾' }
     } catch { $styleBad += "说明文字点击转发报错：$($_.Exception.Message)" }
-    # 悬停光斑：Start-Spotlight 整个包在 try/catch 里，
-    # 里面出事它会静静地什么也不做 —— 这种形状必须有人盯。
-    try {
-        $probe = New-Object System.Windows.Controls.Border
-        Add-Interactive -Border $probe -BgNormal '#E4E3DE' -BgHover '#EDECE8' -NoLift -Spotlight
-        Start-Spotlight $probe
-        if ($probe.Background -isnot [System.Windows.Media.RadialGradientBrush]) {
-            $styleBad += '悬停光斑没生效（Start-Spotlight 里抛了异常并被吞掉）'
-        } elseif ($probe.Background.GradientStops.Count -lt 2) {
-            $styleBad += '悬停光斑的渐变停止点不对'
-        }
-    } catch { $styleBad += "悬停光斑自检报错：$($_.Exception.Message)" }
+    # 侧边栏：十个页面都得有入口
+    if ($Script:NavItems.Count -ne $Script:UI.Tabs.Items.Count) { $styleBad += "侧边栏只有 $($Script:NavItems.Count) 项，页面有 $($Script:UI.Tabs.Items.Count) 个" }
     if ($styleBad.Count -gt 0) {
         Write-Host ('自检失败：控件样式' + [Environment]::NewLine + '  ' + ($styleBad -join ([Environment]::NewLine + '  '))) -ForegroundColor Red
         exit 5
@@ -6204,12 +5920,15 @@ if ($SelfTest) {
     Build-VendorUI
     $vendorCards = $Script:UI.AdvicePanel.Children.Count
     Build-HealthUI
-    Write-Host ('自检通过：优化项 {0} / 预设 {1} / 清理项 {2} / 启动项 {3} / 维护项 {4} / 盘符 {5} / 排查结果 {6} / 运行记录 {7} / 体检卡片 {8} / 帧数诊断 {9} / 自带应用 {10} / 皮肤 {11} / 超频陪练 {12} / 厂商建议 {13}' -f `
+    Build-DashUI
+    Update-DashScore
+    Write-Host ('自检通过：优化项 {0} / 预设 {1} / 清理项 {2} / 启动项 {3} / 维护项 {4} / 盘符 {5} / 排查结果 {6} / 运行记录 {7} / 体检卡片 {8} / 帧数诊断 {9} / 自带应用 {10} / 皮肤 {11} / 超频陪练 {12} / 厂商建议 {13} / 导航 {14} / 读数卡 {15}' -f `
             $Script:UI.TweakPanel.Children.Count, $Script:Presets.Count,
         $Script:UI.CleanPanel.Children.Count, $Script:UI.StartupPanel.Children.Count,
         $Script:UI.MaintainPanel.Children.Count, $Script:UI.BigFileDrives.Children.Count,
         $Script:UI.InspectPanel.Children.Count, $Script:UI.RecentRunPanel.Children.Count,
-        $Script:UI.AdvicePanel.Children.Count, $fpsCards, $Script:UI.AppxPanel.Children.Count, $themeCards, $ocCards, $vendorCards)
+        $Script:UI.AdvicePanel.Children.Count, $fpsCards, $Script:UI.AppxPanel.Children.Count, $themeCards, $ocCards, $vendorCards,
+        $Script:NavItems.Count, $Script:DashGauges.Count)
     exit 0
 }
 
@@ -6226,7 +5945,6 @@ try {
 } catch { }
 
 # 窗口一拉伸，整排页签就挪位置了，指示条得跟着走（不动画，跟手才对）
-$Script:Window.Add_SizeChanged({ try { Update-TabInk $false } catch { } })
 $Script:Window.Add_Closed({ try { if ($Script:WatchTimer) { $Script:WatchTimer.Stop() }; Stop-ProcWatch } catch { } })
 $Script:Window.Add_Closed({ try { Stop-DashTimer; Close-Dash } catch { } })
 

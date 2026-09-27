@@ -1,47 +1,56 @@
 # -*- coding: utf-8 -*-
-"""找出代码里用了、但换肤映射表里没有的颜色色号。
+"""找出代码里漏网的色号字面量。
 
-   界面代码里写的都是「默认皮肤的色号」，Get-Brush 会按当前皮肤的映射表
-   把它换成对应的颜色。但只要有一个色号漏进映射表，它在深色皮肤下就会
-   **保持浅色皮肤的原值** —— 轻则「字发灰」，重则「浅字压浅底整行看不见」。
+   v6.0 起界面代码里一律写**色槽名**（'TextMain'、'Card'、'Stroke'……，见 design.md 1.1），
+   只有语义色（绿 / 卡其 / 玫瑰红 / 陶，见 design.md 1.3）允许以色号出现 ——
+   Get-Brush 认得它们，深色皮肤下自动换成提亮版。
 
-   这类 bug 眼睛很难发现：出问题的那一行往往在某个很少点开的页面里。
+   其余任何色号出现在代码里，都是漏网：它不跟皮肤走，
+   深色皮肤下保持浅色原值，轻则「字发灰」，重则「浅字压浅底整行看不见」。
 
    ★ 2026-09-27 这个脚本抓出过 6 个色号、10 处用法 ★
-     其中「⚡ 会弹黑框」那个徽章最典型：前景配了深色版、背景没配，
-     深色皮肤下变成「浅底 + 提亮过的前景」，整个徽章糊成一团。
+
+   例外：
+     · Modules\Theme.ps1 —— 色值本来就定义在那儿
+     · XAML 里 SolidColorBrush 和 CustomColorTheme 的默认值 —— 那是启动前的占位，Set-AppTheme 会整体覆盖
+     · 注释行
 
    跑法（在项目根目录）：
-       py dev\漏网色号自检.py
+       py dev\\漏网色号自检.py
 """
-import io, re, glob, os
+import io, re, glob, os, sys
 
-theme = io.open(r'D:\ClaudeWork\pctuner\Modules\Theme.ps1', encoding='utf-8-sig').read()
+root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+theme = io.open(os.path.join(root, 'Modules', 'Theme.ps1'), encoding='utf-8-sig').read()
 
-# 1) 可换肤的基准色号 = 默认皮肤「暖灰（默认）」那 20 支画笔 + ExtraColorSlots 的键
-m = re.search(r"'暖灰（默认）'\s*=\s*@\{(.*?)\n        \}\n", theme, re.S)
-base = set(h.upper() for h in re.findall(r"#[0-9A-Fa-f]{6}", m.group(1))) if m else set()
-extra = set(h.upper() for h in re.findall(r"'(#[0-9A-Fa-f]{6})'\s*=\s*'", theme[theme.index('$Script:ExtraColorSlots'):theme.index('$Script:HcBrushMap')]))
-# 2) 语义色（故意不换肤的）：SemanticDark 的键，和它们的深色对应值
-sem = set(h.upper() for h in re.findall(r"#[0-9A-Fa-f]{6}", theme[theme.index('$Script:SemanticDark'):theme.index('$Script:ExtraColorSlots')]))
+sem_block = theme[theme.index('$Script:SemanticColors'):theme.index('$Script:MdBrushMap')]
+semantic = set(h.upper() for h in re.findall(r"'(#[0-9A-Fa-f]{6})'\s*=", sem_block))
+# 纯白：危险按钮上的字、按钮水波纹 —— 两套皮肤都是白，不属于中性色
+allowed = semantic | {'#FFFFFF'}
+print('允许作为字面量的色号 %d 个（语义色 + 纯白）' % len(allowed))
 
-known = base | extra | sem
-print('可换肤色号 %d 个，语义色 %d 个' % (len(base | extra), len(sem)))
-
-used = {}
-for f in [r'D:\ClaudeWork\pctuner\PCTuner.ps1'] + glob.glob(r'D:\ClaudeWork\pctuner\Modules\*.ps1'):
+orphan = {}
+for f in [os.path.join(root, 'PCTuner.ps1')] + glob.glob(os.path.join(root, 'Modules', '*.ps1')):
     if f.endswith('Theme.ps1'):
         continue
+    in_xaml = False
     for i, line in enumerate(io.open(f, encoding='utf-8-sig').read().split('\n'), 1):
-        if line.lstrip().startswith('#'):
+        st = line.strip()
+        if st.startswith('#') or st.startswith('<!--'):
             continue
-        for h in re.findall(r"'(#[0-9A-Fa-f]{6})'", line):
-            used.setdefault(h.upper(), []).append('%s:%d' % (os.path.basename(f), i))
+        # XAML 块里 SolidColorBrush 的占位默认值不算
+        if re.search(r"<SolidColorBrush x:Key=|<md:CustomColorTheme ", line):
+            continue
+        for h in re.findall(r"['\"](#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?)['\"]", line):
+            H = h.upper()
+            if H in allowed:
+                continue
+            orphan.setdefault(H, []).append('%s:%d' % (os.path.basename(f), i))
 
-orphan = {h: v for h, v in used.items() if h not in known}
 if not orphan:
-    print('没有孤儿色号')
-else:
-    print('\n以下色号既不在换肤表里、也不是语义色 —— 深色皮肤下会保持浅色原值：')
-    for h in sorted(orphan, key=lambda x: -len(orphan[x])):
-        print('  %s  用了 %2d 处   %s' % (h, len(orphan[h]), ', '.join(orphan[h][:4])))
+    print('没有漏网色号')
+    sys.exit(0)
+print('\n以下色号既不是色槽名、也不是语义色 —— 不跟皮肤走：')
+for h in sorted(orphan, key=lambda x: -len(orphan[x])):
+    print('  %s  用了 %2d 处   %s' % (h, len(orphan[h]), ', '.join(orphan[h][:4])))
+sys.exit(1)

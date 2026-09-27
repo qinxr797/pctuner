@@ -37,7 +37,9 @@ Get-ChildItem -LiteralPath $root -Force | ForEach-Object {
 
 # 把关：字体在不在、exe 在不在。不在就别打这个包。
 $must = @('Fonts\MiSans-Regular.ttf', 'Fonts\MiSans-Light.ttf', 'Fonts\MiSans-Semibold.ttf',
-    '电脑调优助手.exe', 'PCTuner.ps1', 'Lib\HandyControl.dll')
+    '电脑调优助手.exe', 'PCTuner.ps1',
+    'Lib\MaterialDesignThemes.Wpf.dll', 'Lib\MaterialDesignColors.dll', 'Lib\Microsoft.Xaml.Behaviors.dll',
+    'Lib\LibreHardwareMonitorLib.dll', 'Lib\HidSharp.dll')
 $missing = @($must | Where-Object { -not (Test-Path -LiteralPath (Join-Path $dest $_)) })
 if ($missing.Count -gt 0) {
     Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
