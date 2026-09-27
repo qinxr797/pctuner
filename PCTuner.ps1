@@ -772,14 +772,40 @@ function Show-Msg {
 
 function Show-Toast {
     <#
-      底部飘一条提示，3 秒后自己消失（MDIX Snackbar）。
+      右下角弹一条提示（D6），Hold（2800ms）后自己淡出。
       用在「做完了」这种不需要点确定的场合 —— 每做完一件事都弹个模态框逼人点一下，很烦。
+
+        进场  从下方 24px 弹到位（弹簧）+ 淡入（Base）
+        停留  底部 2px 强调色细线匀速走完 —— 告诉人它还会待多久
+        退场  淡出（Quick）+ 下沉 8px，和进场同一个方向（从哪来回哪去）
+      ★ 新提示来了从当前位置接着弹 ★ 不排队、不叠罗汉：换字、重置倒计时，就地再弹一下。
+      Kind 决定小圆点的语义色：Success 绿 / Warning 卡其 / Error 红 / Info 灰。
     #>
     param([string]$Text, [string]$Kind = 'Success')
+    $hostB = $Script:UI.ToastHost
+    if ($null -eq $hostB) { try { Set-Status $Text } catch { }; return }
     try {
-        if ($Script:ToastQueue) { $Script:ToastQueue.Enqueue($Text); return }
-    } catch { }
-    try { Set-Status $Text } catch { }   # 兜底：至少写到状态栏
+        $Script:UI.ToastText.Text = $Text
+        $Script:UI.ToastDot.Fill = Get-Brush $(switch ($Kind) { 'Warning' { '#7A6B45' } 'Error' { '#8A5750' } 'Info' { 'TextDim' } default { '#556B54' } })
+        $yP = [System.Windows.Media.TranslateTransform]::YProperty
+        $wasHidden = ($hostB.Visibility -ne 'Visible' -or $hostB.Opacity -lt 0.05)
+        $hostB.Visibility = 'Visible'
+        if ($wasHidden) { $Script:UI.ToastY.BeginAnimation($yP, $null); $Script:UI.ToastY.Y = 24 }
+        Start-Fade $hostB 1 $Script:Dur.Base
+        Start-Spring $Script:UI.ToastY $yP 0
+        # 倒计时细线：每条新提示从满格重新走
+        Start-Prop $Script:UI.ToastTimerScale ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 1 0 $Script:Dur.Hold @(0, 0, 1, 1)
+        if ($Script:ToastTimer) { $Script:ToastTimer.Stop() }
+        $t = New-Object System.Windows.Threading.DispatcherTimer
+        $t.Interval = [TimeSpan]::FromMilliseconds($Script:Dur.Hold)
+        $t.Add_Tick({
+                $this.Stop()
+                Start-Fade $Script:UI.ToastHost 0 $Script:Dur.Quick
+                Start-Prop $Script:UI.ToastY ([System.Windows.Media.TranslateTransform]::YProperty) $null 8 $Script:Dur.Quick $Script:Ease.Out
+            })
+        $Script:ToastTimer = $t
+        $t.Start()
+    } catch { try { Set-Status $Text } catch { } }
 }
 
 # =====================================================================
@@ -2337,9 +2363,31 @@ $xamlText = @'
       </Border>
     </Grid>
 
-    <!-- 做完了的提示：底部居中飘一条，3 秒自己消失 -->
-    <md:Snackbar x:Name="Toast" Grid.ColumnSpan="2" HorizontalAlignment="Center" VerticalAlignment="Bottom"
-                 Margin="232,0,0,48" MaxWidth="560"/>
+    <!-- ================================================================
+         做完了的提示（D6）：右下角白卡，从下方弹入，底部一条强调色细线倒计时，走完自己淡出。
+         动画在 Show-Toast。平时 Collapsed，不占位、不吃点击。
+         ================================================================ -->
+    <Border x:Name="ToastHost" Grid.ColumnSpan="2" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+            Margin="0,0,24,48" Width="320" Visibility="Collapsed" Opacity="0" IsHitTestVisible="False"
+            Background="{DynamicResource Card}" BorderBrush="{DynamicResource StrokeStrong}" BorderThickness="1" CornerRadius="12">
+      <Border.RenderTransform>
+        <TranslateTransform x:Name="ToastY" Y="24"/>
+      </Border.RenderTransform>
+      <Grid>
+        <StackPanel Orientation="Horizontal" Margin="16,12,16,16">
+          <Ellipse x:Name="ToastDot" Width="8" Height="8" Fill="{DynamicResource SemOk}" VerticalAlignment="Top" Margin="0,6,12,0"/>
+          <TextBlock x:Name="ToastText" Text="" FontSize="13" TextWrapping="Wrap" MaxWidth="260" LineHeight="20"
+                     Foreground="{DynamicResource TextMain}"/>
+        </StackPanel>
+        <Border ClipToBounds="True" VerticalAlignment="Bottom" CornerRadius="0,0,12,12" Height="2" Margin="1,0,1,0">
+          <Rectangle x:Name="ToastTimer" Height="2" Fill="{DynamicResource Accent}" RenderTransformOrigin="0,0.5">
+            <Rectangle.RenderTransform>
+              <ScaleTransform x:Name="ToastTimerScale" ScaleX="1"/>
+            </Rectangle.RenderTransform>
+          </Rectangle>
+        </Border>
+      </Grid>
+    </Border>
   </Grid>
 </Window>
 '@
@@ -2357,7 +2405,7 @@ try {
 $Script:UI = @{}
 foreach ($n in @(
         'SubTitle', 'PageTitle', 'AppVerText', 'RptNo', 'RptDate', 'ChkRestorePoint', 'BtnRestorePoint', 'BtnThemeToggle', 'ThemeIcon',
-        'Tabs', 'NavPanel', 'Toast',
+        'Tabs', 'NavPanel',
         'DashSummary', 'DashHero', 'DashCell1', 'DashCell2', 'DashCell3', 'DashCell4', 'DashCell5',
         'DashVerdict', 'DashPickHead', 'DashQuickPick', 'DashSignOff',
         'TweakPanel', 'TweakDetail', 'BtnPickRecommended', 'BtnPickNone', 'BtnRescan', 'PresetBar',
@@ -2377,11 +2425,7 @@ foreach ($n in @(
     $Script:UI[$n] = $Script:Window.FindName($n)
 }
 
-# 底部提示的消息队列。3 秒自己消失。
-try {
-    $Script:ToastQueue = New-Object MaterialDesignThemes.Wpf.SnackbarMessageQueue ([TimeSpan]::FromSeconds(3))
-    $Script:UI.Toast.MessageQueue = $Script:ToastQueue
-} catch { $Script:ToastQueue = $null }
+foreach ($n in 'ToastHost', 'ToastY', 'ToastDot', 'ToastText', 'ToastTimerScale') { $Script:UI[$n] = $Script:Window.FindName($n) }
 
 # =====================================================================
 #  侧边栏导航（design.md 4.5）
