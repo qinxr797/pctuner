@@ -3997,7 +3997,7 @@ function Build-ThemeUI {
         $cell.Cursor = 'Hand'
         $cell.Tag = $name
         $cell.Add_MouseLeftButtonUp({
-                Set-AppTheme -Name $this.Tag -Image $Script:ThemeImage -Opacity $Script:ThemeOpacity
+                Set-AppTheme -Name $this.Tag -Image $Script:ThemeImage -Opacity $Script:ThemeOpacity -Frost $Script:ThemeFrost
                 Redraw-AllPages
                 Set-Status "皮肤已换成「$($this.Tag)」"
             })
@@ -4069,7 +4069,7 @@ function Build-ThemeUI {
             if ($dlg.ShowDialog() -ne $true) { return }
             $saved = Copy-ThemeImage -SourcePath $dlg.FileName
             $st = Get-ThemeSetting
-            Set-AppTheme -Name $st.Name -Image $saved -Opacity $st.Opacity
+            Set-AppTheme -Name $st.Name -Image $saved -Opacity $st.Opacity -Frost $st.Frost
             Redraw-AllPages
             Set-Status '背景图已设置'
         })
@@ -4080,7 +4080,7 @@ function Build-ThemeUI {
     $btnClear.Margin = New-Thick 0
     $btnClear.Add_Click({
             $st = Get-ThemeSetting
-            Set-AppTheme -Name $st.Name -Image '' -Opacity $st.Opacity
+            Set-AppTheme -Name $st.Name -Image '' -Opacity $st.Opacity -Frost $st.Frost
             Redraw-AllPages
             Set-Status '已恢复纯色背景'
         })
@@ -4114,7 +4114,7 @@ function Build-ThemeUI {
     # 拖完再套用 —— 拖动过程中每动一下就重绘全部页面会非常卡
     $sld.Add_PreviewMouseUp({
             $st = Get-ThemeSetting
-            Set-AppTheme -Name $st.Name -Image $st.Image -Opacity ([double]$this.Value)
+            Set-AppTheme -Name $st.Name -Image $st.Image -Opacity ([double]$this.Value) -Frost $st.Frost
             Apply-PanelOpacity
             Set-Status ('面板不透明度已设为 {0}%' -f [int]($this.Value * 100))
         })
@@ -4124,6 +4124,27 @@ function Build-ThemeUI {
         '只在使用背景图时有效。100% = 完全挡住背景图（和纯色一样），拉低才能看见图。')
     $on2.Margin = New-Thick 0 8 0 0
     $panel.Children.Add($on2) | Out-Null
+
+    # 磨砂开关
+    $fcb = New-Object System.Windows.Controls.CheckBox
+    $fcb.Content = '磨砂（把背景图模糊，字更清楚）'
+    $fcb.FontSize = 13.5
+    $fcb.Margin = New-Thick 0 16 0 0
+    $fcb.IsChecked = [bool]$cur.Frost
+    $fcb.Add_Click({
+            $st = Get-ThemeSetting
+            Set-AppTheme -Name $st.Name -Image $st.Image -Opacity $st.Opacity -Frost ([bool]$this.IsChecked)
+            Redraw-AllPages
+            Set-Status $(if ($this.IsChecked) { '已开磨砂' } else { '已关磨砂，背景图恢复原清晰度' })
+        })
+    $panel.Children.Add($fcb) | Out-Null
+
+    $ftip = New-TextBlock -Size 13 -Color '#66635B' -Wrap $true -Text (
+        '模糊是导入图片时算好存成文件的，不是每次重绘都算 —— ' +
+        '开着不吃任何额外性能。工具本来就是给配置吃紧的机器用的，' +
+        '不会为了好看去吃你的帧。')
+    $ftip.Margin = New-Thick 0 8 0 0
+    $panel.Children.Add($ftip) | Out-Null
 
     # ==================== 界面动画 ====================
     $sec3 = New-RptSection -Title '界面动画'
@@ -5797,7 +5818,7 @@ try {
     # 系统级「减弱动效」优先于用户开关 —— 会关这个的人多半有晕动症或机器太慢
     $Script:SystemAnimOff = Test-SystemReducedMotion
     if ($Script:SystemAnimOff) { Write-Log '检测到系统已关闭「显示动画」，界面动效自动减弱（保留淡入，去掉位移）' '信息' }
-    Set-AppTheme -Name $savedTheme.Name -Image $savedTheme.Image -Opacity $savedTheme.Opacity
+    Set-AppTheme -Name $savedTheme.Name -Image $savedTheme.Image -Opacity $savedTheme.Opacity -Frost $savedTheme.Frost
     Apply-PanelOpacity
 } catch { Write-Log "套用皮肤失败，用默认配色：$($_.Exception.Message)" '警告' }
 

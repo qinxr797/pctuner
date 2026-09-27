@@ -286,10 +286,10 @@ function Get-BuiltinThemes {
 function Get-ThemeFile { Join-Path $Script:BackupDir 'theme.json' }
 
 function Get-ThemeSetting {
-    <# 返回 @{ Name; Image; Opacity; Anim } —— 读不到就给默认值 #>
+    <# 返回 @{ Name; Image; Opacity; Anim; Frost } —— 读不到就给默认值 #>
     # 默认皮肤是「检验单」—— 这个工具从头到尾在做的事就是如实报告你机器的状态，
     # 所以界面的母题是检验报告单，不是仪表盘。见 .impeccable\surfaces\pctuner-ps1.md。
-    $def = @{ Name = '检验单'; Image = ''; Opacity = 0.88; Anim = $true }
+    $def = @{ Name = '检验单'; Image = ''; Opacity = 0.88; Anim = $true; Frost = $true }
     try {
         $f = Get-ThemeFile
         if (-not (Test-Path -LiteralPath $f)) { return $def }
@@ -303,14 +303,16 @@ function Get-ThemeSetting {
             #   用 if ($j.Anim) 判断的话 false 会被当成「没设置过」，
             #   下次启动又自动变回开着 —— 用户会以为开关坏了。
             Anim    = if ($null -ne $j.Anim) { [bool]$j.Anim } else { $true }
+            # 同理，用户关掉磨砂存的是 false，必须用 $null -eq 判断
+            Frost   = if ($null -ne $j.Frost) { [bool]$j.Frost } else { $true }
         }
     } catch { return $def }
 }
 
 function Save-ThemeSetting {
-    param([string]$Name, [string]$Image = '', [double]$Opacity = 0.88, [bool]$Anim = $true)
+    param([string]$Name, [string]$Image = '', [double]$Opacity = 0.88, [bool]$Anim = $true, [bool]$Frost = $true)
     try {
-        $o = [PSCustomObject]@{ Name = $Name; Image = $Image; Opacity = $Opacity; Anim = $Anim }
+        $o = [PSCustomObject]@{ Name = $Name; Image = $Image; Opacity = $Opacity; Anim = $Anim; Frost = $Frost }
         $o | ConvertTo-Json | Set-Content -LiteralPath (Get-ThemeFile) -Encoding UTF8
     } catch { Write-Log "保存皮肤设置失败：$($_.Exception.Message)" '警告' }
 }
@@ -328,6 +330,10 @@ function Set-AppTheme {
     param(
         [string]$Name = '暖灰（默认）',
         [string]$Image = '',
+        # 磨砂：铺背景图时铺那张模糊副本。默认开 ——
+        # 工具自己的说明里就写着「太花的图会让上面的字看不清」，
+        # 模糊正好在修这个已知问题，不是加装饰。
+        [bool]$Frost = $true,
         [double]$Opacity = 0.88
     )
 
@@ -438,11 +444,19 @@ function Set-AppTheme {
     # ---- 3. 背景图 ----
     $Script:ThemeImage = $Image
     $Script:ThemeOpacity = $Opacity
+    $Script:ThemeFrost = $Frost
     try {
         if ($Image -and (Test-Path -LiteralPath $Image)) {
+            # 开了磨砂就铺模糊副本。没算过就现算一张，
+            # 算不出来（图坏了、没权限）就退回原图 —— 不能因为没磨成就白屏。
+            $src = $Image
+            if ($Frost) {
+                $fp = Get-FrostedPath $Image
+                if ($fp) { $src = $fp }
+            }
             $bmp = New-Object System.Windows.Media.Imaging.BitmapImage
             $bmp.BeginInit()
-            $bmp.UriSource = New-Object System.Uri $Image
+            $bmp.UriSource = New-Object System.Uri $src
             # CacheOption=OnLoad：一次性读进内存再放手，
             # 否则文件会被一直占着，用户想删想换那张图都删不掉
             $bmp.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
@@ -461,7 +475,7 @@ function Set-AppTheme {
         $Script:Window.Background = [System.Windows.Media.Brush]$Script:Window.Resources['WindowBg']
     }
 
-    Save-ThemeSetting -Name $Name -Image $Image -Opacity $Opacity -Anim ([bool]$Script:AnimEnabled)
+    Save-ThemeSetting -Name $Name -Image $Image -Opacity $Opacity -Anim ([bool]$Script:AnimEnabled) -Frost $Frost
 }
 
 function Test-ThemeIsDark {
@@ -491,6 +505,83 @@ function Test-ThemeIsDark {
     return ((0.2126 * $r + 0.7152 * $g + 0.0722 * $b) -lt 128)
 }
 
+function New-FrostedImage {
+    <#
+      把一张图模糊一份存到 DestPath。导入背景图时算一次，之后一直用这张。
+
+      ★ 先缩到最长边 1600 再模糊 ★
+        4K 原图卷一遍要好几秒，而它最终只是铺在一个 1240 宽的窗口上，
+        模糊之后细节本来就没了 —— 大图纯属白烧 CPU。
+
+      ★ 画的时候往外扩一圈再裁回来 ★
+        直接按原尺寸模糊，四边外面是透明的，卷积会把透明吸进来，
+        结果是一圈发白发虚的边。往外扩一个模糊半径再取中间那块就没有了。
+    #>
+    # 半径 56 是试出来的：26 只能把边缘磨柔，细条纹还在，
+    # 字压上去照样乱；56 以上细节干净消失、大块颜色还在，
+    # 图还认得出是哪张，字也看得清。
+    param([string]$SourcePath, [string]$DestPath, [double]$Radius = 56)
+    try {
+        $bmp = New-Object System.Windows.Media.Imaging.BitmapImage
+        $bmp.BeginInit()
+        $bmp.CacheOption = 'OnLoad'
+        $bmp.UriSource = New-Object System.Uri $SourcePath
+        $bmp.EndInit()
+        $bmp.Freeze()
+
+        $w = [double]$bmp.PixelWidth
+        $h = [double]$bmp.PixelHeight
+        if ($w -le 0 -or $h -le 0) { return $null }
+        $maxSide = 1600.0
+        $scale = [math]::Min(1.0, $maxSide / [math]::Max($w, $h))
+        $ow = [int][math]::Max(1, [math]::Round($w * $scale))
+        $oh = [int][math]::Max(1, [math]::Round($h * $scale))
+
+        $vis = New-Object System.Windows.Media.DrawingVisual
+        $dc = $vis.RenderOpen()
+        $pad = $Radius * 1.6
+        $rect = New-Object System.Windows.Rect (-$pad), (-$pad), ($ow + 2 * $pad), ($oh + 2 * $pad)
+        $dc.DrawImage($bmp, $rect)
+        $dc.Close()
+
+        $fx = New-Object System.Windows.Media.Effects.BlurEffect
+        $fx.Radius = $Radius
+        $fx.KernelType = 'Gaussian'
+        $fx.RenderingBias = 'Quality'
+        $vis.Effect = $fx
+
+        $rtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap $ow, $oh, 96, 96, ([System.Windows.Media.PixelFormats]::Pbgra32)
+        $rtb.Render($vis)
+
+        $enc = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+        $enc.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($rtb)) | Out-Null
+        $fs = [System.IO.File]::Create($DestPath)
+        $enc.Save($fs)
+        $fs.Close()
+        return $DestPath
+    } catch {
+        Write-Log "生成磨砂背景失败：$($_.Exception.Message)" '警告'
+        return $null
+    }
+}
+
+function Get-FrostedPath {
+    <# 某张背景图对应的磨砂副本该放哪儿。没有就现生成一张。 #>
+    param([string]$ImagePath)
+    if (-not $ImagePath -or -not (Test-Path -LiteralPath $ImagePath)) { return $null }
+    try {
+        $dir = Split-Path -Parent $ImagePath
+        $dest = Join-Path $dir 'background-frost.png'
+        if (Test-Path -LiteralPath $dest) {
+            # 原图比磨砂副本新 = 换过图了，重算
+            $a = (Get-Item -LiteralPath $ImagePath).LastWriteTimeUtc
+            $b = (Get-Item -LiteralPath $dest).LastWriteTimeUtc
+            if ($b -ge $a) { return $dest }
+        }
+        return (New-FrostedImage -SourcePath $ImagePath -DestPath $dest)
+    } catch { return $null }
+}
+
 function Copy-ThemeImage {
     <#
       把用户选的图片**复制**到 Backup\skin\ 下面再用。
@@ -510,7 +601,12 @@ function Copy-ThemeImage {
         # 先把旧的皮肤图清掉，免得攒一堆
         Get-ChildItem -LiteralPath $dir -Filter 'background.*' -ErrorAction SilentlyContinue |
             ForEach-Object { try { [System.IO.File]::Delete($_.FullName) } catch { } }
+        # 旧的磨砂副本也一起清掉，免得换了图还用着上一张的模糊版
+        $oldFrost = Join-Path $dir 'background-frost.png'
+        if (Test-Path -LiteralPath $oldFrost) { try { [System.IO.File]::Delete($oldFrost) } catch { } }
         Copy-Item -LiteralPath $SourcePath -Destination $dest -Force
+        # 现在就把磨砂副本算好（一两秒），别等用户勾选时再卡一下
+        try { New-FrostedImage -SourcePath $dest -DestPath (Join-Path $dir 'background-frost.png') | Out-Null } catch { }
         return $dest
     } catch {
         Write-Log "复制背景图失败：$($_.Exception.Message)" '警告'
