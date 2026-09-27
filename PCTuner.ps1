@@ -817,7 +817,7 @@ function New-ListCard {
     $c.Background = [System.Windows.Media.Brushes]::Transparent
     $c.BorderBrush = Get-Brush $Script:CARD_BORDER
     $c.BorderThickness = New-Thick 0 0 0 1     # 只有行间线
-    $c.Padding = New-Thick 4 10 4 10
+    $c.Padding = New-Thick 4 12 4 12
     $c.Margin = New-Thick 0 0 0 0
     $c.Cursor = 'Hand'
     # 行不做上移（上移是卡片的语汇，表格行上移会让整列看起来在抖）
@@ -955,12 +955,375 @@ function Get-TintBg {
 # 报告表的列轨。★ 这是模数，别在调用处手填宽度 ★
 #   窄了缩列，不重排 —— 四栏的相对位置在任何宽度下都不变，
 #   这样用户扫第二行时不用重新找「结果」在哪。
-$Script:RptCol = @{ Result = 92; Mark = 30; Ref = 132; Unit = 52 }
+$Script:RptCol = @{ Result = 86; Mark = 30; Bar = 184; Ref = 104; Unit = 46 }
+
+$Script:BarW = 168      # 区间条内宽。★ 模数，别在调用处手填 ★
+
+function New-RangeBar {
+    <#
+      参考区间条。返回 @{ Host; Track; Band; Tick; Lo; Hi }
+
+      画法（照着化验单上的参考区间图）：
+          ├──────▓▓▓▓▓▓▓▓▓▓──────┤
+                      │
+                    你的值
+
+        Track  整条量程（0 ~ 满量程）
+        Band   合格区间，填一层很淡的同色块
+        Tick   你的值所在位置的刻记
+
+      ★ 刻记落在 Band 外面时上法定墨 ★
+        这样「超了」这件事同时被三处表达：数字加粗上墨、↑ 标记、刻记跑出区间。
+        同一件事说三遍不是啰嗦 —— 用户扫表时可能只看见其中任何一处。
+    #>
+    $g = New-Object System.Windows.Controls.Grid
+    $g.Width = $Script:BarW
+    $g.Height = 18
+    $g.HorizontalAlignment = 'Left'
+    $g.VerticalAlignment = 'Center'
+
+    # 量程底槽
+    $track = New-Object System.Windows.Shapes.Rectangle
+    $track.Height = 5
+    $track.RadiusX = 0; $track.RadiusY = 0
+    $track.Fill = Get-Brush '#E5E3DC'          # SurfaceSunken
+    $track.VerticalAlignment = 'Center'
+    $g.Children.Add($track) | Out-Null
+
+    # 合格区间。★ 必须明显亮于底槽 ★
+    #   上一版 band 用 BorderMed，和底槽只差一两个灰阶，
+    #   整条看下来根本分不出哪一段是合格的 —— 那这张图就白画了。
+    $band = New-Object System.Windows.Shapes.Rectangle
+    $band.Height = 5
+    $band.HorizontalAlignment = 'Left'
+    $band.VerticalAlignment = 'Center'
+    $band.Fill = Get-Brush '#C6C4BC'           # BorderStrong
+    $band.Width = 0
+    $g.Children.Add($band) | Out-Null
+
+    # 区间两端的端点线，化验单上那个 ├ ┤
+    $capL = New-Object System.Windows.Shapes.Rectangle
+    $capL.Width = 1.5; $capL.Height = 11
+    $capL.HorizontalAlignment = 'Left'; $capL.VerticalAlignment = 'Center'
+    $capL.Fill = Get-Brush '#C6C4BC'
+    $capL.Visibility = 'Collapsed'
+    $g.Children.Add($capL) | Out-Null
+
+    $capR = New-Object System.Windows.Shapes.Rectangle
+    $capR.Width = 1.5; $capR.Height = 11
+    $capR.HorizontalAlignment = 'Left'; $capR.VerticalAlignment = 'Center'
+    $capR.Fill = Get-Brush '#C6C4BC'
+    $capR.Visibility = 'Collapsed'
+    $g.Children.Add($capR) | Out-Null
+
+    # 你的值
+    $tick = New-Object System.Windows.Shapes.Rectangle
+    $tick.Width = 3
+    $tick.Height = 17
+    $tick.HorizontalAlignment = 'Left'
+    $tick.VerticalAlignment = 'Center'
+    $tick.Fill = Get-Brush '#2B2A26'           # TextMain
+    $tick.Visibility = 'Collapsed'
+    $g.Children.Add($tick) | Out-Null
+
+    return @{ Host = $g; Track = $track; Band = $band; CapL = $capL; CapR = $capR; Tick = $tick }
+}
+
+function Set-RangeBar {
+    <#
+      刷一条区间条。
+        Value  当前值（$null = 读不到，整条隐掉刻记）
+        Max    满量程
+        Lo/Hi  合格区间的下/上限（$null 表示那一侧不限）
+      读不到就不画刻记 —— 和「绝不编数字」一个道理，不画假位置。
+    #>
+    param($Bar, $Value, [double]$Max = 100, $Lo = $null, $Hi = $null, [bool]$Abnormal = $false)
+    if ($null -eq $Bar) { return }
+    if ($Max -le 0) { $Max = 100 }
+    $w = $Script:BarW
+
+    # 合格区间
+    $lo = if ($null -ne $Lo) { [double]$Lo } else { 0 }
+    $hi = if ($null -ne $Hi) { [double]$Hi } else { $Max }
+    $lo = [math]::Max(0, [math]::Min($lo, $Max))
+    $hi = [math]::Max(0, [math]::Min($hi, $Max))
+    if ($null -eq $Lo -and $null -eq $Hi) {
+        # 没有参考范围的项（瞬时占用率）：只画量程和刻记，不画合格区间 ——
+        # 画了就等于编了一个并不存在的阈值
+        $Bar.Band.Width = 0
+        $Bar.CapL.Visibility = 'Collapsed'
+        $Bar.CapR.Visibility = 'Collapsed'
+    } else {
+        $x1 = $w * $lo / $Max
+        $x2 = $w * $hi / $Max
+        $Bar.Band.Margin = New-Thick $x1 0 0 0
+        $Bar.Band.Width = [math]::Max(0, $x2 - $x1)
+        # 端点线只在那一侧真的有限值时才画 —— 「< 95」没有下限，就不画左端点
+        $Bar.CapL.Visibility = $(if ($null -ne $Lo) { 'Visible' } else { 'Collapsed' })
+        $Bar.CapL.Margin = New-Thick ([math]::Max(0, $x1 - 0.75)) 0 0 0
+        $Bar.CapR.Visibility = $(if ($null -ne $Hi) { 'Visible' } else { 'Collapsed' })
+        $Bar.CapR.Margin = New-Thick ([math]::Max(0, $x2 - 0.75)) 0 0 0
+    }
+
+    if ($null -eq $Value) { $Bar.Tick.Visibility = 'Collapsed'; return }
+    $v = [math]::Max(0, [math]::Min([double]$Value, $Max))
+    $Bar.Tick.Visibility = 'Visible'
+    $Bar.Tick.Margin = New-Thick ([math]::Max(0, $w * $v / $Max - 1.5)) 0 0 0
+    $Bar.Tick.Fill = Get-Brush $(if ($Abnormal) { '#8A5750' } else { '#2B2A26' })
+    $Bar.Tick.Height = $(if ($Abnormal) { 19 } else { 17 })
+}
+
+# =====================================================================
+#  指针仪表
+# ---------------------------------------------------------------------
+#  半圆弧 + 合格段 + 指针 + 大读数。照着万用表/压力表的面孔做的。
+#
+#  ★ 不做完整圆环 ★
+#    整圆 + 亮色渐变 + 中间一个数字，是「性能工具」这个品类的默认长相，
+#    套哪个产品上都一样。真实的量测仪器是半圆刻度盘配一根指针。
+#
+#  ★ 弧上必须分段 ★
+#    一条单色弧只能表达「多少」，分了段才能表达「在不在合格范围」——
+#    后者才是这个产品真正要说的事。
+# =====================================================================
+
+function New-ArcPath {
+    <#
+      画一段圆弧。角度用「仪表角」：180 = 最左，0 = 最右，顺时针。
+      返回 Path。
+    #>
+    param(
+        [double]$Cx, [double]$Cy, [double]$R,
+        [double]$FromDeg, [double]$ToDeg,
+        [string]$Color, [double]$Thickness = 9
+    )
+    $rad = [math]::PI / 180
+    $p1 = New-Object System.Windows.Point (
+        ($Cx + $R * [math]::Cos($FromDeg * $rad)),
+        ($Cy - $R * [math]::Sin($FromDeg * $rad)))
+    $p2 = New-Object System.Windows.Point (
+        ($Cx + $R * [math]::Cos($ToDeg * $rad)),
+        ($Cy - $R * [math]::Sin($ToDeg * $rad)))
+
+    $fig = New-Object System.Windows.Media.PathFigure
+    $fig.StartPoint = $p1
+    $arc = New-Object System.Windows.Media.ArcSegment
+    $arc.Point = $p2
+    $arc.Size = New-Object System.Windows.Size $R, $R
+    $arc.SweepDirection = 'Clockwise'
+    $arc.IsLargeArc = ([math]::Abs($FromDeg - $ToDeg) -gt 180)
+    $fig.Segments.Add($arc)
+
+    $geo = New-Object System.Windows.Media.PathGeometry
+    $geo.Figures.Add($fig)
+
+    $path = New-Object System.Windows.Shapes.Path
+    $path.Data = $geo
+    $path.Stroke = Get-Brush $Color
+    $path.StrokeThickness = $Thickness
+    $path.StrokeStartLineCap = 'Round'
+    $path.StrokeEndLineCap = 'Round'
+    return $path
+}
+
+function New-Gauge {
+    <#
+      一个指针仪表。返回 @{ Host; Value; Unit; Label; Sub; Needle; OkArc; Canvas; Cfg }
+
+      结构（从下往上画）：
+          底弧      整个量程，暗
+          合格弧    参考范围那一段，亮
+          刻度      每 1/5 一根短线
+          指针      从圆心指向当前值
+          读数      弧中间的大数字 + 小单位
+          标签      仪表下方的名字
+    #>
+    param([string]$Label, [double]$W = 200, [double]$H = 150)
+
+    $host_ = New-Object System.Windows.Controls.StackPanel
+    $host_.Width = $W
+    $host_.HorizontalAlignment = 'Center'
+
+    $cv = New-Object System.Windows.Controls.Canvas
+    $cv.Width = $W
+    $cv.Height = 104
+
+    $cx = $W / 2
+    $cy = 92
+    $r = 66
+
+    # 底弧（整个量程）
+    # 底弧压暗、合格弧提亮 —— 两者必须一眼分得出来，
+    # 否则「在不在合格区间」这件事就没被表达出来，仪表也就白画了。
+    $base = New-ArcPath -Cx $cx -Cy $cy -R $r -FromDeg 180 -ToDeg 0 -Color '#E5E3DC' -Thickness 7
+    $cv.Children.Add($base) | Out-Null
+
+    # 合格弧，运行时替换
+    $okHolder = New-Object System.Windows.Controls.Canvas
+    $cv.Children.Add($okHolder) | Out-Null
+
+    # 刻度：每 1/5 一根
+    for ($i = 0; $i -le 5; $i++) {
+        $deg = 180 - 36 * $i
+        $rad = [math]::PI / 180
+        $r1 = $r + 11; $r2 = $r + 16
+        $ln = New-Object System.Windows.Shapes.Line
+        $ln.X1 = $cx + $r1 * [math]::Cos($deg * $rad)
+        $ln.Y1 = $cy - $r1 * [math]::Sin($deg * $rad)
+        $ln.X2 = $cx + $r2 * [math]::Cos($deg * $rad)
+        $ln.Y2 = $cy - $r2 * [math]::Sin($deg * $rad)
+        $ln.Stroke = Get-Brush '#C6C4BC'
+        $ln.StrokeThickness = 2
+        $cv.Children.Add($ln) | Out-Null
+    }
+
+    # 游标：弧上一小段垂直于弧的粗线，标出当前值的位置。
+    # 不从圆心出发 —— 长指针会横穿弧中央的读数。
+    $needle = New-Object System.Windows.Shapes.Line
+    $needle.X1 = $cx - $r - 9; $needle.Y1 = $cy
+    $needle.X2 = $cx - $r + 9; $needle.Y2 = $cy
+    $needle.Stroke = Get-Brush '#2B2A26'
+    $needle.StrokeThickness = 4
+    $needle.StrokeStartLineCap = 'Round'
+    $needle.StrokeEndLineCap = 'Round'
+    $cv.Children.Add($needle) | Out-Null
+
+    # 读数（弧里面）
+    #
+    # ★ Canvas 里子元素的 HorizontalAlignment 不生效 ★
+    #   Canvas 只认 Left/Top，对齐属性直接被忽略 ——
+    #   上一版数字因此全跑到弧的最左边去了。
+    #   解法是套一层定宽的 Grid：Grid 内部的对齐是生效的。
+    $vhost = New-Object System.Windows.Controls.Grid
+    $vhost.Width = $W
+    $vrow = New-Object System.Windows.Controls.StackPanel
+    $vrow.Orientation = 'Horizontal'
+    $vrow.HorizontalAlignment = 'Center'
+    $vrow.VerticalAlignment = 'Center'
+    $val = New-TextBlock -Text ([string][char]0x2014) -Size 30 -Color '#2B2A26'
+    $val.FontWeight = 'Normal'
+    [System.Windows.Documents.Typography]::SetNumeralAlignment($val, 'Tabular')
+    $vrow.Children.Add($val) | Out-Null
+    $unit = New-TextBlock -Text '' -Size 13 -Color '#66635B'
+    $unit.VerticalAlignment = 'Bottom'
+    $unit.Margin = New-Thick 3 0 0 5
+    $vrow.Children.Add($unit) | Out-Null
+    $vhost.Children.Add($vrow) | Out-Null
+    [System.Windows.Controls.Canvas]::SetLeft($vhost, 0)
+    [System.Windows.Controls.Canvas]::SetTop($vhost, 50)
+    $cv.Children.Add($vhost) | Out-Null
+
+    $host_.Children.Add($cv) | Out-Null
+
+    # 名字
+    $lb = New-TextBlock -Text $Label -Size 14.5 -Color '#2B2A26'
+    $lb.HorizontalAlignment = 'Center'
+    $lb.Margin = New-Thick 0 2 0 0
+    $host_.Children.Add($lb) | Out-Null
+
+    # 副注（参考范围 / 型号 / 容量）
+    $sub = New-TextBlock -Text '' -Size 12.5 -Color '#66635B' -Wrap $true
+    $sub.HorizontalAlignment = 'Center'
+    $sub.TextAlignment = 'Center'
+    $sub.Margin = New-Thick 0 3 0 0
+    $sub.MaxHeight = 40
+    $sub.LineHeight = 18
+    $host_.Children.Add($sub) | Out-Null
+
+    return @{
+        Host = $host_; Value = $val; Unit = $unit; Label = $lb; Sub = $sub
+        Needle = $needle; OkHolder = $okHolder; Canvas = $cv
+        Cx = $cx; Cy = $cy; R = $r
+    }
+}
+
+function Set-Gauge {
+    <#
+      刷一个仪表。
+        Value  当前值（$null = 读不到，指针归零位并变虚）
+        Max    满量程
+        Lo/Hi  合格区间
+      读不到就不指 —— 和「绝不编数字」一个道理，不指一个假位置。
+    #>
+    param($G, $Value, [double]$Max = 100, $Lo = $null, $Hi = $null,
+        [int]$Decimals = 0, [string]$Unit = '', [string]$Sub = '')
+    if ($null -eq $G) { return }
+    if ($Max -le 0) { $Max = 100 }
+    $rad = [math]::PI / 180
+
+    # 合格弧（只画一次；量程变了要重画，比如系统盘容量）
+    $G.OkHolder.Children.Clear()
+    if ($null -ne $Lo -or $null -ne $Hi) {
+        $lo = if ($null -ne $Lo) { [double]$Lo } else { 0 }
+        $hi = if ($null -ne $Hi) { [double]$Hi } else { $Max }
+        $lo = [math]::Max(0, [math]::Min($lo, $Max))
+        $hi = [math]::Max(0, [math]::Min($hi, $Max))
+        if ($hi -gt $lo) {
+            $d1 = 180 - 180 * $lo / $Max
+            $d2 = 180 - 180 * $hi / $Max
+            $ok = New-ArcPath -Cx $G.Cx -Cy $G.Cy -R $G.R -FromDeg $d1 -ToDeg $d2 -Color '#4A4842' -Thickness 11
+            $G.OkHolder.Children.Add($ok) | Out-Null
+        }
+    }
+
+    $G.Unit.Text = $Unit
+    $G.Sub.Text = $Sub
+
+    if ($null -eq $Value) {
+        $G.Value.Text = [string][char]0x2014
+        $G.Value.Foreground = Get-Brush '#66635B'
+        $G.Value.FontWeight = 'Normal'
+        $G.Needle.Visibility = 'Collapsed'
+        return
+    }
+    $G.Needle.Visibility = 'Visible'
+
+    $v = [math]::Max(0, [math]::Min([double]$Value, $Max))
+    $deg = 180 - 180 * $v / $Max
+
+    # 超不超标
+    $bad = $false
+    if ($null -ne $Hi -and [double]$Value -gt [double]$Hi) { $bad = $true }
+    if ($null -ne $Lo -and [double]$Value -lt [double]$Lo) { $bad = $true }
+
+    $ink = if ($bad) { '#8A5750' } else { '#2B2A26' }
+    $G.Value.Foreground = Get-Brush $ink
+    $G.Value.FontWeight = if ($bad) { 'SemiBold' } else { 'Normal' }
+    $G.Needle.Stroke = Get-Brush $ink
+
+    # 游标滑过去（不是瞬间跳）—— 这是仪表最像仪表的地方。
+    # 两端分别在 r-9 和 r+9，连线正好垂直于弧。
+    $cos = [math]::Cos($deg * $rad); $sin = [math]::Sin($deg * $rad)
+    $x1 = $G.Cx + ($G.R - 9) * $cos;  $y1 = $G.Cy - ($G.R - 9) * $sin
+    $x2 = $G.Cx + ($G.R + 9) * $cos;  $y2 = $G.Cy - ($G.R + 9) * $sin
+    if (Test-MotionOn) {
+        Start-Prop $G.Needle ([System.Windows.Shapes.Line]::X1Property) $G.Needle.X1 $x1 280 $Script:Ease.Out
+        Start-Prop $G.Needle ([System.Windows.Shapes.Line]::Y1Property) $G.Needle.Y1 $y1 280 $Script:Ease.Out
+        Start-Prop $G.Needle ([System.Windows.Shapes.Line]::X2Property) $G.Needle.X2 $x2 280 $Script:Ease.Out
+        Start-Prop $G.Needle ([System.Windows.Shapes.Line]::Y2Property) $G.Needle.Y2 $y2 280 $Script:Ease.Out
+    } else {
+        $G.Needle.X1 = $x1; $G.Needle.Y1 = $y1
+        $G.Needle.X2 = $x2; $G.Needle.Y2 = $y2
+    }
+
+    $fmt = if ($Decimals -gt 0) { "F$Decimals" } else { 'F0' }
+    $old = "$($G.Value.Text)" -replace '[^\d.\-]', ''
+    $changed = $true
+    if ($old -and [double]::TryParse($old, [ref]$null)) {
+        $changed = ([math]::Round([double]$old, $Decimals) -ne [math]::Round([double]$Value, $Decimals))
+    }
+    # 位数多的读数（比如系统盘 198.7）会把仪表撑宽，按长度降一档字号
+    $txt = ([double]$Value).ToString($fmt)
+    $G.Value.FontSize = if ($txt.Length -ge 5) { 24 } elseif ($txt.Length -ge 4) { 27 } else { 30 }
+
+    Start-CountUp -Target $G.Value -To ([double]$Value) -Decimals $Decimals -Ms 260
+    if ($changed) { Start-ValueFlash $G.Value }
+}
 
 function New-RptGrid {
     <# 造一个符合列轨的 Grid：项目(*) 结果 标记 参考范围 单位 #>
     $g = New-Object System.Windows.Controls.Grid
-    foreach ($w in @(0, $Script:RptCol.Result, $Script:RptCol.Mark, $Script:RptCol.Ref, $Script:RptCol.Unit)) {
+    foreach ($w in @(0, $Script:RptCol.Result, $Script:RptCol.Mark, $Script:RptCol.Bar, $Script:RptCol.Ref, $Script:RptCol.Unit)) {
         $cd = New-Object System.Windows.Controls.ColumnDefinition
         $cd.Width = if ($w -eq 0) {
             New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
@@ -983,11 +1346,12 @@ function New-RptHeader {
         @{ T = $First; Col = 0; Align = 'Left' },
         @{ T = '结果'; Col = 1; Align = 'Right' },
         @{ T = ''; Col = 2; Align = 'Center' },
-        @{ T = '参考范围'; Col = 3; Align = 'Right' },
-        @{ T = '单位'; Col = 4; Align = 'Right' })
+        @{ T = '量程'; Col = 3; Align = 'Left' },
+        @{ T = '参考范围'; Col = 4; Align = 'Right' },
+        @{ T = '单位'; Col = 5; Align = 'Right' })
     foreach ($c in $cells) {
         if (-not $c.T) { continue }
-        $t = New-TextBlock -Text $c.T -Size 12 -Color '#66635B'
+        $t = New-TextBlock -Text $c.T -Size 13 -Color '#66635B'
         $t.FontWeight = 'SemiBold'
         $t.HorizontalAlignment = $c.Align
         [System.Windows.Controls.Grid]::SetColumn($t, $c.Col)
@@ -1020,7 +1384,7 @@ function New-RptRow {
         [bool]$Zebra = $false
     )
     $wrap = New-Object System.Windows.Controls.Border
-    $wrap.Padding = New-Thick 0 7 0 7
+    $wrap.Padding = New-Thick 0 9 0 9
     $wrap.BorderBrush = Get-Brush $Script:CARD_BORDER
     $wrap.BorderThickness = New-Thick 0 0 0 1     # 行间细线
     if ($Zebra) { $wrap.Background = Get-Brush '#EAE9E3' }   # SurfaceAlt
@@ -1029,48 +1393,59 @@ function New-RptRow {
     $g = New-RptGrid
 
     # --- 项目名 ---
-    $nm = New-TextBlock -Text $Name -Size 13.5 -Color '#4A4842' -Wrap $true
+    $nm = New-TextBlock -Text $Name -Size 15 -Color '#2B2A26' -Wrap $true
+    $nm.VerticalAlignment = 'Center'
     [System.Windows.Controls.Grid]::SetColumn($nm, 0)
     $g.Children.Add($nm) | Out-Null
 
     # --- 结果（等宽数位，右对齐）---
     #   ★ 必须表格数位 ★ 不加的话 1 比 8 窄，每秒刷新时整列左右抖
-    $rs = New-TextBlock -Text $Result -Size 15 -Color '#2B2A26'
+    $rs = New-TextBlock -Text $Result -Size 22 -Color '#2B2A26'
     $rs.HorizontalAlignment = 'Right'
-    $rs.Margin = New-Thick 0 -1 0 0
+    $rs.VerticalAlignment = 'Center'
     [System.Windows.Documents.Typography]::SetNumeralAlignment($rs, 'Tabular')
     [System.Windows.Controls.Grid]::SetColumn($rs, 1)
     $g.Children.Add($rs) | Out-Null
 
     # --- 标记 ---
-    $mk = New-TextBlock -Text $Mark -Size 13 -Color '#4A4842'
+    $mk = New-TextBlock -Text $Mark -Size 15 -Color '#4A4842'
     $mk.HorizontalAlignment = 'Center'
+    $mk.VerticalAlignment = 'Center'
     [System.Windows.Controls.Grid]::SetColumn($mk, 2)
     $g.Children.Add($mk) | Out-Null
 
+    # --- 量程与合格区间 ---
+    #   化验单自带的那张图：一条量程、一段合格区间、一个刻记。
+    #   它比圆环多一层信息 —— 不只是「你多少」，而是「你在合格区间的哪」。
+    $bar = New-RangeBar
+    [System.Windows.Controls.Grid]::SetColumn($bar.Host, 3)
+    $g.Children.Add($bar.Host) | Out-Null
+
     # --- 参考范围 ---
-    $rf = New-TextBlock -Text $Ref -Size 12.5 -Color '#66635B'
+    $rf = New-TextBlock -Text $Ref -Size 14 -Color '#66635B'
     $rf.HorizontalAlignment = 'Right'
+    $rf.VerticalAlignment = 'Center'
     [System.Windows.Documents.Typography]::SetNumeralAlignment($rf, 'Tabular')
-    [System.Windows.Controls.Grid]::SetColumn($rf, 3)
+    [System.Windows.Controls.Grid]::SetColumn($rf, 4)
     $g.Children.Add($rf) | Out-Null
 
     # --- 单位 ---
-    $un = New-TextBlock -Text $Unit -Size 11.5 -Color '#66635B'
+    $un = New-TextBlock -Text $Unit -Size 13 -Color '#66635B'
     $un.HorizontalAlignment = 'Right'
-    [System.Windows.Controls.Grid]::SetColumn($un, 4)
+    $un.VerticalAlignment = 'Center'
+    [System.Windows.Controls.Grid]::SetColumn($un, 5)
     $g.Children.Add($un) | Out-Null
 
     $outer.Children.Add($g) | Out-Null
 
     # --- 附注（项目名下方的小字，不占表格列）---
-    $nt = New-TextBlock -Text $Note -Size 12 -Color '#66635B' -Wrap $true
+    $nt = New-TextBlock -Text $Note -Size 13 -Color '#66635B' -Wrap $true
     $nt.Margin = New-Thick 0 3 0 0
     if (-not $Note) { $nt.Visibility = 'Collapsed' }
     $outer.Children.Add($nt) | Out-Null
 
     $wrap.Child = $outer
-    $r = @{ Row = $wrap; Name = $nm; Result = $rs; Mark = $mk; Ref = $rf; Unit = $un; Note = $nt }
+    $r = @{ Row = $wrap; Name = $nm; Result = $rs; Mark = $mk; Ref = $rf; Unit = $un; Note = $nt; Bar = $bar }
     Set-RptMark $r $Mark
     return $r
 }
@@ -1108,10 +1483,10 @@ function New-RptSection {
     $sp.Margin = New-Thick 0 0 0 8
 
     $row = New-Object System.Windows.Controls.Grid
-    $t = New-TextBlock -Text $Title -Size 15 -Bold $true
+    $t = New-TextBlock -Text $Title -Size 17 -Bold $true
     $row.Children.Add($t) | Out-Null
     if ($Aside) {
-        $a = New-TextBlock -Text $Aside -Size 12 -Color '#66635B'
+        $a = New-TextBlock -Text $Aside -Size 13 -Color '#66635B'
         $a.HorizontalAlignment = 'Right'
         $a.VerticalAlignment = 'Bottom'
         $a.Margin = New-Thick 0 0 0 1
@@ -1151,14 +1526,14 @@ function Add-ColHeader {
         $g.ColumnDefinitions.Add($cd)
     }
 
-    $t0 = New-TextBlock -Text $First -Size 12 -Color '#66635B'
+    $t0 = New-TextBlock -Text $First -Size 13 -Color '#66635B'
     $t0.FontWeight = 'SemiBold'
     $t0.Margin = New-Thick $Indent 0 0 0
     $g.Children.Add($t0) | Out-Null
 
     $i = 1
     foreach ($c in $Cols) {
-        $t = New-TextBlock -Text $c.T -Size 12 -Color '#66635B'
+        $t = New-TextBlock -Text $c.T -Size 13 -Color '#66635B'
         $t.FontWeight = 'SemiBold'
         $t.TextAlignment = 'Right'
         [System.Windows.Controls.Grid]::SetColumn($t, $i)
@@ -1229,7 +1604,7 @@ $xamlText = @'
         xmlns:hc="https://handyorg.github.io/handycontrol"
         Title="电脑调优助手" Height="800" Width="1240" MinHeight="620" MinWidth="1000"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource WindowBg}" Foreground="{DynamicResource TextMain}"
-        FontFamily="Microsoft YaHei UI, Segoe UI" FontSize="13"
+        FontFamily="Microsoft YaHei UI, Segoe UI" FontSize="14"
         TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType">
   <Window.Resources>
     <!-- 换肤用的中性色与主色。运行时由 Apply-Theme 整体替换。
@@ -1926,13 +2301,17 @@ function Get-RptRange {
         占用率这类瞬时读数**不设参考范围**（显示「—」）：
         某一秒 100% 不说明任何问题，给个范围反而是误导。
     #>
+    #  Max 是区间条的满量程，也要有出处：
+    #    温度轴到 110 —— 移动端 Tjmax 约 100~105，留一点余量
+    #    占用率轴到 100 —— 它本来就是百分比
+    #    系统盘的满量程是这块盘的实际容量，由调用处传进来
     param([string]$Key)
     switch ($Key) {
-        'CpuTemp' { return @{ Text = '< 95'; Lo = $null; Hi = 95 } }
-        'GpuTemp' { return @{ Text = '< 83'; Lo = $null; Hi = 83 } }
-        'Ram' { return @{ Text = '< 85'; Lo = $null; Hi = 85 } }
-        'Disk' { return @{ Text = '> 20'; Lo = 20; Hi = $null } }
-        default { return @{ Text = '—'; Lo = $null; Hi = $null } }
+        'CpuTemp' { return @{ Text = '< 95'; Lo = $null; Hi = 95; Max = 110 } }
+        'GpuTemp' { return @{ Text = '< 83'; Lo = $null; Hi = 83; Max = 110 } }
+        'Ram' { return @{ Text = '< 85'; Lo = $null; Hi = 85; Max = 100 } }
+        'Disk' { return @{ Text = '> 20'; Lo = 20; Hi = $null; Max = 100 } }
+        default { return @{ Text = [string][char]0x2014; Lo = $null; Hi = $null; Max = 100 } }
     }
 }
 
@@ -1969,27 +2348,71 @@ function Build-DashUI {
     #>
     $Script:DashRows = @{}
 
-    # ---------- 摘要表 ----------
+    # ---------- 摘要：四个指针仪表 ----------
+    #
+    #  老板拍板要仪表盘（「看都看不懂，就得给我改成仪表盘」）。
+    #  做成万用表那种半圆刻度 + 指针，不做霓虹圆环 ——
+    #  弧上分合格段和超标段，指针一指，不用读字就知道在不在绿区。
     $sum = $Script:UI.DashSummary
     $sum.Children.Clear()
     $sum.Children.Add((New-RptSection -Title '本次检验摘要' -Aside '实时读数，每秒刷新')) | Out-Null
-    $sum.Children.Add((New-RptHeader -First '检验项目')) | Out-Null
 
+    $Script:DashGauges = @{}
     $defs = @(
         @{ K = 'CpuTemp'; N = '处理器温度'; U = '°C' },
-        @{ K = 'CpuLoad'; N = '处理器占用'; U = '%' },
         @{ K = 'GpuTemp'; N = '显卡温度'; U = '°C' },
-        @{ K = 'GpuLoad'; N = '显卡占用'; U = '%' },
         @{ K = 'Ram'; N = '内存占用'; U = '%' },
         @{ K = 'Disk'; N = '系统盘可用'; U = 'GB' })
-    $i = 0
-    foreach ($d in $defs) {
-        $rg = Get-RptRange $d.K
-        $row = New-RptRow -Name $d.N -Result '—' -Ref $rg.Text -Unit $d.U -Zebra ($i % 2 -eq 1)
-        $Script:DashRows[$d.K] = $row
-        $sum.Children.Add($row.Row) | Out-Null
-        $i++
+
+    # ★ UniformGrid 在 System.Windows.Controls.Primitives，不在 Controls ★
+    #   写错命名空间时 New-Object 找不到类型，而本脚本的
+    #   $ErrorActionPreference = 'Continue' 会让它**静默跳过**，
+    #   $wrap 变成 $null，后面所有 .Children.Add 全部落空 ——
+    #   界面上就是「四个仪表一个都没出现」，还不报错。
+    #   这里直接用 Grid 定义四等分列，省掉这个坑。
+    $wrap = New-Object System.Windows.Controls.Grid
+    $wrap.Margin = New-Thick 0 10 0 0
+    for ($ci = 0; $ci -lt 4; $ci++) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        $wrap.ColumnDefinitions.Add($cd)
     }
+    $ci = 0
+    foreach ($d in $defs) {
+        $g = New-Gauge -Label $d.N
+        $Script:DashGauges[$d.K] = $g
+        [System.Windows.Controls.Grid]::SetColumn($g.Host, $ci)
+        $wrap.Children.Add($g.Host) | Out-Null
+        $ci++
+    }
+    $sum.Children.Add($wrap) | Out-Null
+
+    # 占用率这两项没有合格阈值，不配仪表（配了就等于编一个不存在的阈值），
+    # 放在仪表下面一行当附注读数。
+    $line = New-Object System.Windows.Controls.StackPanel
+    $line.Orientation = 'Horizontal'
+    $line.HorizontalAlignment = 'Center'
+    $line.Margin = New-Thick 0 16 0 0
+    $Script:DashPlain = @{}
+    foreach ($d in @(@{ K = 'CpuLoad'; N = '处理器占用' }, @{ K = 'GpuLoad'; N = '显卡占用' })) {
+        $sp = New-Object System.Windows.Controls.StackPanel
+        $sp.Orientation = 'Horizontal'
+        $sp.Margin = New-Thick 0 0 36 0
+        $l = New-TextBlock -Text $d.N -Size 13 -Color '#66635B'
+        $l.VerticalAlignment = 'Bottom'
+        $l.Margin = New-Thick 0 0 8 1
+        $sp.Children.Add($l) | Out-Null
+        $v = New-TextBlock -Text ([string][char]0x2014) -Size 18 -Color '#2B2A26'
+        [System.Windows.Documents.Typography]::SetNumeralAlignment($v, 'Tabular')
+        $sp.Children.Add($v) | Out-Null
+        $u = New-TextBlock -Text '%' -Size 12.5 -Color '#66635B'
+        $u.VerticalAlignment = 'Bottom'
+        $u.Margin = New-Thick 2 0 0 2
+        $sp.Children.Add($u) | Out-Null
+        $Script:DashPlain[$d.K] = $v
+        $line.Children.Add($sp) | Out-Null
+    }
+    $sum.Children.Add($line) | Out-Null
 
     # ---------- 按用途选（右栏）----------
     $ph = $Script:UI.DashPickHead
@@ -2072,11 +2495,11 @@ function Update-DashScore {
         $sp = New-Object System.Windows.Controls.StackPanel
         $sp.Orientation = 'Horizontal'
         $sp.Margin = New-Thick 0 0 28 0
-        $l = New-TextBlock -Text $c.L -Size 12 -Color '#66635B'
+        $l = New-TextBlock -Text $c.L -Size 13 -Color '#66635B'
         $l.VerticalAlignment = 'Bottom'
         $l.Margin = New-Thick 0 0 6 1
         $sp.Children.Add($l) | Out-Null
-        $v = New-TextBlock -Text $c.V -Size 19 -Color $(if ($c.Bad) { '#8A5750' } else { '#2B2A26' })
+        $v = New-TextBlock -Text $c.V -Size 22 -Color $(if ($c.Bad) { '#8A5750' } else { '#2B2A26' })
         if ($c.Bad) { $v.FontWeight = 'SemiBold' }
         [System.Windows.Documents.Typography]::SetNumeralAlignment($v, 'Tabular')
         $sp.Children.Add($v) | Out-Null
@@ -2105,9 +2528,9 @@ function Update-DashScore {
 
             $sp = New-Object System.Windows.Controls.StackPanel
             [System.Windows.Controls.Grid]::SetColumn($sp, 1)
-            $t1 = New-TextBlock -Text $it.Name -Size 13 -Color '#2B2A26' -Wrap $true
+            $t1 = New-TextBlock -Text $it.Name -Size 14.5 -Color '#2B2A26' -Wrap $true
             $sp.Children.Add($t1) | Out-Null
-            $t2 = New-TextBlock -Text $it.Why -Size 12 -Color '#66635B' -Wrap $true
+            $t2 = New-TextBlock -Text $it.Why -Size 13 -Color '#66635B' -Wrap $true
             $t2.Margin = New-Thick 0 2 0 0
             $sp.Children.Add($t2) | Out-Null
             $g.Children.Add($sp) | Out-Null
@@ -2121,59 +2544,83 @@ function Update-DashScore {
 
 function Set-RptReading {
     <#
-      刷一行读数：写值、按参考范围算标记、变了就闪一下。
-      读不到一律 '—' + 标记 '—'，绝不编数字。
+      刷一行读数：写值、按参考范围算标记、同步区间条、变了就闪一下。
+      读不到一律显示长横，连刻记都不画 —— 和「绝不编数字」一个道理，
+      不画一个假的位置出来。
+
+      Max 给 0 就用该指标的默认满量程；系统盘传这块盘的实际容量。
     #>
-    param([string]$Key, $Value, [int]$Decimals = 0)
+    param([string]$Key, $Value, [int]$Decimals = 0, [double]$Max = 0)
     $row = $Script:DashRows[$Key]
     if ($null -eq $row) { return }
+    $rg = Get-RptRange $Key
+    $dash = [string][char]0x2014
+
     if ($null -eq $Value) {
-        $row.Result.Text = '—'
-        Set-RptMark $row '—'
+        $row.Result.Text = $dash
+        Set-RptMark $row $dash
+        Set-RangeBar $row.Bar $null $rg.Max $rg.Lo $rg.Hi
         return
     }
+
     $fmt = if ($Decimals -gt 0) { "F$Decimals" } else { 'F0' }
     $old = "$($row.Result.Text)" -replace '[^\d.\-]', ''
     $changed = $true
     if ($old -and [double]::TryParse($old, [ref]$null)) {
         $changed = ([math]::Round([double]$old, $Decimals) -ne [math]::Round([double]$Value, $Decimals))
     }
+
+    $mark = Get-RptMarkFor ([double]$Value) $rg
     Start-CountUp -Target $row.Result -To ([double]$Value) -Decimals $Decimals -Ms 220
-    Set-RptMark $row (Get-RptMarkFor ([double]$Value) (Get-RptRange $Key))
+    Set-RptMark $row $mark
+
+    # 区间条跟着走。超出范围时刻记上法定墨并且画高一点 ——
+    # 「超了」这件事同时被数字、标记、刻记三处表达，
+    # 用户扫表时可能只看见其中任何一处。
+    $useMax = if ($Max -gt 0) { $Max } else { $rg.Max }
+    $abnormal = ($mark -eq [string][char]0x2191 -or $mark -eq [string][char]0x2193 -or
+                 $mark -eq ([string][char]0x2191 + [char]0x2191) -or $mark -eq ([string][char]0x2193 + [char]0x2193))
+    Set-RangeBar $row.Bar ([double]$Value) $useMax $rg.Lo $rg.Hi $abnormal
+
     if ($changed) { Start-ValueFlash $row.Result }
 }
 
 function Update-DashUI {
-    <# 每秒刷一次摘要表。这里绝不做耗时的事 #>
-    if (-not $Script:DashRows -or $Script:DashRows.Count -eq 0) { return }
+    <# 每秒刷一次仪表。这里绝不做耗时的事 #>
+    if (-not $Script:DashGauges -or $Script:DashGauges.Count -eq 0) { return }
     $Script:DashTick++
     Update-DashSensors
 
     $c = Get-DashCpu
-    Set-RptReading 'CpuTemp' $c.Temp
-    Set-RptReading 'CpuLoad' $c.Load
-    if ($null -eq $c.Temp) { $Script:DashRows['CpuTemp'].Note.Text = '读不到 —— 需要管理员权限和厂商驱动支持'; $Script:DashRows['CpuTemp'].Note.Visibility = 'Visible' }
+    $rg = Get-RptRange 'CpuTemp'
+    Set-Gauge $Script:DashGauges['CpuTemp'] $c.Temp $rg.Max $rg.Lo $rg.Hi 0 '°C' $(
+        if ($null -eq $c.Temp) { '读不到（需管理员权限）' } else { '合格 ' + $rg.Text + ' °C' })
 
     $g = Get-DashGpu
-    Set-RptReading 'GpuTemp' $g.Temp
-    Set-RptReading 'GpuLoad' $g.Load
-    if ($g.Name) {
-        $Script:DashRows['GpuTemp'].Note.Text = ($g.Name -replace 'NVIDIA GeForce |AMD |\(TM\)| Laptop GPU', '')
-        $Script:DashRows['GpuTemp'].Note.Visibility = 'Visible'
-    }
+    $rg = Get-RptRange 'GpuTemp'
+    $gsub = if ($g.Name) { ($g.Name -replace 'NVIDIA GeForce |AMD |\(TM\)| Laptop GPU', '') } else { '没检测到显卡' }
+    Set-Gauge $Script:DashGauges['GpuTemp'] $g.Temp $rg.Max $rg.Lo $rg.Hi 0 '°C' $gsub
 
     $r = Get-DashRam
+    $rg = Get-RptRange 'Ram'
     if ($r) {
-        Set-RptReading 'Ram' $r.Percent
-        $Script:DashRows['Ram'].Note.Text = "已用 $($r.UsedGB) GB / 共 $($r.TotalGB) GB"
-        $Script:DashRows['Ram'].Note.Visibility = 'Visible'
+        Set-Gauge $Script:DashGauges['Ram'] $r.Percent $rg.Max $rg.Lo $rg.Hi 0 '%' (
+            "已用 $($r.UsedGB) / 共 $($r.TotalGB) GB")
     }
 
     $d = Get-DashDisk
     if ($d) {
-        Set-RptReading 'Disk' $d.FreeGB 1
-        $Script:DashRows['Disk'].Note.Text = "$($d.Drive) 共 $($d.TotalGB) GB，已用 $($d.UsedPct)%"
-        $Script:DashRows['Disk'].Note.Visibility = 'Visible'
+        # 系统盘的满量程就是这块盘的实际容量 —— 用 100 当量程是错的
+        Set-Gauge $Script:DashGauges['Disk'] $d.FreeGB ([double]$d.TotalGB) 20 $null 1 'GB' (
+            "$($d.Drive) 共 $($d.TotalGB) GB，已用 $($d.UsedPct)%")
+    }
+
+    # 占用率：没有合格阈值，只报数
+    foreach ($p in @(@{ K = 'CpuLoad'; V = $c.Load }, @{ K = 'GpuLoad'; V = $g.Load })) {
+        $t = $Script:DashPlain[$p.K]
+        if ($null -eq $t) { continue }
+        if ($null -eq $p.V) { $t.Text = [string][char]0x2014; continue }
+        Start-CountUp -Target $t -To ([double]$p.V) -Decimals 0 -Ms 220
     }
 }
 
@@ -2243,7 +2690,7 @@ function New-PresetCard {
     $sp = New-Object System.Windows.Controls.StackPanel
     [System.Windows.Controls.Grid]::SetColumn($sp, 1)
 
-    $title = New-TextBlock -Text $Preset.Name -Size 13.5 -Wrap $true
+    $title = New-TextBlock -Text $Preset.Name -Size 15 -Wrap $true
     $title.FontWeight = 'SemiBold'
     $sp.Children.Add($title) | Out-Null
 
@@ -2721,10 +3168,10 @@ function Build-TweakUI {
             $g.Children.Add($cb) | Out-Null
 
             $sp = New-Object System.Windows.Controls.StackPanel
-            $nameTb = New-TextBlock -Text $tw.Name -Size 13.5
+            $nameTb = New-TextBlock -Text $tw.Name -Size 15
             $nameTb.TextWrapping = 'Wrap'
             $sp.Children.Add($nameTb) | Out-Null
-            $meta = New-TextBlock -Text ("风险 {0}　{1}" -f $tw.Risk, $tw.Effect) -Size 11.5 -Color '#66635B'
+            $meta = New-TextBlock -Text ("风险 {0}　{1}" -f $tw.Risk, $tw.Effect) -Size 12.5 -Color '#66635B'
             $meta.TextWrapping = 'Wrap'
             $meta.Margin = New-Thick 0 3 0 0
             $sp.Children.Add($meta) | Out-Null
@@ -2742,19 +3189,19 @@ function Build-TweakUI {
             #    只有「该开却没开」的行才上法定墨和 ↑，
             #    满页平静，真要处理的那几行才跳出来。
             # ================================================================
-            $res = New-TextBlock -Text '检测中' -Size 13 -Color '#2B2A26'
+            $res = New-TextBlock -Text '检测中' -Size 15 -Color '#2B2A26'
             $res.TextAlignment = 'Right'
             $res.VerticalAlignment = 'Center'
             [System.Windows.Controls.Grid]::SetColumn($res, 2)
             $g.Children.Add($res) | Out-Null
 
-            $mk = New-TextBlock -Text '' -Size 13 -Color '#66635B'
+            $mk = New-TextBlock -Text '' -Size 15 -Color '#66635B'
             $mk.TextAlignment = 'Center'
             $mk.VerticalAlignment = 'Center'
             [System.Windows.Controls.Grid]::SetColumn($mk, 3)
             $g.Children.Add($mk) | Out-Null
 
-            $rf = New-TextBlock -Size 12 -Color '#66635B' -Text $(if ($tw.Recommended) { '建议 开启' } else { '可选' })
+            $rf = New-TextBlock -Size 13 -Color '#66635B' -Text $(if ($tw.Recommended) { '建议 开启' } else { '可选' })
             $rf.TextAlignment = 'Right'
             $rf.VerticalAlignment = 'Center'
             [System.Windows.Controls.Grid]::SetColumn($rf, 4)
@@ -2986,7 +3433,7 @@ function Build-CleanUI {
         $g.Children.Add($cb) | Out-Null
 
         $sp = New-Object System.Windows.Controls.StackPanel
-        $nameTb = New-TextBlock -Text $it.Name -Size 13.5
+        $nameTb = New-TextBlock -Text $it.Name -Size 15
         $nameTb.TextWrapping = 'Wrap'
         $sp.Children.Add($nameTb) | Out-Null
         [System.Windows.Controls.Grid]::SetColumn($sp, 1)
@@ -2994,7 +3441,7 @@ function Build-CleanUI {
 
         # 扫描结果：等宽数位右对齐，和别的表一个语汇。
         # 不加粗 —— 加粗是留给「超出参考范围」的。
-        $size = New-TextBlock -Text ([string][char]0x2014) -Size 13 -Color '#2B2A26'
+        $size = New-TextBlock -Text ([string][char]0x2014) -Size 16 -Color '#2B2A26'
         $size.VerticalAlignment = 'Center'
         $size.TextAlignment = 'Right'
         [System.Windows.Documents.Typography]::SetNumeralAlignment($size, 'Tabular')
@@ -3519,7 +3966,7 @@ function Build-StartupUI {
         $sp = New-Object System.Windows.Controls.StackPanel
         $head = New-Object System.Windows.Controls.StackPanel
         $head.Orientation = 'Horizontal'
-        $nm = New-TextBlock -Text $it.Name -Size 13.5
+        $nm = New-TextBlock -Text $it.Name -Size 15
         $head.Children.Add($nm) | Out-Null
         $sc = New-TextBlock -Text $it.Scope -Size 11.5 -Color '#66635B'
         $sc.Margin = New-Thick 10 2 0 0
@@ -3545,7 +3992,7 @@ function Build-StartupUI {
         #    在检验单皮肤里被映射成法定墨，等于把好事标成了问题。
         #    颜色一旦用错，整套「扫过去只有真问题在发光」的机制就废了。
         # ================================================================
-        $res = New-TextBlock -Size 13 -Color '#2B2A26' -Text $(if ($it.Enabled) { '已开启' } else { '已关闭' })
+        $res = New-TextBlock -Size 15 -Color '#2B2A26' -Text $(if ($it.Enabled) { '已开启' } else { '已关闭' })
         $res.TextAlignment = 'Right'
         $res.VerticalAlignment = 'Center'
         [System.Windows.Controls.Grid]::SetColumn($res, 2)
