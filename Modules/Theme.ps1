@@ -73,7 +73,7 @@ $Script:SemanticDark = @{
 $Script:ExtraColorSlots = @{
     '#F6F5F2' = 'CardBg'
     '#FBFAF8' = 'PanelBg'
-    '#6E6B63' = 'TextDim'
+    '#66635B' = 'TextDim'
     '#E0DED8' = 'BorderSoft'
     '#EAE9E3' = 'SurfaceAlt'
     '#E8E7E2' = 'NeutralTint'
@@ -142,7 +142,7 @@ function Get-BuiltinThemes {
             Colors = @{
                 WindowBg = '#E4E3DE'; PanelBg = '#FBFAF8'; CardBg = '#F6F5F2'; CardHover = '#EFEEEA'
                 SurfaceAlt = '#EDECE8'; SurfaceSunken = '#E5E3DC'; NeutralTint = '#E8E7E2'
-                TextMain = '#2B2A26'; TextDim = '#6E6B63'; TextMid = '#4A4842'; OnAccent = '#FFFFFF'
+                TextMain = '#2B2A26'; TextDim = '#66635B'; TextMid = '#4A4842'; OnAccent = '#FFFFFF'
                 BorderSoft = '#DDDBD5'; BorderMed = '#D2D0C9'; BorderStrong = '#C6C4BC'
                 ScrollThumbBg = '#CBC9C1'; ScrollThumbHover = '#B5B2A9'; ScrollThumbDrag = '#9E9B91'
                 Accent = '#55606F'; AccentDark = '#39424E'; AccentLight = '#7F8A99'; AccentTint = '#E4E7EC'
@@ -155,7 +155,7 @@ function Get-BuiltinThemes {
             Colors = @{
                 WindowBg = '#DFE3E6'; PanelBg = '#F8FAFB'; CardBg = '#F1F4F6'; CardHover = '#E9EDF0'
                 SurfaceAlt = '#E8ECEF'; SurfaceSunken = '#DFE4E8'; NeutralTint = '#E5E9EC'
-                TextMain = '#23292E'; TextDim = '#65707A'; TextMid = '#414B54'; OnAccent = '#FFFFFF'
+                TextMain = '#23292E'; TextDim = '#59646E'; TextMid = '#414B54'; OnAccent = '#FFFFFF'
                 BorderSoft = '#D3D9DE'; BorderMed = '#C5CCD2'; BorderStrong = '#B3BBC2'
                 ScrollThumbBg = '#C2C9CF'; ScrollThumbHover = '#ACB4BB'; ScrollThumbDrag = '#949DA5'
                 Accent = '#4F6577'; AccentDark = '#354654'; AccentLight = '#7A8D9C'; AccentTint = '#DFE7ED'
@@ -168,7 +168,7 @@ function Get-BuiltinThemes {
             Colors = @{
                 WindowBg = '#E1E5DF'; PanelBg = '#F9FBF8'; CardBg = '#F2F5F0'; CardHover = '#EAEEE8'
                 SurfaceAlt = '#E9EDE7'; SurfaceSunken = '#E0E5DE'; NeutralTint = '#E6EAE4'
-                TextMain = '#242822'; TextDim = '#667064'; TextMid = '#414A3F'; OnAccent = '#FFFFFF'
+                TextMain = '#242822'; TextDim = '#5E685C'; TextMid = '#414A3F'; OnAccent = '#FFFFFF'
                 BorderSoft = '#D5DAD3'; BorderMed = '#C7CDC5'; BorderStrong = '#B5BCB3'
                 ScrollThumbBg = '#C4CAC2'; ScrollThumbHover = '#AEB5AC'; ScrollThumbDrag = '#969E94'
                 Accent = '#566B58'; AccentDark = '#3A4A3C'; AccentLight = '#7F927F'; AccentTint = '#E2EAE1'
@@ -181,10 +181,31 @@ function Get-BuiltinThemes {
             Colors = @{
                 WindowBg = '#E8E2DA'; PanelBg = '#FCFAF7'; CardBg = '#F7F3EE'; CardHover = '#F0ECE6'
                 SurfaceAlt = '#F0EBE4'; SurfaceSunken = '#E7E1D9'; NeutralTint = '#EDE8E1'
-                TextMain = '#2B2620'; TextDim = '#726860'; TextMid = '#4C443B'; OnAccent = '#FFFFFF'
+                TextMain = '#2B2620'; TextDim = '#6C625A'; TextMid = '#4C443B'; OnAccent = '#FFFFFF'
                 BorderSoft = '#DED7CD'; BorderMed = '#D0C8BC'; BorderStrong = '#BEB5A8'
                 ScrollThumbBg = '#CEC6BA'; ScrollThumbHover = '#B8AFA2'; ScrollThumbDrag = '#A0978A'
                 Accent = '#6B5844'; AccentDark = '#4B3D2E'; AccentLight = '#94816C'; AccentTint = '#EDE5DA'
+            }
+        }
+
+        '仪表灰' = @{
+            Desc = '枪灰面板 + 暖白读数。照着量测仪器做的：颜色只用来表达状态，不当装饰。'
+            Swatch = @('#191D23', '#20252D', '#D8DEE9')
+            Colors = @{
+                # 枪灰，不是「发暗的黑」—— 带一点蓝绿，像仪器外壳阳极氧化的面
+                WindowBg = '#191D23'; PanelBg = '#20252D'; CardBg = '#262C35'; CardHover = '#2D343E'
+                SurfaceAlt = '#2A313A'; SurfaceSunken = '#14171C'; NeutralTint = '#2A313A'
+                # 读数是暖白不是纯白 —— 纯白在深底上发飘，暖一点像背光面板
+                TextMain = '#E8EAEE'; TextDim = '#989EA7'; TextMid = '#C3C9D2'; OnAccent = '#191D23'
+                # 线分三档粗细，对应「分隔 / 结构 / 强调」三种信息量
+                BorderSoft = '#2E353F'; BorderMed = '#3B434F'; BorderStrong = '#4E5764'
+                ScrollThumbBg = '#3B434F'; ScrollThumbHover = '#4E5764'; ScrollThumbDrag = '#626C7A'
+                # ★ 故意不给高饱和强调色 ★
+                #   「近黑底 + 一个亮色强调」是 AI 生成界面最典型的长相之一
+                #   （上一版这里是 #00E5A0 酸绿，原样命中）。
+                #   现在主色就是读数本身的暖白；颜色只留给「状态」——
+                #   绿=正常 / 卡其=注意 / 红=超限，不当装饰用。
+                Accent = '#D8DEE9'; AccentDark = '#AFB7C4'; AccentLight = '#EDF0F4'; AccentTint = '#2A313A'
             }
         }
 
@@ -194,7 +215,7 @@ function Get-BuiltinThemes {
             Colors = @{
                 WindowBg = '#22242A'; PanelBg = '#2C2F36'; CardBg = '#31353D'; CardHover = '#3A3F48'
                 SurfaceAlt = '#383C45'; SurfaceSunken = '#1C1E23'; NeutralTint = '#3A3E47'
-                TextMain = '#E8EAED'; TextDim = '#A2A8B2'; TextMid = '#C6CAD1'; OnAccent = '#1B1D21'
+                TextMain = '#E8EAED'; TextDim = '#A6ACB6'; TextMid = '#C6CAD1'; OnAccent = '#1B1D21'
                 BorderSoft = '#3D414A'; BorderMed = '#4A4F59'; BorderStrong = '#5A606B'
                 ScrollThumbBg = '#4A4F59'; ScrollThumbHover = '#5D636E'; ScrollThumbDrag = '#727986'
                 Accent = '#8FA3BA'; AccentDark = '#6E8299'; AccentLight = '#AABBCE'; AccentTint = '#343B45'
@@ -223,7 +244,9 @@ function Get-ThemeFile { Join-Path $Script:BackupDir 'theme.json' }
 
 function Get-ThemeSetting {
     <# 返回 @{ Name; Image; Opacity; Anim } —— 读不到就给默认值 #>
-    $def = @{ Name = '暖灰（默认）'; Image = ''; Opacity = 0.88; Anim = $true }
+    # 默认皮肤是「仪表灰」——这个工具从头到尾在讲「你机器现在什么状态」，
+    # 深色面板配暖白读数才是它该有的样子。浅色那几套仍然随时可换。
+    $def = @{ Name = '仪表灰'; Image = ''; Opacity = 0.88; Anim = $true }
     try {
         $f = Get-ThemeFile
         if (-not (Test-Path -LiteralPath $f)) { return $def }
@@ -313,6 +336,17 @@ function Set-AppTheme {
             $remap[$hex.ToUpper()] = $Script:SemanticDark[$hex]
         }
     }
+
+    # ---- 文字渲染方式跟着深浅走 ----
+    #
+    # ClearType 是拿红绿蓝三个子像素凑出来的抗锯齿。浅底深字看着很锐利，
+    # 但**深底浅字时子像素会露出来**，笔画边上挂一圈红绿紫边 ——
+    # 中文笔画密，这个现象比英文明显得多，看久了发花。
+    # 深色皮肤一律改成灰度抗锯齿：稍微软一点点，但干干净净没有彩边。
+    try {
+        $mode = if (Test-ThemeIsDark $Name) { 'Grayscale' } else { 'ClearType' }
+        [System.Windows.Media.TextOptions]::SetTextRenderingMode($Script:Window, $mode)
+    } catch { }
     $Script:ColorRemap = $remap
 
     # ---- 2.5 把颜色喂给 HandyControl ----
@@ -382,15 +416,30 @@ function Set-AppTheme {
 }
 
 function Test-ThemeIsDark {
-    <# 当前皮肤是不是深色的 —— 用窗口底色的亮度判断 #>
+    <#
+      当前皮肤是不是深色的 —— 用窗口底色的感知亮度判断。
+
+      ★ 故意不用 [System.Windows.Media.ColorConverter] ★
+        它要 WPF 程序集已加载。在没加载的环境里（比如单跑模块做测试）
+        这句会抛异常，而异常一抛，函数返回的就不是 $false 而是错误 ——
+        调用方拿到的结果会让**浅色皮肤被当成深色**，
+        于是语义色整套反转（深色专用的提亮版配到了浅色底上，字全看不清）。
+
+        改成自己解析 #RRGGBB，纯字符串运算，零依赖，永远算得出。
+    #>
     param([string]$Name)
     $themes = Get-BuiltinThemes
     if (-not $themes.Contains($Name)) { return $false }
-    $hex = $themes[$Name].Colors.WindowBg
-    $c = [System.Windows.Media.ColorConverter]::ConvertFromString($hex)
+    $hex = "$($themes[$Name].Colors.WindowBg)".TrimStart('#')
+    if ($hex.Length -eq 8) { $hex = $hex.Substring(2) }      # 带 alpha 的去掉前两位
+    if ($hex.Length -ne 6) { return $false }
+    try {
+        $r = [Convert]::ToInt32($hex.Substring(0, 2), 16)
+        $g = [Convert]::ToInt32($hex.Substring(2, 2), 16)
+        $b = [Convert]::ToInt32($hex.Substring(4, 2), 16)
+    } catch { return $false }
     # 感知亮度（Rec.709），低于 128 算深色
-    $lum = 0.2126 * $c.R + 0.7152 * $c.G + 0.0722 * $c.B
-    return ($lum -lt 128)
+    return ((0.2126 * $r + 0.7152 * $g + 0.0722 * $b) -lt 128)
 }
 
 function Copy-ThemeImage {

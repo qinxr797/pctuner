@@ -2,7 +2,7 @@
 =====================================================================
   PCTuner.ps1  ——  电脑调优助手  主程序
 ---------------------------------------------------------------------
-  用法：双击同目录下的「一键启动.bat」即可（会自动申请管理员权限）。
+  用法：双击同目录下的「电脑调优助手.exe」即可（会自动申请管理员权限）。
 
   五个页面：
     性能优化   —— 一条条开关，每条都写清楚了是干什么的
@@ -32,9 +32,8 @@ $ErrorActionPreference = 'Continue'
 
 # ===== 版本号 =====
 # 改版本号只改这一处，标题栏 / 副标题 / 诊断报告都从这里取。
-$Script:AppVersion     = '4.0'
+$Script:AppVersion     = '4.1'
 $Script:AppVersionDate = '2026-09-27'
-$Script:AppVersionName = '全新界面版'
 
 # ---------------------------------------------------------------------
 #  0. 加载 .NET 界面库
@@ -90,7 +89,7 @@ if (-not $SelfTest -and -not $AutoClean -and -not $principal.IsInRole([Security.
         )
     } catch {
         [System.Windows.Forms.MessageBox]::Show(
-            "这个工具需要管理员权限才能修改系统设置。`r`n`r`n请右键点击「一键启动.bat」→ 以管理员身份运行。",
+            "这个工具需要管理员权限才能修改系统设置。`r`n`r`n请双击「电脑调优助手.exe」，并在弹出的「用户账户控制」里点「是」。",
             '电脑调优助手', 'OK', 'Warning') | Out-Null
     }
     exit
@@ -101,7 +100,7 @@ if (-not $SelfTest -and -not $AutoClean -and -not $principal.IsInRole([Security.
 # ---------------------------------------------------------------------
 $Script:AppRoot = Split-Path -Parent $PSCommandPath
 # 载入顺序有依赖：Engine 提供日志和注册表底座，其余模块都用得到，必须第一个
-$Script:ModuleNames = @('Engine', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme')
+$Script:ModuleNames = @('Engine', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme', 'Dash')
 
 # ---------- 1.1 先查文件齐不齐 ----------
 # 为什么要专门查一遍：通过微信/QQ 传「文件夹」过去经常会漏文件
@@ -113,10 +112,12 @@ $missing = @()
 foreach ($m in $Script:ModuleNames) {
     if (-not (Test-Path -LiteralPath (Join-Path $Script:AppRoot "Modules\$m.ps1"))) { $missing += "$m.ps1" }
 }
-# 界面库也要查 —— 少了它整个界面会退化成 Windows 原生控件，
-# 而且不会报错，只是「突然变丑」，用户根本不知道发生了什么
-if (-not (Test-Path -LiteralPath (Join-Path $Script:AppRoot 'Lib\HandyControl.dll'))) {
-    $missing += 'Lib\HandyControl.dll'
+# Lib 下的三个 DLL 也要查。
+# 少了界面库，整个界面会退化成 Windows 原生控件，而且不报错，
+# 只是「突然变丑」，用户根本不知道发生了什么；
+# 少了硬件监控库，概览页的温度和风扇会全变成「—」。
+foreach ($d in 'HandyControl.dll', 'LibreHardwareMonitorLib.dll', 'HidSharp.dll') {
+    if (-not (Test-Path -LiteralPath (Join-Path $Script:AppRoot "Lib\$d"))) { $missing += "Lib\$d" }
 }
 if ($missing.Count -gt 0) {
     if ($SelfTest) { Write-Host ("自检失败：缺少模块 " + ($missing -join ', ')); exit 2 }
@@ -136,7 +137,7 @@ $Script:AppRoot\Modules
 1. 让对方重新发一次「电脑调优助手.zip」压缩包（一个文件，不会漏）
 2. 右键这个 zip → 属性 → 勾上「解除锁定」→ 确定
 3. 解压到一个固定位置，比如 D:\PCTuner
-4. 双击里面的「一键启动.bat」
+4. 双击里面的「电脑调优助手.exe」
 
 （Modules 文件夹里应该正好有 8 个 .ps1 文件）
 "@, '电脑调优助手 - 文件不完整', 'OK', 'Error') | Out-Null
@@ -392,89 +393,155 @@ $Script:SelectedCard = $null
 # =====================================================================
 #  动画
 # ---------------------------------------------------------------------
-#  用的是 WPF 自带的 Storyboard，没有引入任何第三方 UI 库。
+#  用 WPF 自带的 Storyboard，没有引入任何动画库。
 #
-#  ★ 为什么不用现成的界面库（MaterialDesign / ModernWpf 那些）★
-#    它们确实好看，但要带一堆 DLL、要匹配 .NET 版本。
-#    这个工具最大的优点是「解压双击就能跑、零依赖、两百 KB」，
-#    为了动画把这个优点毁掉不划算。WPF 原生动画已经够用。
+#  ★ 规则来自 Emil Kowalski 的动画方法论（Sonner / Vaul 作者）★
+#    以下每一条都是照着他那套硬规矩写的，改之前先想清楚：
 #
-#  ★ 三条自我约束 ★
-#    1. 只动 Opacity 和 Transform —— 这两样走 GPU 合成，
-#       不会触发重新布局，是所有动画里最便宜的。
-#       绝不动 Width/Height/Margin，那种会让整页反复重排。
-#    2. 时长压在 120~220ms。再长就从「顺滑」变成「等它放完」。
-#    3. 可以整体关掉 —— 这工具本来就服务配置差的机器，
-#       动画不能反过来变成负担。
+#    1. **只动 Opacity 和 Transform。**
+#       这两样走 GPU 合成，不触发布局和重绘。
+#       动 Width/Height/Margin 会让整页反复重排，是性能杀手。
+#
+#    2. **绝不用 ease-in。**
+#       它开头慢，而开头恰恰是用户正在盯着看的那一刻。
+#       同样 200ms，ease-out 感觉比 ease-in 快。
+#
+#    3. **内置缓动太弱，要用精确的三次贝塞尔。**
+#       WPF 的 CubicEase 大约是 cubic-bezier(0.33,1,0.68,1)，偏温吞。
+#       这里用 KeySpline 实现真正的 (0.23,1,0.32,1) —— 起步快、收尾稳。
+#       KeySpline 的两个控制点就是 cubic-bezier 的四个参数，一一对应。
+#
+#    4. **时长按元素类型分级，UI 一律 < 300ms。**
+#       按钮反馈 100~160 / 小浮层 125~200 / 下拉 150~250 / 弹窗抽屉 200~500
+#
+#    5. **按触发频率决定要不要动。**
+#       一天上百次的操作（键盘快捷键）不做动画；
+#       一天几十次的（悬停）只能做到「几乎察觉不到」。
+#       所以悬停用 110ms，比换页的 200ms 短得多。
+#
+#    6. **必须跟随系统的「减弱动效」设置。**
+#       Windows 里关掉「显示动画」的用户，多半是因为晕动症或机器太慢，
+#       不是让我们无视的。关掉之后不是「没有反馈」，而是「只留透明度、
+#       去掉位移」—— 减少和减弱，不是归零。
+#
+#    7. **不许所有元素同时进场**，列表要 30~80ms 错峰。
 # =====================================================================
-$Script:AnimEnabled = $true
+
+# 精确缓动曲线（对应 CSS 的 cubic-bezier）
+$Script:EaseOutPoints = @(0.23, 1.0, 0.32, 1.0)      # 进场/退场：强 ease-out
+$Script:EaseInOutPoints = @(0.77, 0.0, 0.175, 1.0)   # 屏幕内移动/形变
+
+# 时长分级（毫秒）
+$Script:DurHover = 110    # 悬停：一天几十次，只能几乎察觉不到
+$Script:DurPanel = 200    # 右侧详情栏换内容
+$Script:DurTab = 160      # 切页签
+$Script:DurStagger = 45   # 列表错峰间隔
+
+$Script:AnimEnabled = $true          # 用户在「个性化」页的开关
+$Script:SystemAnimOff = $false       # 系统级「减弱动效」
+
+function Test-SystemReducedMotion {
+    <#
+      Windows 的「减弱动效」等价物。
+
+      控制面板 → 轻松使用 → 显示 → 「在 Windows 中显示动画」，
+      关掉之后 SystemParameters.ClientAreaAnimation 变 False。
+
+      会关这个的人通常有两种：晕动症，或者机器实在带不动。
+      两种都不该被我们无视。
+    #>
+    try { return (-not [System.Windows.SystemParameters]::ClientAreaAnimation) } catch { return $false }
+}
+
+function Test-AnimOn {
+    <# 动画到底开不开：用户开关 且 系统没要求减弱 #>
+    return ($Script:AnimEnabled -and -not $Script:SystemAnimOff)
+}
+
+function New-SplineAnim {
+    <#
+      用 KeySpline 做出精确的 cubic-bezier 曲线。
+
+      ★ 为什么不用 CubicEase / QuarticEase 那些内置的 ★
+        它们是固定公式，曲线偏软，动起来「温吞」。
+        KeySpline 的两个控制点 = cubic-bezier 的四个参数，
+        想要什么曲线就是什么曲线，不用将就。
+    #>
+    param([double]$From, [double]$To, [double]$Ms, [double[]]$Curve)
+    $anim = New-Object System.Windows.Media.Animation.DoubleAnimationUsingKeyFrames
+    $anim.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Ms))
+
+    # 起点：0 时刻用 Discrete 钉住，避免从控件当前值开始插值
+    $k0 = New-Object System.Windows.Media.Animation.DiscreteDoubleKeyFrame
+    $k0.KeyTime = [System.Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::Zero)
+    $k0.Value = $From
+    [void]$anim.KeyFrames.Add($k0)
+
+    $k1 = New-Object System.Windows.Media.Animation.SplineDoubleKeyFrame
+    $k1.KeyTime = [System.Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::FromMilliseconds($Ms))
+    $k1.Value = $To
+    $k1.KeySpline = New-Object System.Windows.Media.Animation.KeySpline (
+        $Curve[0], $Curve[1], $Curve[2], $Curve[3])
+    [void]$anim.KeyFrames.Add($k1)
+    return $anim
+}
 
 function Start-FadeSlideIn {
     <#
       内容换新时的淡入 + 轻微上移。用在右侧详情栏这种「整块换内容」的地方。
-      SlideY 是起始位置相对最终位置往下偏多少像素。
+
+      Delay 用来做列表错峰进场（30~80ms 一档）——
+      全部同时出现是 Emil 那份 Never Ship 清单里的一条。
     #>
-    param($Element, [double]$Ms = 200, [double]$SlideY = 10)
+    param($Element, [double]$Ms = 0, [double]$SlideY = 10, [double]$Delay = 0)
     if ($null -eq $Element) { return }
-    if (-not $Script:AnimEnabled) {
+    if ($Ms -le 0) { $Ms = $Script:DurPanel }
+
+    if (-not (Test-AnimOn)) {
         $Element.Opacity = 1
         $Element.RenderTransform = $null
         return
     }
+
+    # 系统要求减弱动效时：保留淡入（帮助理解内容换了），去掉位移
+    $reduce = $Script:SystemAnimOff
     try {
-        $tt = New-Object System.Windows.Media.TranslateTransform
-        $tt.Y = $SlideY
-        $Element.RenderTransform = $tt
-
-        $dur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Ms))
-        $ease = New-Object System.Windows.Media.Animation.CubicEase
-        $ease.EasingMode = 'EaseOut'
-
-        $fade = New-Object System.Windows.Media.Animation.DoubleAnimation (0, 1, $dur)
-        $fade.EasingFunction = $ease
+        $fade = New-SplineAnim -From 0 -To 1 -Ms $Ms -Curve $Script:EaseOutPoints
+        if ($Delay -gt 0) { $fade.BeginTime = [TimeSpan]::FromMilliseconds($Delay) }
         $Element.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fade)
 
-        $slide = New-Object System.Windows.Media.Animation.DoubleAnimation ($SlideY, 0, $dur)
-        $slide.EasingFunction = $ease
-        $tt.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $slide)
+        if (-not $reduce -and $SlideY -ne 0) {
+            $tt = New-Object System.Windows.Media.TranslateTransform
+            $tt.Y = $SlideY
+            $Element.RenderTransform = $tt
+            $slide = New-SplineAnim -From $SlideY -To 0 -Ms $Ms -Curve $Script:EaseOutPoints
+            if ($Delay -gt 0) { $slide.BeginTime = [TimeSpan]::FromMilliseconds($Delay) }
+            $tt.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $slide)
+        }
     } catch {
-        # 动画失败绝不能拖垮功能：直接显示出来就是了
+        # 动画失败绝不能拖垮功能：直接显示出来
         $Element.Opacity = 1
     }
 }
 
-function Start-ColorFade {
+function Start-StaggerIn {
     <#
-      背景色平滑过渡。用在卡片悬停上 —— 以前是「啪」地换色，
-      现在是 140ms 渐变过去。
+      一批元素错峰进场，每个比前一个晚 45ms。
 
-      ★ 注意 ★ 只能对「没被 Freeze 的画笔」做动画。
-        主题里那 20 支资源画笔是 Frozen 的（为了渲染快），
-        直接拿来动画会抛 InvalidOperationException。
-        所以这里每次都 new 一支独立画笔给这个控件用。
+      ★ 为什么要错峰 ★
+        全部同时淡入，眼睛会把它们当成一整块，感觉不到「逐个出现」，
+        反而显得生硬。差几十毫秒，大脑就读成有节奏的序列。
+        超过 6 个就不再往后加延迟 —— 再排下去最后一个要等半秒，
+        那就从「有节奏」变成「怎么还没出来」。
     #>
-    param($Element, [string]$ToHex, [double]$Ms = 140)
-    if ($null -eq $Element) { return }
-    $to = [System.Windows.Media.ColorConverter]::ConvertFromString((Get-ThemedHex $ToHex))
-    if (-not $Script:AnimEnabled) {
-        $Element.Background = New-Object System.Windows.Media.SolidColorBrush $to
-        return
-    }
-    try {
-        $cur = $Element.Background
-        # 不是纯色画笔、或者是冻结的，就先换一支可动画的同色画笔
-        if ($cur -isnot [System.Windows.Media.SolidColorBrush] -or $cur.IsFrozen) {
-            $startColor = if ($cur -is [System.Windows.Media.SolidColorBrush]) { $cur.Color } else { $to }
-            $cur = New-Object System.Windows.Media.SolidColorBrush $startColor
-            $Element.Background = $cur
-        }
-        $dur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Ms))
-        $anim = New-Object System.Windows.Media.Animation.ColorAnimation
-        $anim.To = $to
-        $anim.Duration = $dur
-        $cur.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $anim)
-    } catch {
-        $Element.Background = New-Object System.Windows.Media.SolidColorBrush $to
+    param($Elements, [double]$Ms = 0, [double]$SlideY = 8)
+    if ($Ms -le 0) { $Ms = $Script:DurPanel }
+    $i = 0
+    foreach ($e in $Elements) {
+        if ($null -eq $e) { continue }
+        $delay = [math]::Min($i, 6) * $Script:DurStagger
+        Start-FadeSlideIn -Element $e -Ms $Ms -SlideY $SlideY -Delay $delay
+        $i++
     }
 }
 
@@ -485,6 +552,55 @@ function Get-ThemedHex {
         return $Script:ColorRemap[$Hex.ToUpper()]
     }
     return $Hex
+}
+
+function Start-ColorFade {
+    <#
+      背景色平滑过渡。用在卡片悬停上。
+
+      ★ 悬停必须极短 ★
+        悬停是一天要发生几十上百次的动作。按 Emil 的频率分级，
+        这一档「只能做到几乎察觉不到，否则就别做」。
+        110ms 是能感觉到「柔和」但不会觉得「在等」的上限。
+
+      ★ 用 ColorAnimation 而不是关键帧 ★
+        鼠标可以在两张卡之间快速来回扫，动画会被反复打断。
+        ColorAnimation 会从「当前实际颜色」重新出发；
+        关键帧则每次都从头播，来回扫的时候会闪。
+
+      ★ 注意冻结画笔 ★
+        主题里那批资源画笔是 Frozen 的（渲染更快），
+        直接对它做动画会抛 InvalidOperationException。
+        所以这里每次都换一支独立的、可动画的画笔给这个控件用。
+    #>
+    param($Element, [string]$ToHex, [double]$Ms = 0)
+    if ($null -eq $Element) { return }
+    if ($Ms -le 0) { $Ms = $Script:DurHover }
+    $to = [System.Windows.Media.ColorConverter]::ConvertFromString((Get-ThemedHex $ToHex))
+
+    if (-not (Test-AnimOn)) {
+        $Element.Background = New-Object System.Windows.Media.SolidColorBrush $to
+        return
+    }
+    try {
+        $cur = $Element.Background
+        if ($cur -isnot [System.Windows.Media.SolidColorBrush] -or $cur.IsFrozen) {
+            $startColor = if ($cur -is [System.Windows.Media.SolidColorBrush]) { $cur.Color } else { $to }
+            $cur = New-Object System.Windows.Media.SolidColorBrush $startColor
+            $Element.Background = $cur
+        }
+        $anim = New-Object System.Windows.Media.Animation.ColorAnimation
+        $anim.To = $to
+        $anim.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($Ms))
+        # 悬停这种「颜色变化」用标准 ease，不用强 ease-out —— 强曲线在
+        # 这么短的时长里反而显得一顿
+        $ez = New-Object System.Windows.Media.Animation.CubicEase
+        $ez.EasingMode = 'EaseOut'
+        $anim.EasingFunction = $ez
+        $cur.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $anim)
+    } catch {
+        $Element.Background = New-Object System.Windows.Media.SolidColorBrush $to
+    }
 }
 
 # =====================================================================
@@ -672,7 +788,7 @@ function Get-TintBg {
         '#89694F' { return '#EDE7D9' }   # 灰陶：会弹黑框
         '#8A5750' { return '#EDE0DD' }   # 灰玫瑰：高危 / 高风险
         '#55606F' { return '#E4E7EC' }   # 灰蓝：推荐 / 已知打扰 / 主色
-        '#6E6B63' { return '#E8E7E2' }   # 暖灰：中性（显式列出来——
+        '#66635B' { return '#E8E7E2' }   # 暖灰：中性（显式列出来——
                                          # 原来它是靠 default 恰好返回同一个值才对的，
                                          # 属于「碰巧能跑」，中性色一改就会悄悄失效）
         default   { return '#E8E7E2' }
@@ -699,7 +815,7 @@ function Get-RiskColors {
         '低' { return @{ Fg = '#556B54'; Bg = '#E2E7E0' } }
         '中' { return @{ Fg = '#7A6B45'; Bg = '#EDE7D9' } }
         '高' { return @{ Fg = '#8A5750'; Bg = '#EDE0DD' } }
-        default { return @{ Fg = '#6E6B63'; Bg = '#E8E7E2' } }
+        default { return @{ Fg = '#66635B'; Bg = '#E8E7E2' } }
     }
 }
 
@@ -709,9 +825,11 @@ function Get-RiskColors {
 $xamlText = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:hc="https://handyorg.github.io/handycontrol"
         Title="电脑调优助手" Height="800" Width="1240" MinHeight="620" MinWidth="1000"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource WindowBg}" Foreground="{DynamicResource TextMain}"
-        FontFamily="Microsoft YaHei UI, Segoe UI" FontSize="13">
+        FontFamily="Microsoft YaHei UI, Segoe UI" FontSize="13"
+        TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType">
   <Window.Resources>
     <!-- 换肤用的中性色与主色。运行时由 Apply-Theme 整体替换。
          注意：绿/红/卡其那几个语义色故意不在这里 —— 换肤不能改变「高危」的颜色。 -->
@@ -794,6 +912,102 @@ $xamlText = @'
     <!-- ========== 主体 ========== -->
     <TabControl Grid.Row="1" x:Name="Tabs" Background="Transparent" BorderThickness="0" Padding="0" Margin="14,10,14,0">
 
+      <!-- ================================================================
+           概览（v4.1 新增，排第一页）
+
+           这一页的存在理由：以前打开工具，第一眼是一堆勾选框列表，
+           用户不知道自己电脑现在到底什么状态、该不该动手。
+           现在先给一个「体检分 + 实时硬件读数」的整体印象。
+
+           温度 / 风扇 / 各核心频率来自 LibreHardwareMonitorLib，
+           读不到的一律显示「—」，绝不编数字（见 Modules\Dash.ps1）。
+           ================================================================ -->
+      <TabItem Header="概览">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Margin="18,16,18,20">
+
+            <!-- ================================================================
+                 健康度读数 + 量程标尺
+
+                 ★ 刻意不用环形进度条 ★
+                   大圆环 + 中间一个数字，是仪表盘小组件的默认长相，
+                   哪个产品套上去都一样。仪器上的读数是
+                   「数字 + 它在量程里的位置」，所以这里是一条带
+                   0 / 50 / 100 标注的标尺 —— 刻度本身携带信息，不是装饰。
+
+                 数字巨大、单位小而压低，是仪器面板的排版惯例。
+                 数字用 Segoe UI 的表格数位（Tabular），
+                 这样每秒刷新时数字宽度恒定，不会左右跳。
+                 ================================================================ -->
+            <Border Background="{DynamicResource PanelBg}" CornerRadius="4" Padding="26,20,26,18"
+                    BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1" Margin="0,0,0,12">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="230"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                  <TextBlock Text="健康度" FontSize="12.5" Foreground="{DynamicResource TextDim}"/>
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="DashScoreText" Text="--" FontSize="64" FontWeight="Light"
+                               Foreground="{DynamicResource TextMain}" LineHeight="72"
+                               FontFamily="Segoe UI" Typography.NumeralAlignment="Tabular"/>
+                    <TextBlock Text="分" FontSize="13" Foreground="{DynamicResource TextDim}"
+                               VerticalAlignment="Bottom" Margin="7,0,0,13"/>
+                  </StackPanel>
+
+                  <Grid Height="5" Margin="0,2,0,0">
+                    <Border Background="{DynamicResource SurfaceSunken}"/>
+                    <Border x:Name="DashScoreBar" Background="{DynamicResource TextMain}"
+                            HorizontalAlignment="Left" Width="0"/>
+                  </Grid>
+                  <Canvas x:Name="DashScaleTicks" Height="4" Margin="0,0,0,0"/>
+                  <Grid Margin="0,2,0,0">
+                    <TextBlock Text="0" FontSize="10.5" Foreground="{DynamicResource TextDim}" HorizontalAlignment="Left"/>
+                    <TextBlock Text="50" FontSize="10.5" Foreground="{DynamicResource TextDim}" HorizontalAlignment="Center"/>
+                    <TextBlock Text="100" FontSize="10.5" Foreground="{DynamicResource TextDim}" HorizontalAlignment="Right"/>
+                  </Grid>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Margin="30,2,0,0">
+                  <TextBlock x:Name="DashHeadline" Text="正在检查" FontSize="17" FontWeight="SemiBold"
+                             Foreground="{DynamicResource TextMain}" TextWrapping="Wrap"/>
+                  <StackPanel x:Name="DashScoreItems" Margin="0,11,0,0"/>
+                </StackPanel>
+              </Grid>
+            </Border>
+
+            <!-- ================================================================
+                 实时读数：一整块面板，读数之间用刻线分开
+
+                 ★ 上一版是四张独立圆角卡 + 同一种软阴影 ★
+                   那是「SaaS 卡片套装」—— 内容切成一模一样的卡片、
+                   所有东西同一个圆角、每张下面同一种灰阴影。
+                   仪器的面板是一整块金属，读数之间是刻线，不是四个盒子。
+                 ================================================================ -->
+            <Border Background="{DynamicResource PanelBg}" CornerRadius="4" Padding="0"
+                    BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1" Margin="0,0,0,12">
+              <UniformGrid x:Name="DashMetrics" Columns="4"/>
+            </Border>
+
+            <!-- 下半：按用途快选。圆角和边框跟上面两块保持一致 ——
+                 同一页上出现 4 和 14 两种圆角，看起来就是拼出来的 -->
+            <Border Background="{DynamicResource PanelBg}" CornerRadius="4" Padding="22,18"
+                    BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1">
+              <StackPanel>
+                <TextBlock Text="你主要拿这台电脑干什么" FontSize="15" FontWeight="Bold"
+                           Foreground="{DynamicResource TextMain}"/>
+                <TextBlock Text="点一下自动勾好对应的优化项，然后到「性能优化」页确认再应用。"
+                           FontSize="12" Foreground="{DynamicResource TextDim}" Margin="0,5,0,12" TextWrapping="Wrap"/>
+                <WrapPanel x:Name="DashQuickPick"/>
+              </StackPanel>
+            </Border>
+
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
       <!-- 第一页：性能优化 -->
       <TabItem Header="性能优化">
         <Grid Margin="0">
@@ -808,12 +1022,41 @@ $xamlText = @'
               <RowDefinition Height="*"/>
               <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
+            <!-- ================================================================
+                 预设区。★ 必须可以收起 ★
+                   12 张卡片分三组排开有 490px 高，而整个左栏只有 610px ——
+                   展开着的时候，下面那个「优化项列表」会被挤成 0 高度，
+                   用户在这一页上根本看不见自己要勾的东西。
+                   所以点完预设（= 已经做完选择）就自动收起，
+                   抬头那一行随时能再点开。
+                 ================================================================ -->
             <Border Grid.Row="0" Background="{DynamicResource CardBg}" CornerRadius="8" BorderBrush="{DynamicResource BorderMed}"
-                    BorderThickness="1" Padding="13,11" Margin="0,0,0,10">
+                    BorderThickness="1" Padding="13,10" Margin="0,0,0,10">
               <StackPanel>
-                <TextBlock Text="预设 · 点一下自动勾好。先在「按用途选」里找到你自己那类；只玩竞技射击的用下面那排。涉及安全性的激进项不会进任何预设。"
-                           Foreground="{DynamicResource TextDim}" FontSize="12" Margin="0,0,0,9"/>
-                <WrapPanel x:Name="PresetBar"/>
+                <!-- 「按用途选」永远露在外面 —— 这是绝大多数人该走的那条路。
+                     ★ 必须是竖向 StackPanel，不能是 WrapPanel ★
+                       里面装的是「组标题 + 该组卡片的 WrapPanel」一对一对往下排；
+                       写成 WrapPanel 的话，卡片一加宽，内层期望宽度变了，
+                       外层就会把组标题横着甩到卡片右边，整个预设区排版全乱。 -->
+                <StackPanel x:Name="PresetPrimary"/>
+
+                <!-- 其余分组默认收起。理由：12 张卡全展开有 490px 高，
+                     而整个左栏只有 610px —— 下面那个优化项列表会被挤成 0 高度，
+                     用户在这一页上根本看不见自己要勾的东西。 -->
+                <Grid x:Name="PresetHeader" Cursor="Hand" Background="Transparent" Margin="0,4,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock x:Name="PresetMoreHint" Grid.Column="0"
+                             Text="只玩竞技射击、或者想给浏览器瘦身 —— 在这里"
+                             Foreground="{DynamicResource TextDim}" FontSize="12" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="PresetToggle" Grid.Column="1" Text="展开" FontSize="12"
+                             Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="12,0,2,0"/>
+                </Grid>
+                <StackPanel x:Name="PresetBody" Margin="0,8,0,0" Visibility="Collapsed">
+                  <StackPanel x:Name="PresetBar"/>
+                </StackPanel>
               </StackPanel>
             </Border>
             <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
@@ -1132,7 +1375,10 @@ if ($Script:HcTheme) {
 $Script:UI = @{}
 foreach ($n in @(
         'SubTitle', 'VerBadge', 'ChkRestorePoint', 'BtnRestorePoint', 'Tabs',
+        'DashScoreText', 'DashScoreBar', 'DashScaleTicks', 'DashHeadline', 'DashScoreItems',
+        'DashMetrics', 'DashQuickPick',
         'TweakPanel', 'TweakDetail', 'BtnPickRecommended', 'BtnPickNone', 'BtnRescan', 'PresetBar',
+        'PresetHeader', 'PresetToggle', 'PresetBody', 'PresetPrimary', 'PresetMoreHint',
         'BtnApplySelected', 'BtnRevertSelected', 'BtnRevertAll',
         'CleanPanel', 'CleanDetail', 'BtnScanJunk', 'BtnPickCleanRec', 'BtnPickCleanNone', 'BtnClean', 'TotalJunkText',
         'TweakSearch', 'TweakSearchHint', 'TweakSelCount', 'CleanSearch', 'CleanSearchHint', 'CleanSelCount',
@@ -1157,71 +1403,555 @@ $Script:TweakRows = @{}     # Id -> @{ Check; Badge; Tweak }
 $Script:GameNotes = Get-GameNotes
 $Script:Presets = Get-GamePresets
 
+# =====================================================================
+#  概览页
+# ---------------------------------------------------------------------
+#  ★ 轮询只在这一页可见时跑 ★
+#    全量刷新一次传感器实测 100ms 左右。每秒一次 = 持续吃掉约 10% 的
+#    一个核心。用户切到别的页面还在后台烧，那就成了
+#    「优化工具自己是最大的后台负担」—— 所以切走立刻停表。
+# =====================================================================
+$Script:DashTimer = $null
+$Script:DashCards = @{}
+$Script:DashScoreCache = $null
+
+function New-MetricCard {
+    <#
+      面板上的一格读数。不是卡片 —— 没有圆角、没有阴影、没有自己的底色，
+      靠左边一条刻线跟邻格分开，像仪器面板上的分区。
+
+      排版按仪器惯例：
+        标签小而灰 → 数字巨大 → 单位小且压在数字基线上 → 附注 → 波形
+
+      返回 @{ Card; Big; Unit; Sub; Line; Host }
+    #>
+    param([string]$Title, [bool]$First = $false)
+
+    $cell = New-Object System.Windows.Controls.Border
+    # 只有左边一条线，且第一格不画 —— 这样整排看起来是「被刻线分开的一块面板」，
+    # 而不是「四个并排的盒子」
+    $cell.BorderBrush = Get-Brush $Script:CARD_BORDER
+    $cell.BorderThickness = New-Thick $(if ($First) { 0 } else { 1 }) 0 0 0
+    $cell.Padding = New-Thick 20 16 18 15
+
+    $sp = New-Object System.Windows.Controls.StackPanel
+
+    $t = New-TextBlock -Text $Title -Size 12 -Color '#66635B'
+    $sp.Children.Add($t) | Out-Null
+
+    # 数字 + 单位同一行，单位压到基线
+    $row = New-Object System.Windows.Controls.StackPanel
+    $row.Orientation = 'Horizontal'
+    $row.Margin = New-Thick 0 3 0 0
+
+    $big = New-TextBlock -Text '--' -Size 34
+    $big.FontWeight = 'Light'
+    $big.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe UI'
+    $big.LineHeight = 38
+    # ★ 表格数位 ★ 每个数字等宽，每秒刷新时读数不会左右跳
+    [System.Windows.Documents.Typography]::SetNumeralAlignment($big, 'Tabular')
+    $row.Children.Add($big) | Out-Null
+
+    $unit = New-TextBlock -Text '' -Size 12 -Color '#66635B'
+    $unit.VerticalAlignment = 'Bottom'
+    $unit.Margin = New-Thick 4 0 0 6
+    $row.Children.Add($unit) | Out-Null
+    $sp.Children.Add($row) | Out-Null
+
+    $sub = New-TextBlock -Text '' -Size 11.5 -Color '#66635B' -Wrap $true
+    $sub.Margin = New-Thick 0 1 0 9
+    $sp.Children.Add($sub) | Out-Null
+
+    # ================================================================
+    #  走纸：最近 60 秒的曲线
+    #
+    #  这是整页唯一「动」的东西，所以给它足够的高度（44px）和
+    #  一条 50% 基准线 —— 光有一根线看不出高低，有了基准线才知道
+    #  「现在是闲着还是在干活」。这是示波器 / 心电图的做法。
+    #
+    #  曲线下方填一层很淡的同色块，让走势有体量感；
+    #  但填充透明度压到 0.10，不能抢读数。
+    # ================================================================
+    $hostGrid = New-Object System.Windows.Controls.Grid
+    $hostGrid.Height = 44
+    $hostGrid.Margin = New-Thick 0 2 0 0
+    $hostGrid.ClipToBounds = $true
+
+    # 50% 基准线（虚线，比曲线更淡）
+    $base = New-Object System.Windows.Shapes.Line
+    $base.X1 = 0; $base.Y1 = 22; $base.Y2 = 22
+    $base.Stroke = Get-Brush $Script:CARD_BORDER
+    $base.StrokeThickness = 1
+    $base.StrokeDashArray = New-Object System.Windows.Media.DoubleCollection(, [double[]]@(2, 4))
+    $base.HorizontalAlignment = 'Stretch'
+    $hostGrid.Children.Add($base) | Out-Null
+
+    $fill = New-Object System.Windows.Shapes.Polygon
+    $fill.Fill = Get-Brush '#565349'      # TextMid（换肤时自动跟着变）
+    $fill.Opacity = 0.10
+    $hostGrid.Children.Add($fill) | Out-Null
+
+    $line = New-Object System.Windows.Shapes.Polyline
+    $line.Stroke = Get-Brush '#565349'     # 同上
+    $line.StrokeThickness = 1.2
+    $line.StrokeLineJoin = 'Round'
+    $hostGrid.Children.Add($line) | Out-Null
+
+    $sp.Children.Add($hostGrid) | Out-Null
+
+    $cell.Child = $sp
+    return @{ Card = $cell; Big = $big; Unit = $unit; Sub = $sub; Line = $line; Fill = $fill; Base = $base; Holder = $hostGrid }
+}
+
+function Update-Sparkline {
+    <#
+      把一串 0~100 的数值画成折线。
+
+      ★ 必须按控件的实际宽度算 ★
+        用固定宽度的话，窗口一拉伸线就对不上了。
+        ActualWidth 在首次布局完成前是 0，那就先不画 —— 下一秒就有了。
+    #>
+    # ★ 参数不能叫 $Host ★
+    #   $Host 是 PowerShell 的保留自动变量（宿主对象），拿来当参数名会抛
+    #   「Cannot overwrite variable Host because it is read-only」。
+    #   而这个异常发生在 CPU 那次调用里，直接让整个刷新函数中断 ——
+    #   结果就是「只有处理器有读数，显卡/内存/系统盘全是 --」。
+    #   （同类保留变量还有 $PID、$PWD、$Error、$Input，都别用作参数名。）
+    param($Line, $Holder, $Values, [double]$Max = 100, $Fill = $null, $Base = $null)
+    if ($null -eq $Line -or $null -eq $Values) { return }
+    $n = @($Values).Count
+    if ($n -lt 2) { return }
+    $w = $Holder.ActualWidth
+    $h = $Holder.ActualHeight
+    if ($w -lt 5 -or $h -lt 5) { return }
+
+    # 基准线跟着宽度走，并且钉在纵向正中（= 50%）
+    if ($Base) { $Base.X2 = $w; $Base.Y1 = $h / 2; $Base.Y2 = $h / 2 }
+
+    $pts = New-Object System.Windows.Media.PointCollection
+    $step = $w / [math]::Max(1, ($n - 1))
+    for ($i = 0; $i -lt $n; $i++) {
+        $v = [double]$Values[$i]
+        if ($v -lt 0) { $v = 0 }
+        if ($v -gt $Max) { $v = $Max }
+        $y = $h - ($v / $Max * ($h - 3)) - 1.5
+        $pts.Add((New-Object System.Windows.Point (($i * $step), $y)))
+    }
+    $Line.Points = $pts
+
+    # 填充多边形 = 曲线 + 右下角 + 左下角，闭合出曲线下方那块面积
+    if ($Fill) {
+        $fp = New-Object System.Windows.Media.PointCollection
+        foreach ($p in $pts) { $fp.Add($p) }
+        $fp.Add((New-Object System.Windows.Point (($w), $h)))
+        $fp.Add((New-Object System.Windows.Point (0, $h)))
+        $Fill.Points = $fp
+    }
+}
+
+function Build-DashUI {
+    <# 建出四格读数和快选卡片。只建一次，之后靠 Update-DashUI 刷数 #>
+    $mg = $Script:UI.DashMetrics
+    $mg.Children.Clear()
+    $Script:DashCards = @{}
+
+    $defs = @(
+        @{ K = 'CPU'; T = '处理器' },
+        @{ K = 'GPU'; T = '显卡' },
+        @{ K = 'RAM'; T = '内存' },
+        @{ K = 'DISK'; T = '系统盘' })
+    $first = $true
+    foreach ($def in $defs) {
+        $c = New-MetricCard -Title $def.T -First $first
+        $Script:DashCards[$def.K] = $c
+        $mg.Children.Add($c.Card) | Out-Null
+        $first = $false
+    }
+
+    # 量程标尺上的刻度线：每 10 分一根，50 分那根画高一点
+    $tk = $Script:UI.DashScaleTicks
+    $tk.Children.Clear()
+    $tk.Add_SizeChanged({
+            $c = $this
+            $c.Children.Clear()
+            $w = $c.ActualWidth
+            if ($w -lt 10) { return }
+            for ($i = 0; $i -le 10; $i++) {
+                $r = New-Object System.Windows.Shapes.Rectangle
+                $r.Width = 1
+                $r.Height = $(if ($i % 5 -eq 0) { 4 } else { 2 })
+                $r.Fill = Get-Brush '#8A877F'
+                [System.Windows.Controls.Canvas]::SetLeft($r, [math]::Round($w * $i / 10))
+                [System.Windows.Controls.Canvas]::SetTop($r, 0)
+                $c.Children.Add($r) | Out-Null
+            }
+        })
+
+    # 按用途快选：复用「按用途选」那组预设
+    $qp = $Script:UI.DashQuickPick
+    $qp.Children.Clear()
+    foreach ($ps in ($Script:Presets | Where-Object { $_.Group -eq '按用途选' })) {
+        $card = New-PresetCard -Preset $ps -Big $true
+        # 点完跳到性能优化页，让他看见到底勾了什么 ——
+        # 不跳的话用户会以为「点了没反应」
+        $card.Add_MouseLeftButtonUp({ $Script:UI.Tabs.SelectedIndex = 1 })
+        $qp.Children.Add($card) | Out-Null
+    }
+}
+
+function Update-DashScore {
+    <#
+      算健康度。这个比较贵（要逐项 Test-TweakApplied，实测 1.2 秒），
+      所以**不跟着每秒刷新走**，只在进页面和手动重算时跑。
+    #>
+    $s = Get-DashScore
+    $Script:DashScoreCache = $s
+    $Script:UI.DashScoreText.Text = "$($s.Score)"
+    # 标尺填充宽度按分数占比算，父容器宽度变化时 SizeChanged 会重算
+    try {
+        $bar = $Script:UI.DashScoreBar
+        $track = $bar.Parent
+        if ($track -and $track.ActualWidth -gt 0) { $bar.Width = $track.ActualWidth * $s.Score / 100 }
+        $track.Add_SizeChanged({ $this.Children[1].Width = $this.ActualWidth * $Script:DashScoreCache.Score / 100 })
+    } catch { }
+
+    # 分数对应的一句话结论
+    $head = switch ($s.Score) {
+        { $_ -ge 90 } { '你的电脑状态很好' ; break }
+        { $_ -ge 75 } { '整体不错，还有一点余量' ; break }
+        { $_ -ge 55 } { '有几处明显可以改善' ; break }
+        default { '问题不少，建议逐项看一下' }
+    }
+    $Script:UI.DashHeadline.Text = $head
+
+    $box = $Script:UI.DashScoreItems
+    $box.Children.Clear()
+    foreach ($it in $s.Items) {
+        $row = New-Object System.Windows.Controls.StackPanel
+        $row.Orientation = 'Horizontal'
+        $row.Margin = New-Thick 0 0 0 5
+        $m = New-Badge -Text "-$($it.Minus)" -Fg '#8A5750' -Bg (Get-TintBg '#8A5750')
+        $m.Margin = New-Thick 0 0 8 0
+        $row.Children.Add($m) | Out-Null
+        $tx = New-TextBlock -Text $it.Name -Size 12.5 -Wrap $true
+        $tx.VerticalAlignment = 'Center'
+        $row.Children.Add($tx) | Out-Null
+        $box.Children.Add($row) | Out-Null
+
+        $why = New-TextBlock -Text $it.Why -Size 11.5 -Color '#66635B' -Wrap $true
+        $why.Margin = New-Thick 34 -2 0 8
+        $box.Children.Add($why) | Out-Null
+    }
+}
+
+function Update-DashUI {
+    <# 每秒刷一次实时读数。注意这里绝不做耗时的事 #>
+    if ($Script:DashCards.Count -eq 0) { return }
+    $Script:DashTick++
+    Update-DashSensors
+
+    # ---- CPU ----
+    $c = Get-DashCpu
+    $card = $Script:DashCards['CPU']
+    # ★ 不用「A · B · C」中点串 ★ 那是模板腔，哪个产品都长这样。
+    #   数值各占一行，读起来也更像仪表读数。
+    if ($null -ne $c.Temp) {
+        $card.Big.Text = "$($c.Temp)"
+        $card.Unit.Text = '°C'
+        $lines = @()
+        if ($null -ne $c.Load) { $lines += "占用 $($c.Load)%" }
+        if ($c.Clock) { $lines += "$([math]::Round($c.Clock/1000,2)) GHz" }
+        if ($c.Power) { $lines += "$($c.Power) W" }
+        $card.Sub.Text = ($lines -join "`r`n")
+    } elseif ($null -ne $c.Load) {
+        # 读不到温度时退而报占用率 —— 但频率、功耗如果读得到还是要给，
+        # 别因为缺一项就把整格降级成一个光秃秃的百分比
+        $card.Big.Text = "$($c.Load)"
+        $card.Unit.Text = '%'
+        $lines = @()
+        if ($c.Clock) { $lines += "$([math]::Round($c.Clock/1000,2)) GHz" }
+        if ($c.Power) { $lines += "$($c.Power) W" }
+        $lines += '温度读不到'
+        $card.Sub.Text = ($lines -join "`r`n")
+    } else {
+        $card.Big.Text = '--'
+        $card.Unit.Text = ''
+        $card.Sub.Text = '读不到'
+    }
+    Add-DashSample 'CPU' $c.Load
+    Update-Sparkline $card.Line $card.Holder $Script:DashHistory['CPU'] -Fill $card.Fill -Base $card.Base
+
+    # ---- GPU ----
+    $g = Get-DashGpu
+    $card = $Script:DashCards['GPU']
+    if ($null -ne $g.Temp) {
+        $card.Big.Text = "$($g.Temp)"
+        $card.Unit.Text = '°C'
+        $lines = @()
+        if ($null -ne $g.Load) { $lines += "占用 $($g.Load)%" }
+        if ($g.Name) { $lines += ($g.Name -replace 'NVIDIA GeForce |AMD |\(TM\)| Laptop GPU', '') }
+        $card.Sub.Text = ($lines -join "`r`n")
+    } elseif ($g.Name) {
+        $card.Big.Text = '--'
+        $card.Unit.Text = ''
+        $card.Sub.Text = "$($g.Name)`r`n这张卡读不到实时数据"
+    } else {
+        $card.Big.Text = '--'
+        $card.Unit.Text = ''
+        $card.Sub.Text = '没检测到显卡'
+    }
+    Add-DashSample 'GPU' $g.Load
+    Update-Sparkline $card.Line $card.Holder $Script:DashHistory['GPU'] -Fill $card.Fill -Base $card.Base
+
+    # ---- 内存 ----
+    $r = Get-DashRam
+    $card = $Script:DashCards['RAM']
+    if ($r) {
+        $card.Big.Text = "$($r.Percent)"
+        $card.Unit.Text = '%'
+        $card.Sub.Text = "已用 $($r.UsedGB) GB`r`n共 $($r.TotalGB) GB"
+        Add-DashSample 'RAM' $r.Percent
+        Update-Sparkline $card.Line $card.Holder $Script:DashHistory['RAM'] -Fill $card.Fill -Base $card.Base
+    }
+
+    # ---- 系统盘（变化慢，没有波形图）----
+    $d = Get-DashDisk
+    $card = $Script:DashCards['DISK']
+    if ($d) {
+        $card.Big.Text = "$($d.FreeGB)"
+        $card.Unit.Text = 'GB 可用'
+        $card.Sub.Text = "$($d.Drive) 共 $($d.TotalGB) GB`r`n已用 $($d.UsedPct)%"
+    }
+}
+
+function Start-DashTimer {
+    if ($Script:DashTimer) { $Script:DashTimer.Start(); return }
+    $t = New-Object System.Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromSeconds(1)
+    $t.Add_Tick({ try { Update-DashUI } catch { } })
+    $Script:DashTimer = $t
+    $t.Start()
+}
+
+function Stop-DashTimer {
+    if ($Script:DashTimer) { $Script:DashTimer.Stop() }
+}
+
+# =====================================================================
+#  预设卡片
+# ---------------------------------------------------------------------
+#  以前这里是一排排小方块按钮，字小、挤在一起、没有层次 ——
+#  整个界面最廉价的地方就是它。现在改成卡片：
+#    左侧一道彩色竖条（分组色）+ 标题 + 一行副标题
+#
+#  ★ 为什么不用 emoji 图标 ★
+#    试过，在深色/战术风皮肤下那些彩色小图案很跳，像贴纸。
+#    一道细色条反而更「贵」，而且跟着皮肤走不会脏。
+# =====================================================================
+
+# 预设 Id -> 副标题（卡片第二行）。标题里已经有的信息不重复。
+$Script:PresetSubtitle = @{
+    FPS3   = '★ 主推 · 三个 FPS 都受益'
+    CS2    = '三合一 + CPU 调度'
+    VAL    = '三合一 + ACE 反作弊兼容'
+    DF     = '三合一 + 画面稳定'
+    SAFE   = '只做零风险项，不碰安全设置'
+    AAA    = '黑神话 / 艾尔登法环，要的是不卡顿'
+    MMO    = '梦幻 / 剑网3 / 原神，重点在延迟'
+    OFFICE = '★ 办公上网，只想电脑别这么卡'
+    OLDPC  = '内存小 / 机械盘，避开帮倒忙的项'
+    BROW1  = '零代价 · 只关后台常驻'
+    BROW2  = '推荐 · 再关一批没人用的功能'
+    BROW3  = '有代价 · 同站标签页共用进程'
+}
+
+# 分组 -> 色条颜色（用语义色，跟着皮肤走）
+$Script:PresetGroupColor = @{
+    '按用途选'   = '#55606F'
+    '竞技射击'   = '#556B54'
+    '浏览器瘦身' = '#7A6B45'
+}
+
+function New-PresetCard {
+    <#
+      一张预设卡片。返回 Border，Tag 挂着预设对象。
+      Big=$true 用在概览页（更大、副标题更长）。
+    #>
+    param($Preset, [bool]$Big = $false)
+
+    $accent = $Script:PresetGroupColor["$($Preset.Group)"]
+    if (-not $accent) { $accent = '#55606F' }
+
+    $card = New-Object System.Windows.Controls.Border
+    $card.Background = Get-Brush $Script:CARD_BG
+    $card.BorderBrush = Get-Brush $Script:CARD_BORDER
+    $card.BorderThickness = New-Thick 1
+    $card.CornerRadius = New-Object System.Windows.CornerRadius 10
+    $card.Padding = New-Thick 0
+    $card.Margin = New-Thick 0 0 10 10
+    $card.Cursor = 'Hand'
+    $card.Tag = $Preset
+    # 宽度按「一行正好三张」算。预设区可用内宽实测 714，
+    # 每张右边还有 10 的间距，所以 3 × (W + 10) ≤ 714 → W ≤ 228。
+    # 以前是 196，一行三张只占 618，右边白白空着 96，
+    # 副标题却被截成「黑神话 / 艾尔登法环，要的…」。
+    $card.Width = $(if ($Big) { 228 } else { 226 })
+    Add-CardShadow $card
+
+    $g = New-Object System.Windows.Controls.Grid
+    foreach ($w in 'Auto', '*') {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = if ($w -eq 'Auto') { [System.Windows.GridLength]::Auto } else { New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star) }
+        $g.ColumnDefinitions.Add($cd)
+    }
+
+    # 左侧色条
+    $bar = New-Object System.Windows.Controls.Border
+    $bar.Width = 4
+    $bar.Background = Get-Brush $accent
+    $bar.CornerRadius = New-Object System.Windows.CornerRadius 10, 0, 0, 10
+    [System.Windows.Controls.Grid]::SetColumn($bar, 0)
+    $g.Children.Add($bar) | Out-Null
+
+    $sp = New-Object System.Windows.Controls.StackPanel
+    $sp.Margin = New-Thick 12 $(if ($Big) { 11 } else { 9 }) 12 $(if ($Big) { 11 } else { 9 })
+    [System.Windows.Controls.Grid]::SetColumn($sp, 1)
+
+    $title = New-TextBlock -Text $Preset.Name -Size $(if ($Big) { 14 } else { 13 }) -Bold $true
+    $title.TextTrimming = 'CharacterEllipsis'
+    $sp.Children.Add($title) | Out-Null
+
+    $subText = $Script:PresetSubtitle["$($Preset.Id)"]
+    if ($subText) {
+        $sub = New-TextBlock -Text $subText -Size 11.5 -Color '#66635B'
+        # ★ 标题和副标题都限一行、超出省略 ★
+        #   允许换行的话，名字长一点卡片就变三行高，
+        #   12 张卡叠起来能把整个左栏占满，下面的优化项列表就看不见了。
+        $sub.TextTrimming = 'CharacterEllipsis'
+        $sub.Margin = New-Thick 0 3 0 0
+        $sp.Children.Add($sub) | Out-Null
+    }
+
+    $g.Children.Add($sp) | Out-Null
+    $card.Child = $g
+
+    $card.Add_MouseEnter({ if ($Script:SelectedPresetCard -ne $this) { Start-ColorFade $this $Script:CARD_HOVER } })
+    $card.Add_MouseLeave({ if ($Script:SelectedPresetCard -ne $this) { Start-ColorFade $this $Script:CARD_BG } })
+    $card.Add_MouseLeftButtonUp({
+            Select-PresetCard $this
+            Select-Preset $this.Tag
+        })
+    return $card
+}
+
+$Script:SelectedPresetCard = $null
+$Script:PresetCardList = New-Object System.Collections.ArrayList
+
+function Select-PresetCard {
+    <# 标记当前选中的预设卡片，上一张恢复原样 #>
+    param($Card)
+    foreach ($c in $Script:PresetCardList) {
+        if ($null -eq $c) { continue }
+        try {
+            $c.Background = Get-Brush $Script:CARD_BG
+            $c.BorderBrush = Get-Brush $Script:CARD_BORDER
+            $c.BorderThickness = New-Thick 1
+        } catch { }
+    }
+    $Script:SelectedPresetCard = $Card
+    if ($Card) {
+        try {
+            $Card.Background = Get-Brush $Script:CARD_SEL_BG
+            $Card.BorderBrush = Get-Brush $Script:CARD_SEL_BD
+            $Card.BorderThickness = New-Thick 2
+        } catch { }
+    }
+}
+
 function Build-PresetUI {
     <#
-      顶部那几排预设按钮。按 Group 分行 —— 游戏预设和浏览器瘦身
-      是两回事，混成一堆按钮会让人不知道该点哪个。
-    #>
-    $bar = $Script:UI.PresetBar
-    $bar.Children.Clear()
+      顶部的预设选择区。按分组竖着排，每组一行标题 + 一片卡片。
 
-    # 分组顺序是写死的，不跟着定义顺序走。
+      v4.1 之前这里是一排排小方块按钮 —— 字小、挤成一团、没有层次，
+      是整个界面最廉价的地方。现在换成卡片（见 New-PresetCard）。
+    #>
+    $bar = $Script:UI.PresetBar          # 收起来的那些组
+    $primary = $Script:UI.PresetPrimary  # 常驻露出来的第一组
+    $bar.Children.Clear()
+    $primary.Children.Clear()
+    $Script:PresetCardList = New-Object System.Collections.ArrayList
+    $Script:SelectedPresetCard = $null
+
+    # 分组顺序写死，不跟着定义顺序走。
     #
     # ★ 「按用途选」必须排第一 ★
     #   v3.0 之前第一排是五个 FPS 预设，不玩 FPS 的人打开工具，
-    #   第一眼看到的全是跟自己无关的东西，会直接觉得「这工具不是给我用的」。
-    #   现在第一排是「你主要拿这台电脑干什么」，每个人都能对号入座。
+    #   第一眼全是跟自己无关的东西，会直接觉得「这工具不是给我用的」。
     $groupOrder = @('按用途选', '竞技射击', '浏览器瘦身')
     $groups = @()
     foreach ($g in $groupOrder) {
         if ($Script:Presets | Where-Object { $_.Group -eq $g }) { $groups += $g }
     }
-    # 兜底：万一以后加了新分组忘了写进上面的顺序表，也别让它消失
     foreach ($ps in $Script:Presets) { if ($groups -notcontains $ps.Group) { $groups += $ps.Group } }
 
+    $groupHint = @{
+        '按用途选'   = '点一下自动勾好，先找到你自己属于哪一类'
+        '竞技射击'   = '只玩 FPS 的话用这一排'
+        '浏览器瘦身' = '按代价从小到大三档'
+    }
+
+    $gi = -1
     foreach ($grp in $groups) {
-        # ★ 这里必须用 Grid，不能用横向 StackPanel ★
-        #   横向 StackPanel 会给子元素「无限宽度」去测量，
-        #   里面的 WrapPanel 因此永远认为自己放得下，一行排到天边，
-        #   超出窗口的按钮就被切掉了（名字长的预设只看得见前半截）。
-        #   Grid 的星号列会把「剩余的实际宽度」给 WrapPanel，才会真的换行。
-        $row = New-Object System.Windows.Controls.Grid
-        $row.Margin = New-Thick 0 0 0 2
-        $cd0 = New-Object System.Windows.Controls.ColumnDefinition
-        $cd0.Width = [System.Windows.GridLength]::Auto
-        $cd1 = New-Object System.Windows.Controls.ColumnDefinition
-        $cd1.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
-        $row.ColumnDefinitions.Add($cd0)
-        $row.ColumnDefinitions.Add($cd1)
+        $gi++
+        # 第一组（按用途选）放常驻区，其余放可展开区
+        $slot = if ($gi -eq 0) { $primary } else { $bar }
 
-        $lbl = New-TextBlock -Text $grp -Size 11.5 -Bold $true -Color '#55606F'
-        $lbl.Width = 68
-        $lbl.VerticalAlignment = 'Top'
-        $lbl.Margin = New-Thick 0 7 0 0
-        [System.Windows.Controls.Grid]::SetColumn($lbl, 0)
-        $row.Children.Add($lbl) | Out-Null
-
-        $wrap = New-Object System.Windows.Controls.WrapPanel
-        [System.Windows.Controls.Grid]::SetColumn($wrap, 1)
-        foreach ($ps in ($Script:Presets | Where-Object { $_.Group -eq $grp })) {
-            $b = New-Object System.Windows.Controls.Button
-            $b.Content = $ps.Name
-            $b.Tag = $ps
-            $b.Margin = New-Thick 0 0 8 6
-            # ★ v3.0 起「竞技射击」那组不再用强调色 ★
-            #   以前 FPS3 是深色按钮，整屏最抢眼。但现在没有「唯一主推」了
-            #   —— 主推是哪个，取决于你是什么人。继续把 FPS 按钮做成
-            #   最显眼的那个，等于还在暗示「这工具是给打枪的用的」，
-            #   而那正是这一版要改掉的事。
-            #   浏览器那组保留强调，因为它确实有一个推荐默认档。
-            if ($ps.Id -eq 'BROW2') {
-                try { $b.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
-            }
-            $b.Add_Click({ Select-Preset $this.Tag })
-            $wrap.Children.Add($b) | Out-Null
+        # 组标题
+        $head = New-Object System.Windows.Controls.StackPanel
+        $head.Orientation = 'Horizontal'
+        $head.Margin = New-Thick 2 $(if ($slot.Children.Count -eq 0) { 0 } else { 8 }) 0 7
+        $accent = $Script:PresetGroupColor[$grp]
+        if (-not $accent) { $accent = '#55606F' }
+        $dot = New-Object System.Windows.Controls.Border
+        $dot.Width = 3; $dot.Height = 14
+        $dot.CornerRadius = New-Object System.Windows.CornerRadius 2
+        $dot.Background = Get-Brush $accent
+        $dot.VerticalAlignment = 'Center'
+        $dot.Margin = New-Thick 0 0 8 0
+        $head.Children.Add($dot) | Out-Null
+        $ht = New-TextBlock -Text $grp -Size 13 -Bold $true
+        $ht.VerticalAlignment = 'Center'
+        $head.Children.Add($ht) | Out-Null
+        if ($groupHint[$grp]) {
+            $hh = New-TextBlock -Text $groupHint[$grp] -Size 11.5 -Color '#66635B'
+            $hh.VerticalAlignment = 'Center'
+            $hh.Margin = New-Thick 10 1 0 0
+            $head.Children.Add($hh) | Out-Null
         }
-        $row.Children.Add($wrap) | Out-Null
-        $bar.Children.Add($row) | Out-Null
+        $slot.Children.Add($head) | Out-Null
+
+        # 卡片区。用 WrapPanel 自动换行 ——
+        # 它的父级是竖向 StackPanel，宽度是实际宽度，能正常换行。
+        $wrap = New-Object System.Windows.Controls.WrapPanel
+        foreach ($ps in ($Script:Presets | Where-Object { $_.Group -eq $grp })) {
+            $card = New-PresetCard -Preset $ps
+            [void]$Script:PresetCardList.Add($card)
+            $wrap.Children.Add($card) | Out-Null
+        }
+        $slot.Children.Add($wrap) | Out-Null
+    }
+}
+
+function Set-PresetExpanded {
+    <# 展开 / 收起「竞技射击 + 浏览器瘦身」那两组。「按用途选」永远露着。 #>
+    param([bool]$On)
+    $Script:PresetExpanded = $On
+    $Script:UI.PresetBody.Visibility = if ($On) { 'Visible' } else { 'Collapsed' }
+    $Script:UI.PresetToggle.Text = if ($On) { '收起' } else { '展开' }
+    $Script:UI.PresetMoreHint.Text = if ($On) {
+        '还有这两组 —— 看完点右边收起，好腾地方给下面的列表'
+    } else {
+        '只玩竞技射击、或者想给浏览器瘦身 —— 在这里'
     }
 }
 
@@ -1245,6 +1975,10 @@ function Select-Preset {
     }
     Update-TweakSelCount
     Show-PresetDetail $Preset $n
+    # 选完就把展开的那两组收回去 —— 选择已经做完了，
+    # 接下来要看的是下面那个列表，别再占着地方
+    $Script:LastPresetName = "$($Preset.Name)"
+    if ($Script:PresetExpanded) { Set-PresetExpanded $false }
     Set-Status ("已按「{0}」勾选 {1} 项 —— 确认右边说明后，点下面的「应用选中的优化」" -f $Preset.Name, $n)
 }
 
@@ -1290,7 +2024,7 @@ function Show-PresetDetail {
     foreach ($id in $Preset.Ids) {
         $tw = $Script:Tweaks | Where-Object { $_.Id -eq $id } | Select-Object -First 1
         if (-not $tw) { continue }
-        $t = New-TextBlock -Text ("· " + $tw.Name) -Size 12 -Color '#5E5B54' -Wrap $true
+        $t = New-TextBlock -Text ("· " + $tw.Name) -Size 12 -Color '#565349' -Wrap $true
         $t.Margin = New-Thick 0 0 0 3
         $p.Children.Add($t) | Out-Null
     }
@@ -1336,7 +2070,7 @@ function Show-TweakDetail {
     $wrap = New-Object System.Windows.Controls.WrapPanel
     $wrap.Margin = New-Thick 0 10 0 12
     $rc = Get-RiskColors $Tweak.Risk
-    $wrap.Children.Add((New-Badge -Text $Tweak.Category -Fg '#6E6B63' -Bg '#E8E7E2')) | Out-Null
+    $wrap.Children.Add((New-Badge -Text $Tweak.Category -Fg '#66635B' -Bg '#E8E7E2')) | Out-Null
     $wrap.Children.Add((New-Badge -Text ("风险 " + $Tweak.Risk) -Fg $rc.Fg -Bg $rc.Bg)) | Out-Null
     if ($Tweak.Reboot) { $wrap.Children.Add((New-Badge -Text '需要重启生效' -Fg '#7A6B45' -Bg '#EDE7D9')) | Out-Null }
     if ($Tweak.Recommended) { $wrap.Children.Add((New-Badge -Text '推荐' -Fg '#55606F' -Bg '#E4E7EC')) | Out-Null }
@@ -1412,7 +2146,7 @@ function Show-TweakDetail {
         $hdr.Children.Add($vb) | Out-Null
         $gsp.Children.Add($hdr) | Out-Null
 
-        $gn = New-TextBlock -Text $m.N -Size 12 -Color '#5E5B54' -Wrap $true
+        $gn = New-TextBlock -Text $m.N -Size 12 -Color '#565349' -Wrap $true
         $gn.Margin = New-Thick 0 4 0 0
         $gsp.Children.Add($gn) | Out-Null
 
@@ -1502,7 +2236,7 @@ function Build-TweakUI {
         $arrow.Margin = New-Thick 0 1 6 0
         $hrow.Children.Add($arrow) | Out-Null
         $hrow.Children.Add((New-TextBlock -Text $cat -Size 14 -Bold $true -Color '#55606F')) | Out-Null
-        $cnt = New-TextBlock -Text '' -Size 11.5 -Color '#6E6B63'
+        $cnt = New-TextBlock -Text '' -Size 11.5 -Color '#66635B'
         $cnt.Margin = New-Thick 8 2 0 0
         $hrow.Children.Add($cnt) | Out-Null
         $hb.Child = $hrow
@@ -1540,7 +2274,7 @@ function Build-TweakUI {
             $nameTb = New-TextBlock -Text $tw.Name -Size 13.5 -Bold $true
             $nameTb.TextWrapping = 'Wrap'
             $sp.Children.Add($nameTb) | Out-Null
-            $meta = New-TextBlock -Text ("风险 {0}  ·  {1}" -f $tw.Risk, $tw.Effect) -Size 11.5 -Color '#6E6B63'
+            $meta = New-TextBlock -Text ("风险 {0}  ·  {1}" -f $tw.Risk, $tw.Effect) -Size 11.5 -Color '#66635B'
             $meta.TextWrapping = 'Wrap'
             $meta.Margin = New-Thick 0 3 0 0
             $sp.Children.Add($meta) | Out-Null
@@ -1555,7 +2289,7 @@ function Build-TweakUI {
             $pill.Padding = New-Thick 9 3 9 4
             $pill.Margin = New-Thick 10 0 0 0
             $pill.VerticalAlignment = 'Center'
-            $badge = New-TextBlock -Text '检测中' -Size 11.5 -Color '#6E6B63'
+            $badge = New-TextBlock -Text '检测中' -Size 11.5 -Color '#66635B'
             $badge.HorizontalAlignment = 'Center'
             $pill.Child = $badge
             [System.Windows.Controls.Grid]::SetColumn($pill, 2)
@@ -1580,7 +2314,7 @@ function Update-TweakStates {
         $available = Test-TweakAvailable $tw
         if (-not $available) {
             $row.Badge.Text = '不适用'
-            $row.Badge.Foreground = Get-Brush '#6E6B63'
+            $row.Badge.Foreground = Get-Brush '#66635B'
             $row.Pill.Background = Get-Brush '#EAE9E3'
             $row.Check.IsEnabled = $false
             $row.Check.IsChecked = $false
@@ -1596,7 +2330,7 @@ function Update-TweakStates {
             $row.Pill.Background = Get-Brush '#DCE8DA'
         } else {
             $row.Badge.Text = '未优化'
-            $row.Badge.Foreground = Get-Brush '#6E6B63'
+            $row.Badge.Foreground = Get-Brush '#66635B'
             $row.Pill.Background = Get-Brush '#EAE9E3'
         }
         if ($PreselectRecommended) {
@@ -1704,7 +2438,7 @@ function Show-CleanDetail {
     Start-FadeSlideIn $p   # 换内容时淡入 + 轻微上移，避免「啪」地一下跳变
     if ($Item -and $Script:CleanRows[$Item.Id]) { Select-Card $Script:CleanRows[$Item.Id].Card } else { Select-Card $null }
     if (-not $Item) {
-        $p.Children.Add((New-TextBlock -Text "点左边任意一项，这里会说明它清的是什么、安不安全。`r`n`r`n建议先点「扫描可清理的垃圾」看看各项能清多少，再决定。" -Color '#6E6B63' -Wrap $true)) | Out-Null
+        $p.Children.Add((New-TextBlock -Text "点左边任意一项，这里会说明它清的是什么、安不安全。`r`n`r`n建议先点「扫描可清理的垃圾」看看各项能清多少，再决定。" -Color '#66635B' -Wrap $true)) | Out-Null
         return
     }
     $p.Children.Add((New-TextBlock -Text $Item.Name -Size 17 -Bold $true -Wrap $true)) | Out-Null
@@ -1768,7 +2502,7 @@ function Build-CleanUI {
         [System.Windows.Controls.Grid]::SetColumn($sp, 1)
         $g.Children.Add($sp) | Out-Null
 
-        $size = New-TextBlock -Text '—' -Size 13 -Color '#6E6B63' -Bold $true
+        $size = New-TextBlock -Text '—' -Size 13 -Color '#66635B' -Bold $true
         $size.VerticalAlignment = 'Center'
         $size.Margin = New-Thick 10 0 0 0
         [System.Windows.Controls.Grid]::SetColumn($size, 2)
@@ -1792,10 +2526,10 @@ function Invoke-ScanJunk {
         $sz = Measure-CleanupItem $it
         if ($sz -lt 0) {
             $row.Size.Text = '执行后才知道'
-            $row.Size.Foreground = Get-Brush '#6E6B63'
+            $row.Size.Foreground = Get-Brush '#66635B'
         } elseif ($sz -eq 0) {
             $row.Size.Text = '无'
-            $row.Size.Foreground = Get-Brush '#6E6B63'
+            $row.Size.Foreground = Get-Brush '#66635B'
         } else {
             $row.Size.Text = Format-Size $sz
             $row.Size.Foreground = Get-Brush '#7A6B45'
@@ -1916,12 +2650,12 @@ function Build-ThemeUI {
             $head.Children.Add($bd) | Out-Null
         }
         if (Test-ThemeIsDark $name) {
-            $dk = New-Badge -Text '深色' -Fg '#6E6B63' -Bg '#E8E7E2'
+            $dk = New-Badge -Text '深色' -Fg '#66635B' -Bg '#E8E7E2'
             $dk.Margin = New-Thick 4 0 0 0
             $head.Children.Add($dk) | Out-Null
         }
         $sp.Children.Add($head) | Out-Null
-        $sp.Children.Add((New-TextBlock -Text $th.Desc -Size 12 -Color '#6E6B63' -Wrap $true)) | Out-Null
+        $sp.Children.Add((New-TextBlock -Text $th.Desc -Size 12 -Color '#66635B' -Wrap $true)) | Out-Null
         $sp.Children.Add((New-ThemeSwatchRow -Colors $th.Swatch)) | Out-Null
 
         $card.Child = $sp
@@ -1941,7 +2675,7 @@ function Build-ThemeUI {
     $ic.Padding = New-Thick 14 12 14 14
     $isp = New-Object System.Windows.Controls.StackPanel
 
-    $tip = New-TextBlock -Size 12 -Color '#6E6B63' -Wrap $true -Text (
+    $tip = New-TextBlock -Size 12 -Color '#66635B' -Wrap $true -Text (
         '选一张图铺在窗口背景上。图片会被复制到工具自己的文件夹里保存，' +
         '所以选完之后原图删掉、U 盘拔掉都不影响。' + "`r`n" +
         '建议选颜色比较淡、内容不太花的图 —— 太花的图会让上面的字看不清。' +
@@ -1984,7 +2718,7 @@ function Build-ThemeUI {
     #   然后在下一行 .Margin 上炸掉。先算到变量里再传。
     $nowText = '当前没有使用背景图'
     if ($cur.Image) { $nowText = "当前背景图：$($cur.Image)" }
-    $now = New-TextBlock -Size 11.5 -Color '#6E6B63' -Wrap $true -Text $nowText
+    $now = New-TextBlock -Size 11.5 -Color '#66635B' -Wrap $true -Text $nowText
     $now.Margin = New-Thick 0 10 0 0
     $isp.Children.Add($now) | Out-Null
 
@@ -2013,7 +2747,7 @@ function Build-ThemeUI {
         })
     $isp.Children.Add($sld) | Out-Null
 
-    $on = New-TextBlock -Size 11.5 -Color '#6E6B63' -Wrap $true -Text (
+    $on = New-TextBlock -Size 11.5 -Color '#66635B' -Wrap $true -Text (
         '只在使用背景图时有效。100% = 完全挡住背景图（和纯色一样），拉低才能看见图。')
     $on.Margin = New-Thick 0 6 0 0
     $isp.Children.Add($on) | Out-Null
@@ -2046,7 +2780,7 @@ function Build-ThemeUI {
         })
     $asp.Children.Add($acb) | Out-Null
 
-    $atip = New-TextBlock -Size 12 -Color '#6E6B63' -Wrap $true -Text (
+    $atip = New-TextBlock -Size 12 -Color '#66635B' -Wrap $true -Text (
         '动画只用透明度和位移两种效果，走显卡合成，不会触发页面重排 —— ' +
         '正常机器上开销可以忽略。' + "`r`n`r`n" +
         '但这个工具本来就是给配置吃紧的机器用的：如果你的机器点哪都要等一下，' +
@@ -2116,12 +2850,12 @@ function Build-AppxUI {
         if ($Script:AppxFailReason -eq 'pwsh') {
             $why = '原因：当前是用 PowerShell 7（pwsh）运行的，' +
             '微软的 Appx 模块在 PowerShell 7 上不支持，读不到应用列表。' + "`r`n`r`n" +
-            '解决办法：关掉这个窗口，改成双击「一键启动.bat」——' +
+            '解决办法：关掉这个窗口，改成双击「电脑调优助手.exe」——' +
             '它用的是系统自带的 PowerShell 5.1，这一页就正常了。'
         } elseif ($Script:AppxFailReason) {
             $why = "原因：$Script:AppxFailReason"
         }
-        $panel.Children.Add((New-TextBlock -Wrap $true -Color '#6E6B63' -Text (
+        $panel.Children.Add((New-TextBlock -Wrap $true -Color '#66635B' -Text (
                     '没读到自带应用列表。' + "`r`n`r`n" + $why))) | Out-Null
         Set-Status '就绪'
         return
@@ -2174,13 +2908,13 @@ function Build-AppxUI {
         $bd.Margin = New-Thick 8 0 0 0
         $head.Children.Add($bd) | Out-Null
         if ($it.Size -and $it.Size -ne '—') {
-            $sz = New-Badge -Text $it.Size -Fg '#6E6B63' -Bg '#E8E7E2'
+            $sz = New-Badge -Text $it.Size -Fg '#66635B' -Bg '#E8E7E2'
             $sz.Margin = New-Thick 4 0 0 0
             $head.Children.Add($sz) | Out-Null
         }
         $sp.Children.Add($head) | Out-Null
 
-        $tx = New-TextBlock -Text (Format-Reflow $it.Text) -Size 12 -Color '#6E6B63' -Wrap $true
+        $tx = New-TextBlock -Text (Format-Reflow $it.Text) -Size 12 -Color '#66635B' -Wrap $true
         $tx.Margin = New-Thick 0 5 0 0
         $sp.Children.Add($tx) | Out-Null
 
@@ -2237,7 +2971,7 @@ function Build-StartupUI {
     Set-Status '正在读取开机启动项…'
     $items = @(Get-StartupItems)
     if ($items.Count -eq 0) {
-        $panel.Children.Add((New-TextBlock -Text '没有发现任何开机启动项，很干净。' -Color '#6E6B63')) | Out-Null
+        $panel.Children.Add((New-TextBlock -Text '没有发现任何开机启动项，很干净。' -Color '#66635B')) | Out-Null
         Set-Status '就绪'
         return
     }
@@ -2285,16 +3019,16 @@ function Build-StartupUI {
         $bd = New-Badge -Text $it.AdviceLevel -Fg $lvColor.Fg -Bg $lvColor.Bg
         $bd.Margin = New-Thick 8 0 0 0
         $head.Children.Add($bd) | Out-Null
-        $sc = New-Badge -Text $it.Scope -Fg '#6E6B63' -Bg '#E8E7E2'
+        $sc = New-Badge -Text $it.Scope -Fg '#66635B' -Bg '#E8E7E2'
         $sc.Margin = New-Thick 4 0 0 0
         $head.Children.Add($sc) | Out-Null
         $sp.Children.Add($head) | Out-Null
 
-        $adv = New-TextBlock -Text $it.AdviceText -Size 12 -Color '#6E6B63' -Wrap $true
+        $adv = New-TextBlock -Text $it.AdviceText -Size 12 -Color '#66635B' -Wrap $true
         $adv.Margin = New-Thick 0 5 0 0
         $sp.Children.Add($adv) | Out-Null
 
-        $cmd = New-TextBlock -Text $it.Command -Size 11 -Color '#6E6B63' -Wrap $true
+        $cmd = New-TextBlock -Text $it.Command -Size 11 -Color '#66635B' -Wrap $true
         $cmd.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($cmd) | Out-Null
 
@@ -2323,7 +3057,7 @@ function New-MaintainCard {
     $sp = New-Object System.Windows.Controls.StackPanel
     $sp.Children.Add((New-TextBlock -Text $Title -Size 14.5 -Bold $true)) | Out-Null
     if ($Desc) {
-        $d = New-TextBlock -Text $Desc -Size 12 -Color '#6E6B63' -Wrap $true
+        $d = New-TextBlock -Text $Desc -Size 12 -Color '#66635B' -Wrap $true
         $d.Margin = New-Thick 0 6 0 0
         $sp.Children.Add($d) | Out-Null
     }
@@ -2461,7 +3195,7 @@ function Export-DiagnosticReport {
     Set-Status '正在生成诊断报告…'
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('===== 电脑调优助手 · 诊断报告 =====')
-    [void]$sb.AppendLine(('工具版本：v{0} {1}（{2}）' -f $Script:AppVersion, $Script:AppVersionName, $Script:AppVersionDate))
+    [void]$sb.AppendLine(('工具版本：v{0}（{1}）' -f $Script:AppVersion, $Script:AppVersionDate))
     [void]$sb.AppendLine(('生成时间：{0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')))
     [void]$sb.AppendLine()
     [void]$sb.AppendLine('---------- 硬件信息 ----------')
@@ -2519,7 +3253,10 @@ function Build-MaintainUI {
     $c1 = New-MaintainCard -Title '一键日常维护' -Desc '平时每个月点一次就行：清垃圾 + 刷新 DNS + 优化系统盘，一条龙。不会改任何性能设置。'
     $bAll = New-ToolButton -Text '开始一键维护' -OnClick { Invoke-DailyMaintenance }
     try { $bAll.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
-    $bAll.Padding = New-Thick 22 10 22 10
+    # ★ 这里以前有一句 $bAll.Padding = New-Thick 22 10 22 10，别加回去 ★
+    #   那是给旧按钮样式调的。HandyControl 的按钮模板自己算高度，
+    #   再塞 10px 上下内边距，内容就超出按钮实际高度被**竖着切掉**，
+    #   「开始一键维护」会显示成上半截没了的样子。
     $bAll.HorizontalAlignment = 'Left'
     $c1.Body.Children.Add($bAll) | Out-Null
     $p.Children.Add($c1.Card) | Out-Null
@@ -2550,7 +3287,7 @@ function Build-MaintainUI {
             $wrap15.Children.Add($b) | Out-Null
         }
         $c15.Body.Children.Add($wrap15) | Out-Null
-        $t15 = New-TextBlock -Size 11.5 -Color '#6E6B63' -Wrap $true -Text '切换后会弹一个 15 秒倒计时确认框。万一切完黑屏或花屏，什么都别动，倒计时结束会自动切回原来的设置 —— 和 Windows 自己改分辨率时的行为一样。'
+        $t15 = New-TextBlock -Size 11.5 -Color '#66635B' -Wrap $true -Text '切换后会弹一个 15 秒倒计时确认框。万一切完黑屏或花屏，什么都别动，倒计时结束会自动切回原来的设置 —— 和 Windows 自己改分辨率时的行为一样。'
         $t15.Margin = New-Thick 0 8 0 0
         $c15.Body.Children.Add($t15) | Out-Null
         $p.Children.Add($c15.Card) | Out-Null
@@ -2577,7 +3314,7 @@ function Build-MaintainUI {
                 Start-Process 'ms-settings:appsfeatures' -ErrorAction SilentlyContinue
             })) | Out-Null
     $c2.Body.Children.Add($wrap2) | Out-Null
-    $tip2 = New-TextBlock -Size 11.5 -Color '#6E6B63' -Wrap $true -Text '顺带一提：游戏里画面卡死、显卡驱动假死的时候，按 Win + Ctrl + Shift + B 可以直接重启显卡驱动，屏幕会黑一下然后恢复，不用重启电脑。这是 Windows 自带的快捷键。'
+    $tip2 = New-TextBlock -Size 11.5 -Color '#66635B' -Wrap $true -Text '顺带一提：游戏里画面卡死、显卡驱动假死的时候，按 Win + Ctrl + Shift + B 可以直接重启显卡驱动，屏幕会黑一下然后恢复，不用重启电脑。这是 Windows 自带的快捷键。'
     $tip2.Margin = New-Thick 0 8 0 0
     $c2.Body.Children.Add($tip2) | Out-Null
     $p.Children.Add($c2.Card) | Out-Null
@@ -2620,7 +3357,7 @@ function Build-MaintainUI {
         if ($null -ne $d.Temp -and $d.Temp -gt 0) { $extra += "温度 $($d.Temp)°C" }
         if ($null -ne $d.Hours) { $extra += "已通电 $($d.Hours) 小时" }
         if ($extra.Count -gt 0) {
-            $e = New-TextBlock -Text ($extra -join '   ·   ') -Size 11.5 -Color '#6E6B63'
+            $e = New-TextBlock -Text ($extra -join '   ·   ') -Size 11.5 -Color '#66635B'
             $e.Margin = New-Thick 0 3 0 0
             $sp.Children.Add($e) | Out-Null
         }
@@ -2643,7 +3380,7 @@ function Build-MaintainUI {
                 while ($body.Children.Count -gt 1) { $body.Children.RemoveAt(1) }
                 $rows = @(Get-ChatAppUsage)
                 if ($rows.Count -eq 0) {
-                    $body.Children.Add((New-TextBlock -Text '没有找到微信或 QQ 的数据目录（可能没装，或者装在非默认位置）。' -Size 12 -Color '#6E6B63' -Wrap $true)) | Out-Null
+                    $body.Children.Add((New-TextBlock -Text '没有找到微信或 QQ 的数据目录（可能没装，或者装在非默认位置）。' -Size 12 -Color '#66635B' -Wrap $true)) | Out-Null
                 } else {
                     foreach ($r in $rows) {
                         $t = New-TextBlock -Text ("{0}：{1}`r`n{2}" -f $r.App, (Format-Size $r.Size), $r.Path) -Size 12 -Color '#4A4842' -Wrap $true
@@ -2709,12 +3446,12 @@ function Invoke-BigFileScan {
 
     $panel.Children.Clear()
     if ($files.Count -eq 0) {
-        $panel.Children.Add((New-TextBlock -Text ("{0} 里没有找到超过 300MB 的文件。" -f $Root) -Size 12 -Color '#6E6B63' -Wrap $true)) | Out-Null
+        $panel.Children.Add((New-TextBlock -Text ("{0} 里没有找到超过 300MB 的文件。" -f $Root) -Size 12 -Color '#66635B' -Wrap $true)) | Out-Null
         Set-Status '扫描完成'
         return
     }
 
-    $hint = New-TextBlock -Size 11.5 -Color '#6E6B63' -Wrap $true -Text '点任意一项会在资源管理器里定位到它。删之前想清楚：大文件里有很多是系统必需的（pagefile.sys 虚拟内存、hiberfil.sys 休眠文件、install.wim 等），别乱删。游戏安装包、下载的视频、旧的备份文件才是该清的。'
+    $hint = New-TextBlock -Size 11.5 -Color '#66635B' -Wrap $true -Text '点任意一项会在资源管理器里定位到它。删之前想清楚：大文件里有很多是系统必需的（pagefile.sys 虚拟内存、hiberfil.sys 休眠文件、install.wim 等），别乱删。游戏安装包、下载的视频、旧的备份文件才是该清的。'
     $hint.Margin = New-Thick 0 0 0 10
     $panel.Children.Add($hint) | Out-Null
 
@@ -2731,7 +3468,7 @@ function Invoke-BigFileScan {
             })
         $sp = New-Object System.Windows.Controls.StackPanel
         $sp.Children.Add((New-TextBlock -Text (Format-Size $f.Size) -Size 12.5 -Bold $true -Color '#7A6B45')) | Out-Null
-        $t = New-TextBlock -Text $f.Path -Size 11.5 -Color '#5E5B54' -Wrap $true
+        $t = New-TextBlock -Text $f.Path -Size 11.5 -Color '#565349' -Wrap $true
         $t.Margin = New-Thick 0 2 0 0
         $sp.Children.Add($t) | Out-Null
         $b.Child = $sp
@@ -2751,9 +3488,9 @@ function Get-LevelColor {
     switch ($L) {
         '高危'     { return '#8A5750' }
         '可疑'     { return '#7A6B45' }
-        '无用'     { return '#6E6B63' }
+        '无用'     { return '#66635B' }
         '已知打扰' { return '#55606F' }
-        default    { return '#6E6B63' }
+        default    { return '#66635B' }
     }
 }
 
@@ -2796,7 +3533,7 @@ function Show-Findings {
         $card = New-Object System.Windows.Controls.Border
         $card.Background = Get-Brush '#F6F5F2'
         # 会弹黑框的那条用暖橙光原色描边（纯装饰，不承载文字，可以用最亮的一档）
-        $card.BorderBrush = Get-Brush $(if ($f.Flash) { '#A08161' } else { $col })
+        $card.BorderBrush = Get-Brush $(if ($f.Flash) { '#89694F' } else { $col })
         $card.BorderThickness = New-Thick 3 0 0 0
         $card.CornerRadius = New-Object System.Windows.CornerRadius 6
         $card.Padding = New-Thick 14 11 14 12
@@ -2805,9 +3542,9 @@ function Show-Findings {
         $sp = New-Object System.Windows.Controls.StackPanel
 
         $hdr = New-Object System.Windows.Controls.WrapPanel
-        if ($f.Flash) { $hdr.Children.Add((New-Badge -Text '⚡ 会弹黑框' -Fg '#89694F' -Bg '#EDE2D6')) | Out-Null }
+        if ($f.Flash) { $hdr.Children.Add((New-Badge -Text '⚡ 会弹黑框' -Fg '#89694F' -Bg '#EDE7D9')) | Out-Null }
         $hdr.Children.Add((New-Badge -Text $f.Level -Fg $col -Bg (Get-TintBg $col))) | Out-Null
-        $hdr.Children.Add((New-Badge -Text $f.Kind -Fg '#6E6B63' -Bg '#E8E7E2')) | Out-Null
+        $hdr.Children.Add((New-Badge -Text $f.Kind -Fg '#66635B' -Bg '#E8E7E2')) | Out-Null
         $sp.Children.Add($hdr) | Out-Null
 
         $nm = New-TextBlock -Text $f.Name -Size 13.5 -Bold $true -Wrap $true
@@ -2815,7 +3552,7 @@ function Show-Findings {
         $sp.Children.Add($nm) | Out-Null
 
         if ($f.Extra) {
-            $ex = New-TextBlock -Text $f.Extra -Size 11.5 -Color '#6E6B63' -Wrap $true
+            $ex = New-TextBlock -Text $f.Extra -Size 11.5 -Color '#66635B' -Wrap $true
             $ex.Margin = New-Thick 0 3 0 0
             $sp.Children.Add($ex) | Out-Null
         }
@@ -2826,7 +3563,7 @@ function Show-Findings {
             $cb.CornerRadius = New-Object System.Windows.CornerRadius 4
             $cb.Padding = New-Thick 9 6 9 6
             $cb.Margin = New-Thick 0 7 0 0
-            $ct = New-TextBlock -Text $f.Command -Size 11 -Color '#5E5B54' -Wrap $true
+            $ct = New-TextBlock -Text $f.Command -Size 11 -Color '#565349' -Wrap $true
             $ct.FontFamily = New-Object System.Windows.Media.FontFamily 'Consolas, Microsoft YaHei UI'
             $cb.Child = $ct
             $sp.Children.Add($cb) | Out-Null
@@ -2870,7 +3607,7 @@ function Show-Findings {
                 })
             $sp.Children.Add($cbx) | Out-Null
         } else {
-            $t = New-TextBlock -Text '这一项工具不会自动改动 —— 涉及系统核心设置，误改会开不了机。请先杀毒，确认之后手动处理。' -Size 11.5 -Color '#6E6B63' -Wrap $true
+            $t = New-TextBlock -Text '这一项工具不会自动改动 —— 涉及系统核心设置，误改会开不了机。请先杀毒，确认之后手动处理。' -Size 11.5 -Color '#66635B' -Wrap $true
             $t.Margin = New-Thick 0 10 0 0
             $sp.Children.Add($t) | Out-Null
         }
@@ -2888,7 +3625,7 @@ function New-ProcRow {
     <# 一条进程记录的卡片。会弹黑框的用醒目颜色标出来。 #>
     param([string]$Head, [string]$Sub, [string]$Cmd, [bool]$Hot)
     $b = New-Object System.Windows.Controls.Border
-    $b.Background = Get-Brush $(if ($Hot) { '#F0E7DC' } else { '#FBFAF8' })
+    $b.Background = Get-Brush $(if ($Hot) { '#F0EADC' } else { '#FBFAF8' })
     $b.BorderBrush = Get-Brush $(if ($Hot) { '#7A6B45' } else { '#DDDBD5' })
     $b.BorderThickness = New-Thick $(if ($Hot) { 3 } else { 0 }) 0 0 0
     $b.CornerRadius = New-Object System.Windows.CornerRadius 4
@@ -2897,12 +3634,12 @@ function New-ProcRow {
     $sp = New-Object System.Windows.Controls.StackPanel
     $sp.Children.Add((New-TextBlock -Text $Head -Size 12 -Bold $true -Color $(if ($Hot) { '#89694F' } else { '#4A4842' }) -Wrap $true)) | Out-Null
     if ($Sub) {
-        $t = New-TextBlock -Text $Sub -Size 11.5 -Color '#6E6B63' -Wrap $true
+        $t = New-TextBlock -Text $Sub -Size 11.5 -Color '#66635B' -Wrap $true
         $t.Margin = New-Thick 0 3 0 0
         $sp.Children.Add($t) | Out-Null
     }
     if ($Cmd) {
-        $t2 = New-TextBlock -Text $Cmd -Size 10.5 -Color '#6E6B63' -Wrap $true
+        $t2 = New-TextBlock -Text $Cmd -Size 10.5 -Color '#66635B' -Wrap $true
         $t2.Margin = New-Thick 0 3 0 0
         $sp.Children.Add($t2) | Out-Null
     }
@@ -2912,11 +3649,11 @@ function New-ProcRow {
 
 function Start-LiveWatch {
     if (-not (Start-ProcWatch)) {
-        Show-Msg -Text "实时监控启动失败。`r`n`r`n这个功能需要管理员权限（正常双击「一键启动.bat」并在 UAC 弹窗点「是」即可）。`r`n`r`n如果还是不行，改用下面的「持续记录」，效果一样，而且关掉工具也在记。" | Out-Null
+        Show-Msg -Text "实时监控启动失败。`r`n`r`n这个功能需要管理员权限（正常双击「电脑调优助手.exe」并在 UAC 弹窗点「是」即可）。`r`n`r`n如果还是不行，改用下面的「持续记录」，效果一样，而且关掉工具也在记。" | Out-Null
         return
     }
     $Script:UI.RecentRunPanel.Children.Clear()
-    $Script:UI.RecentRunPanel.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color '#6E6B63' -Text '监控已启动。现在正常用电脑，等黑框出现——出现的瞬间这里就会多出几条记录。带橙色标记的就是控制台进程（也就是黑框本身），看它的「父进程」是谁，那就是元凶。')) | Out-Null
+    $Script:UI.RecentRunPanel.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color '#66635B' -Text '监控已启动。现在正常用电脑，等黑框出现——出现的瞬间这里就会多出几条记录。带橙色标记的就是控制台进程（也就是黑框本身），看它的「父进程」是谁，那就是元凶。')) | Out-Null
     $Script:UI.BtnWatchStart.IsEnabled = $false
     $Script:UI.BtnWatchStop.IsEnabled = $true
 
@@ -2974,11 +3711,11 @@ function Show-ProcLog {
     $rows = @(Get-RecentProcessCreations -Minutes 180 -ConsoleOnly $true)
     Set-Busy $false
     if ($rows.Count -eq 0) {
-        $p.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color '#6E6B63' -Text '最近 3 小时没有记录到控制台进程。如果刚开启记录，要等下次弹窗之后再来看。')) | Out-Null
+        $p.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color '#66635B' -Text '最近 3 小时没有记录到控制台进程。如果刚开启记录，要等下次弹窗之后再来看。')) | Out-Null
         Set-Status '就绪'
         return
     }
-    $h = New-TextBlock -Wrap $true -Size 11.5 -Color '#6E6B63' -Text '最近 3 小时内创建过的控制台进程（也就是黑框），按次数从多到少排。次数特别多的那条，基本就是你看到的规律性弹窗。重点看「父进程」——那是真正开出黑框的程序。'
+    $h = New-TextBlock -Wrap $true -Size 11.5 -Color '#66635B' -Text '最近 3 小时内创建过的控制台进程（也就是黑框），按次数从多到少排。次数特别多的那条，基本就是你看到的规律性弹窗。重点看「父进程」——那是真正开出黑框的程序。'
     $h.Margin = New-Thick 0 0 0 10
     $p.Children.Add($h) | Out-Null
     foreach ($r in $rows) {
@@ -3012,11 +3749,11 @@ function Build-RecentRuns {
 
     $runs = @(Get-RecentTaskRuns -Hours 24)
     if ($runs.Count -eq 0) {
-        $p.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color '#6E6B63' -Text '过去 24 小时没有任务运行记录。如果刚刚才开启记录，那要等下次任务运行才会有内容。')) | Out-Null
+        $p.Children.Add((New-TextBlock -Wrap $true -Size 12 -Color '#66635B' -Text '过去 24 小时没有任务运行记录。如果刚刚才开启记录，那要等下次任务运行才会有内容。')) | Out-Null
         return
     }
 
-    $h = New-TextBlock -Wrap $true -Size 11.5 -Color '#6E6B63' -Text '按最近运行时间排序。跑得特别频繁（次数很多）的那几条，最可能就是你看到的规律性弹窗。'
+    $h = New-TextBlock -Wrap $true -Size 11.5 -Color '#66635B' -Text '按最近运行时间排序。跑得特别频繁（次数很多）的那几条，最可能就是你看到的规律性弹窗。'
     $h.Margin = New-Thick 0 0 0 10
     $p.Children.Add($h) | Out-Null
 
@@ -3029,11 +3766,11 @@ function Build-RecentRuns {
         $sp = New-Object System.Windows.Controls.StackPanel
         $col = if ($r.Count -ge 10) { '#7A6B45' } else { '#4A4842' }
         $sp.Children.Add((New-TextBlock -Text ("{0}   ·   24 小时内跑了 {1} 次" -f $r.Last.ToString('MM-dd HH:mm:ss'), $r.Count) -Size 12 -Bold $true -Color $col)) | Out-Null
-        $t1 = New-TextBlock -Text $r.TaskName -Size 11.5 -Color '#5E5B54' -Wrap $true
+        $t1 = New-TextBlock -Text $r.TaskName -Size 11.5 -Color '#565349' -Wrap $true
         $t1.Margin = New-Thick 0 3 0 0
         $sp.Children.Add($t1) | Out-Null
         if ($r.Exe) {
-            $t2 = New-TextBlock -Text $r.Exe -Size 10.5 -Color '#6E6B63' -Wrap $true
+            $t2 = New-TextBlock -Text $r.Exe -Size 10.5 -Color '#66635B' -Wrap $true
             $t2.Margin = New-Thick 0 2 0 0
             $sp.Children.Add($t2) | Out-Null
         }
@@ -3061,7 +3798,7 @@ function Build-HealthUI {
     foreach ($row in (Get-SystemReport)) {
         $k = New-TextBlock -Text $row.Key -Size 11.5 -Color '#55606F'
         $info.Children.Add($k) | Out-Null
-        $v = New-TextBlock -Text $row.Value -Size 12.5 -Color '#3C3A34' -Wrap $true
+        $v = New-TextBlock -Text $row.Value -Size 12.5 -Color '#2B2A26' -Wrap $true
         $v.Margin = New-Thick 0 1 0 11
         $info.Children.Add($v) | Out-Null
         [void]$sb.AppendLine("$($row.Key)：$($row.Value)")
@@ -3139,7 +3876,7 @@ function Build-FpsDiagUI {
         $c = switch ($d.Level) {
             '瓶颈'   { @{ Line = '#8A5750'; Bg = '#EFE3E0' } }
             '待优化' { @{ Line = '#7A6B45'; Bg = '#F0EADC' } }
-            '信息'   { @{ Line = '#55606F'; Bg = '#E7EAEF' } }
+            '信息'   { @{ Line = '#55606F'; Bg = '#E4E7EC' } }
             default  { @{ Line = '#556B54'; Bg = '#E7EBE4' } }
         }
         $card = New-Object System.Windows.Controls.Border
@@ -3365,18 +4102,24 @@ try {
     $savedTheme = Get-ThemeSetting
     # 动画开关和皮肤存在同一份配置里，启动时一起读回来
     $Script:AnimEnabled = [bool]$savedTheme.Anim
+    # 系统级「减弱动效」优先于用户开关 —— 会关这个的人多半有晕动症或机器太慢
+    $Script:SystemAnimOff = Test-SystemReducedMotion
+    if ($Script:SystemAnimOff) { Write-Log '检测到系统已关闭「显示动画」，界面动效自动减弱（保留淡入，去掉位移）' '信息' }
     Set-AppTheme -Name $savedTheme.Name -Image $savedTheme.Image -Opacity $savedTheme.Opacity
     Apply-PanelOpacity
 } catch { Write-Log "套用皮肤失败，用默认配色：$($_.Exception.Message)" '警告' }
 
 $Script:Window.Title     = "电脑调优助手 v$Script:AppVersion"
 $Script:UI.VerBadge.Text = "v$Script:AppVersion"
-$Script:UI.SubTitle.Text = "v$Script:AppVersion $Script:AppVersionName  ·  管理员模式  ·  $osCaption  ·  改动全部可还原"
+$Script:UI.SubTitle.Text = "v$Script:AppVersion  ·  管理员模式  ·  $osCaption  ·  改动全部可还原"
 
 Write-Log '=== 电脑调优助手已启动（管理员模式）===' '信息'
 
 Build-TweakUI
 Build-PresetUI
+$Script:PresetExpanded = $false
+$Script:LastPresetName = ''
+$Script:UI.PresetHeader.Add_MouseLeftButtonUp({ Set-PresetExpanded (-not $Script:PresetExpanded) })
 Build-CleanUI
 Update-CleanSelCount
 Update-TweakStates -PreselectRecommended $true
@@ -3388,9 +4131,16 @@ $Script:Window.Add_ContentRendered({
         Build-BigFileDrives
         Build-RecentRuns
         Build-ThemeUI
+        # 概览页：先建壳子再开硬件监控。
+        # Initialize-Dash 要枚举全部硬件，实测约 3 秒，所以放在
+        # 窗口已经显示出来之后做 —— 不然用户会觉得「双击了半天不出来」。
+        Build-DashUI
+        Initialize-Dash
+        Update-DashScore
+        Start-DashTimer
         if (Test-ProcAuditEnabled) { $Script:UI.BtnProcAudit.Content = '关闭持续记录' }
         Build-HealthUI
-        Set-Status '就绪 —— 先看「系统体检」页，再回到「性能优化」页，在「按用途选」里点你属于的那一类'
+        Set-Status '就绪 —— 概览页有实时硬件状态；要动手就去「性能优化」页，在「按用途选」里点你属于的那一类'
     })
 
 # ---------------------------------------------------------------------
@@ -3412,6 +4162,9 @@ $Script:UI.Tabs.Add_SelectionChanged({
         # 切页签时让新页面淡入，比瞬间闪过去舒服
         try { Start-FadeSlideIn $Script:UI.Tabs.SelectedContent -Ms 160 -SlideY 6 } catch { }
         $header = "$($Script:UI.Tabs.SelectedItem.Header)"
+        # 只有停在概览页才轮询传感器，切走立刻停 ——
+        # 全量刷新一次 100ms，一直跑等于工具自己变成最大的后台负担
+        if ($header -eq '概览') { Start-DashTimer } else { Stop-DashTimer }
         if ($header -eq '自带软件' -and -not $Script:AppxBuilt) {
             $Script:AppxBuilt = $true
             Build-AppxUI
@@ -3453,4 +4206,5 @@ try {
 } catch { }
 
 $Script:Window.Add_Closed({ try { if ($Script:WatchTimer) { $Script:WatchTimer.Stop() }; Stop-ProcWatch } catch { } })
+$Script:Window.Add_Closed({ try { Stop-DashTimer; Close-Dash } catch { } })
 $Script:Window.ShowDialog() | Out-Null

@@ -542,7 +542,7 @@ function Get-AppxCatalog {
         # ★ 这里最常见的失败不是「没有应用」，是「解释器不对」★
         #   PowerShell 7（pwsh）里 Appx 模块直接报
         #   「Operation is not supported on this platform」。
-        #   一键启动.bat 走的是 powershell.exe(5.1) 所以没事，
+        #   启动器走的是 powershell.exe(5.1) 所以没事，
         #   但万一有人用 pwsh 跑，得把真实原因说出来，
         #   不能让界面显示「你是精简版系统」误导人。
         $msg = "$($_.Exception.Message)"

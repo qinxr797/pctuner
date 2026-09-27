@@ -1,0 +1,20 @@
+本目录下的第三方组件及其许可证
+================================
+
+HandyControl.dll
+  项目: https://github.com/HandyOrg/HandyControl
+  许可: MIT  （见 HandyControl-LICENSE.txt）
+  用途: 界面控件库
+
+LibreHardwareMonitorLib.dll   v0.9.4
+  项目: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+  许可: MPL-2.0
+       完整条款见 https://mozilla.org/MPL/2.0/
+       MPL-2.0 是文件级弱著佐权：作为库调用不影响本项目的 MIT 许可，
+       但该 DLL 本身仍受 MPL-2.0 约束，源码可在上述项目地址获取。
+  用途: 读取 CPU/GPU 温度、风扇转速、各核心频率与功耗
+
+HidSharp.dll   v2.1.0
+  项目: https://github.com/IntergatedCircuits/HidSharp
+  许可: Apache-2.0
+  用途: LibreHardwareMonitorLib 的依赖（读取 USB HID 设备传感器）
