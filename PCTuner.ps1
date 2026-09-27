@@ -42,6 +42,11 @@ param(
     # 出图前把页面里的滚动区往下滚这么多像素，用来拍长页面的下半截。
     [int]$ShotScroll = 0,
 
+    # 出图时模拟的显示缩放（125 / 150）。本机是 100% 时用它看高分屏下的样子：
+    # 进程内把界面按这个缩放重新排版（VisualTreeHelper.SetRootDpi），再按对应像素出图 ——
+    # 和真在 125% 屏上跑一样走「按设备像素取整」，不是把 100% 的图放大。
+    [int]$ShotDpi = 0,
+
     # 出图前先把需要扫描才有内容的页扫一遍（弹窗排查）。
     [switch]$ShotScan,
 
@@ -62,6 +67,23 @@ $ErrorActionPreference = 'Continue'
 # 改版本号只改这一处，标题栏 / 副标题 / 诊断报告都从这里取。
 $Script:AppVersion     = '6.1'
 $Script:AppVersionDate = '2026-09-28'
+
+# ---------------------------------------------------------------------
+#  0.1 高分屏：声明「按显示器」DPI 感知（v6.2）—— 必须排在建任何窗口之前
+# ---------------------------------------------------------------------
+#  ★ 实测（2026-09-28）★ exe 启动壳 manifest 里声明的 per-monitor 只管它自己，
+#    真正跑界面的 powershell.exe 由 WPF 设成「系统级」。系统级在两种情况下会被 Windows 按位图拉伸、字发虚：
+#      · 改了缩放（比如 100% → 125%）但没注销重登 —— 系统级按「登录时」的缩放画
+#      · 外接一块缩放不同的屏，窗口拖过去
+#  所以在 WPF 之前先把进程声明成 Per-Monitor V2，并打开 WPF 自己的「跟着显示器缩放」开关
+#  （powershell.exe 按 .NET 4.0 的老规矩跑，这个开关默认是关的 —— 不开的话换屏时窗口不会跟着缩放）。
+#  声明失败（Win10 1703 以前没有 V2）就退回系统级，和 v6.1 一样。
+try { [AppContext]::SetSwitch('Switch.System.Windows.DoNotScaleForDpiChanges', $false) } catch { }
+try {
+    . (Join-Path (Split-Path -Parent $PSCommandPath) 'Modules\Native.ps1')
+    $api0 = Get-NativeApi
+    if (-not $api0::SetProcessDpiAwarenessContext([IntPtr]::new(-4))) { [void]$api0::SetProcessDPIAware() }
+} catch { }
 
 # ---------------------------------------------------------------------
 #  0. 加载 .NET 界面库
@@ -971,6 +993,7 @@ function Show-FlatDialog {
     $card.Child = $root
     $w.Content = $card
     [System.Windows.Media.TextOptions]::SetTextFormattingMode($w, 'Display')
+    $w.UseLayoutRounding = $true        # 同主窗口：描边落在整像素上，高分屏不发毛
     $w.ShowDialog() | Out-Null
     if ($ask) { return "$($w.Tag)" }
     return 'OK'
@@ -1368,6 +1391,7 @@ function Set-Gauge {
     if ($null -eq $Value) {
         $G.Value.Text = [string][char]0x2014
         $G.Value.Foreground = Get-Brush 'TextDim'
+        $G.Unit.Text = ''          # 「— °C」读起来像「有个读数只是没写」，破折号后面不挂单位
         $G.Mark.Text = ''
         Set-Meter $G.Meter $null $Max $mark
         return
@@ -2076,7 +2100,10 @@ $xamlText = @'
         Title="电脑调优助手" Height="820" Width="1280" MinHeight="640" MinWidth="1080"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource Canvas}" Foreground="{DynamicResource TextMain}"
         FontSize="13" TextElement.Foreground="{DynamicResource TextMain}"
-        TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType">
+        TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"
+        UseLayoutRounding="True">
+  <!-- v6.2 UseLayoutRounding：所有尺寸和位置按「设备像素」取整。不开的话 125% / 150% 下一条 1px 描边
+       会落在半个像素上，被抗锯齿糊成两像素宽的灰线，圆角卡片边缘发毛 —— 朋友说的「毛边」之一 -->
   <Window.Resources>
     <Style TargetType="TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
@@ -2513,7 +2540,7 @@ $xamlText = @'
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <TextBlock Grid.Row="0" TextWrapping="Wrap" FontSize="13" LineHeight="21" Foreground="{DynamicResource TextMid}" Margin="0,0,0,16" MaxWidth="820" HorizontalAlignment="Left"
+            <TextBlock Grid.Row="0" TextWrapping="Wrap" FontSize="13" LineHeight="21" Foreground="{DynamicResource TextMid}" Margin="0,0,0,16" MaxWidth="804" HorizontalAlignment="Left"
                        Text="换肤只改界面的底色、卡片和主色。表示危险程度的那一种墨色是故意不跟着变的 —— 「高危」永远是红的，不能因为换了皮肤看错。选好立刻生效，下次打开自动记住。"/>
             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel x:Name="ThemePanel" MaxWidth="820" HorizontalAlignment="Left" Margin="0,0,4,0"/>
@@ -2534,10 +2561,10 @@ $xamlText = @'
               <Button x:Name="BtnFpsDiag" Content="为什么我帧数没变？" Margin="0,0,8,8"/>
               <Button x:Name="BtnOcCoach" Content="我能超频吗？" Margin="0,0,8,8"/>
               <Button x:Name="BtnVendor" Content="该装哪个厂商工具" Margin="0,0,8,8"/>
-              <Button x:Name="BtnAddExclusion" Content="把游戏文件夹加入杀毒白名单" Margin="0,0,8,8"/>
-              <Button x:Name="BtnSfc" Content="检查系统文件完整性" Margin="0,0,8,8"/>
-              <Button x:Name="BtnCopyReport" Content="复制体检报告" Margin="0,0,8,8"/>
-              <Button x:Name="BtnExportReport" Content="导出诊断报告到桌面" Margin="0,0,8,8"/>
+              <Button x:Name="BtnAddExclusion" Content="游戏目录加白名单" ToolTip="把游戏文件夹加入 Windows Defender 扫描白名单" Margin="0,0,8,8"/>
+              <Button x:Name="BtnSfc" Content="检查系统文件" ToolTip="运行 sfc /scannow，扫描并修复损坏的系统文件" Margin="0,0,8,8"/>
+              <Button x:Name="BtnCopyReport" Content="复制报告" ToolTip="把体检报告复制到剪贴板，可以直接粘贴发给别人" Margin="0,0,8,8"/>
+              <Button x:Name="BtnExportReport" Content="导出诊断报告" ToolTip="把硬件信息、体检结论、日志打成一个文件放到桌面" Margin="0,0,8,8"/>
             </WrapPanel>
             <Grid Grid.Row="1">
               <Grid.ColumnDefinitions>
@@ -4847,9 +4874,12 @@ function Build-AppxUI {
         $tx.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($tx) | Out-Null
 
-        $pn = New-TextBlock -Text $it.Name -Size 11 -Color 'TextDim' -Wrap $true
-        $pn.Margin = New-Thick 0 4 0 0
-        $sp.Children.Add($pn) | Out-Null
+        # 标题已经是包名（不认识的包没有友好名）就不再印一遍
+        if ($it.Label -ne $it.Name) {
+            $pn = New-TextBlock -Text $it.Name -Size 11 -Color 'TextDim' -Wrap $true
+            $pn.Margin = New-Thick 0 4 0 0
+            $sp.Children.Add($pn) | Out-Null
+        }
 
         [System.Windows.Controls.Grid]::SetColumn($sp, 1)
         $g.Children.Add($sp) | Out-Null
@@ -4860,7 +4890,10 @@ function Build-AppxUI {
     Close-CardRows $panel
     $safe = @($items | Where-Object { $_.Verdict -eq '可以删' }).Count
     Update-AppxCounter
-    Set-Status ("自带应用 {0} 个，其中 {1} 个可以放心删" -f $items.Count, $safe)
+    # 后台读完回来时人可能已经在别的页了 —— 状态栏只报当前页的事，不串台
+    if ("$($Script:UI.Tabs.SelectedItem.Header)" -eq '自带软件') {
+        Set-Status ("自带应用 {0} 个，其中 {1} 个可以放心删" -f $items.Count, $safe)
+    }
 }
 
 function Invoke-AppxUninstall {
@@ -5093,6 +5126,7 @@ function Invoke-SetRefresh {
 
     # 倒计时确认。用 DispatcherTimer 是因为要在界面线程上更新按钮文字。
     $win = New-Object System.Windows.Window
+    $win.UseLayoutRounding = $true
     $win.Title = '确认刷新率'
     $win.Width = 420; $win.SizeToContent = 'Height'
     $win.WindowStartupLocation = 'CenterScreen'
@@ -6505,6 +6539,14 @@ Update-TweakStates -PreselectRecommended $true
 
 # 启动项和体检比较慢，等窗口显示出来之后再在后台补上
 $Script:Window.Add_ContentRendered({
+        # 高分屏排查用：实际跑界面的这个进程是什么 DPI 感知级别、当前缩放多少。朋友发日志截图就能看出是不是被系统拉伸了
+        try {
+            $api = Get-NativeApi
+            $aw = $api::GetAwarenessFromDpiAwarenessContext($api::GetThreadDpiAwarenessContext())
+            $dpi = [System.Windows.Media.VisualTreeHelper]::GetDpi($Script:Window)
+            $Script:DpiInfo = @{ Awareness = $aw; Scale = [math]::Round($dpi.DpiScaleX * 100) }
+            Write-Log ("显示缩放 {0}%，DPI 感知：{1}" -f $Script:DpiInfo.Scale, $(switch ($aw) { 0 { '不感知（会被系统按位图拉伸，字会糊）' } 1 { '系统级' } 2 { '按显示器' } default { "未知($aw)" } })) '信息'
+        } catch { }
         Invoke-Step 'Build-StartupUI' { Build-StartupUI }
         Invoke-Step 'Build-MaintainUI' { Build-MaintainUI }
         Invoke-Step 'Build-BigFileDrives' { Build-BigFileDrives }
@@ -6804,7 +6846,7 @@ function Save-PerfReport {
     $rep = [ordered]@{
         Version    = $Script:AppVersion
         Admin      = [bool]$Script:IsAdmin
-        Dpi        = $Script:PerfDpiInfo
+        Dpi        = $Script:DpiInfo
         Startup    = $Script:PerfSteps
         FirstFrame = $Script:PerfFirstFrame
         FrameGaps  = $frames
@@ -6847,6 +6889,12 @@ if ($Shot) {
                 Start-Sleep -Milliseconds 100
             }
             Sync-UI
+            $shotScale = 1.0
+            if ($ShotDpi -gt 0) {
+                $shotScale = $ShotDpi / 100.0
+                [System.Windows.Media.VisualTreeHelper]::SetRootDpi($Script:Window, (New-Object System.Windows.DpiScale $shotScale, $shotScale))
+                Sync-UI
+            }
             if ($ShotH -gt 0) {
                 $Script:Window.Height = $ShotH
                 Sync-UI
@@ -6880,12 +6928,13 @@ if ($Shot) {
                 }
 
                 $name = ('{0}-{1}' -f $i, "$($tabs.Items[$i].Header)")
+                if ($ShotDpi -gt 0) { $name += "-$ShotDpi" }
                 $file = Join-Path $Shot ($name + '.png')
                 try {
-                    $w = [int]$Script:Window.ActualWidth
-                    $h = [int]$Script:Window.ActualHeight
+                    $w = [int][math]::Round($Script:Window.ActualWidth * $shotScale)
+                    $h = [int][math]::Round($Script:Window.ActualHeight * $shotScale)
                     $rtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap `
-                        $w, $h, 96, 96, ([System.Windows.Media.PixelFormats]::Pbgra32)
+                        $w, $h, (96 * $shotScale), (96 * $shotScale), ([System.Windows.Media.PixelFormats]::Pbgra32)
                     $rtb.Render($Script:Window)
                     $enc = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
                     $enc.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($rtb)) | Out-Null
