@@ -492,3 +492,59 @@ function Install-ToggleMotion {
         $Script:ToggleInstalled = $true
     } catch { $Script:ToggleError = "$($_.Exception.Message)" }
 }
+
+# =====================================================================
+#  选中描边 + 对勾徽章（C4）
+# ---------------------------------------------------------------------
+#  只放在预设卡上（按用途选 / 受检类别 / 竞技射击 / 浏览器瘦身）。
+#  徽章 18px 强调色圆 + 白勾，压在卡片右上角外沿。
+#    选中：从 0.6 弹到 1（弹簧）+ 淡入（Base），勾在 Quick 之后一笔画出（Draw）
+#    取消：缩回 0.6 + 淡出（Quick），不弹
+#  ★ 从 0.6 起，不从 0 起 ★ 没有东西是从「无」里长出来的。
+# =====================================================================
+function New-CheckBadge {
+    $host_ = New-Object System.Windows.Controls.Grid
+    $host_.Width = 18; $host_.Height = 18
+    $host_.HorizontalAlignment = 'Right'; $host_.VerticalAlignment = 'Top'
+    $host_.Margin = New-Object System.Windows.Thickness 0, -12, -16, 0
+    $host_.IsHitTestVisible = $false
+    $host_.Opacity = 0
+    $host_.RenderTransformOrigin = New-Object System.Windows.Point 0.5, 0.5
+    $sc = New-Object System.Windows.Media.ScaleTransform 0.6, 0.6
+    $host_.RenderTransform = $sc
+    $dot = New-Object System.Windows.Shapes.Ellipse
+    $dot.Fill = Get-Brush 'Accent'
+    $host_.Children.Add($dot) | Out-Null
+    $tick = New-Object System.Windows.Shapes.Path
+    $tick.Data = [System.Windows.Media.Geometry]::Parse('M 5,9.2 L 7.8,11.9 L 13,6.3')
+    $tick.Stroke = Get-Brush 'OnAccent'
+    $tick.StrokeThickness = 2
+    $tick.StrokeStartLineCap = 'Round'; $tick.StrokeEndLineCap = 'Round'; $tick.StrokeLineJoin = 'Round'
+    $tick.StrokeDashCap = 'Flat'
+    # 路径长 ~11.5px / 线宽 2 = 虚线单位 6
+    $dash = New-Object System.Windows.Media.DoubleCollection
+    $dash.Add(6); $dash.Add(6)
+    $tick.StrokeDashArray = $dash
+    $tick.StrokeDashOffset = 6
+    $host_.Children.Add($tick) | Out-Null
+    return @{ Host = $host_; Scale = $sc; Tick = $tick }
+}
+
+function Set-CheckBadge {
+    param($B, [bool]$On)
+    if ($null -eq $B) { return }
+    $sx = [System.Windows.Media.ScaleTransform]::ScaleXProperty
+    $sy = [System.Windows.Media.ScaleTransform]::ScaleYProperty
+    $dashP = [System.Windows.Shapes.Shape]::StrokeDashOffsetProperty
+    if ($On) {
+        Start-Fade $B.Host 1 $Script:Dur.Base
+        Start-Spring $B.Scale $sx 1.0
+        Start-Spring $B.Scale $sy 1.0
+        Start-Prop $B.Tick $dashP 6 0 $Script:Dur.Draw $Script:Ease.Out $Script:Dur.Quick
+    } else {
+        Start-Fade $B.Host 0 $Script:Dur.Quick
+        Start-Prop $B.Scale $sx $null 0.6 $Script:Dur.Quick $Script:Ease.Out
+        Start-Prop $B.Scale $sy $null 0.6 $Script:Dur.Quick $Script:Ease.Out
+        Start-Prop $B.Tick $dashP $null 6 $Script:Dur.Quick $Script:Ease.Out
+    }
+}

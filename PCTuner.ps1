@@ -3037,6 +3037,9 @@ function New-PresetCard {
     $row = New-Object System.Windows.Controls.Border
     $row.Background = [System.Windows.Media.Brushes]::Transparent
     $row.CornerRadius = New-Corner 8
+    # 描边平时透明、选中时换强调色（C4）。先占好 1.5px，选中时不挤动布局
+    $row.BorderThickness = New-Thick 1.5
+    $row.BorderBrush = [System.Windows.Media.Brushes]::Transparent
     $row.Padding = $(if ($Compact) { New-Thick 8 4 12 4 } else { New-Thick 8 8 8 8 })
     $row.Margin = $(if ($Compact) { New-Thick 0 0 4 0 } else { New-Thick 0 0 0 4 })
     $row.Cursor = 'Hand'
@@ -3067,9 +3070,15 @@ function New-PresetCard {
         $sp.Children.Add($sub) | Out-Null
     }
     $g.Children.Add($sp) | Out-Null
-    $row.Child = $g
 
-    $row.Resources['__preset'] = @{ Mark = $mark; Title = $title }
+    # 右上角的对勾徽章（C4）：选中时从 0.6 弹到 1，勾在 120ms 后一笔画出
+    $badge = New-CheckBadge
+    $outer = New-Object System.Windows.Controls.Grid
+    $outer.Children.Add($g) | Out-Null
+    $outer.Children.Add($badge.Host) | Out-Null
+    $row.Child = $outer
+
+    $row.Resources['__preset'] = @{ Mark = $mark; Title = $title; Badge = $badge }
     Add-Interactive $row -BgNormal 'Transparent' -BgHover $Script:CARD_HOVER
 
     # ★ 按下的瞬间就把记号打上，不等松手 ★ —— 回答「我点上了吗」
@@ -3098,6 +3107,8 @@ function Select-PresetCard {
             $m.Mark.Foreground = Get-Brush 'TextDim'
             $m.Title.Foreground = Get-Brush 'TextMain'
             $old.Background = [System.Windows.Media.Brushes]::Transparent
+            $old.BorderBrush = [System.Windows.Media.Brushes]::Transparent
+            Set-CheckBadge $m.Badge $false
         } catch { }
     }
     $Script:SelectedPresetCard = $Card
@@ -3108,6 +3119,8 @@ function Select-PresetCard {
         $m.Mark.Foreground = Get-Brush 'Accent'
         $m.Title.Foreground = Get-Brush 'Accent'
         $Card.Background = Get-Brush 'AccentTint'
+        $Card.BorderBrush = Get-Brush 'Accent'
+        Set-CheckBadge $m.Badge $true
     } catch { }
 }
 
