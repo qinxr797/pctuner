@@ -154,7 +154,7 @@ function Get-SystemReport {
             $slots = (Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction SilentlyContinue | Select-Object -First 1).MemoryDevices
             $spd = ($sticks | ForEach-Object { if ($_.ConfiguredClockSpeed) { $_.ConfiguredClockSpeed } else { $_.Speed } } | Select-Object -First 1)
             Add-Row '内存条' ("{0} 条  /  共 {1} 个插槽   频率 {2} MHz   {3}" -f $sticks.Count, $slots, $spd,
-                $(if ($sticks.Count -ge 2) { '[双通道 ✓]' } else { '[单通道 —— 见下方体检建议]' }))
+                $(if ($sticks.Count -ge 2) { '双通道' } else { '单通道 —— 见下方体检建议' }))
         }
 
         # ---------- 显卡 ----------

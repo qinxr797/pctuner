@@ -142,7 +142,12 @@ if (-not $Script:FontLoaded -and -not $Script:FontLoadError) {
 # ---------------------------------------------------------------------
 $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-if (-not $SelfTest -and -not $AutoClean -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+# ★ 出图模式不提权 ★
+#   它只把界面画出来拍一张，一个设置都不改。
+#   为了拍张图弹一次 UAC 让人点「是」，那是拿打扰换方便。
+#   代价：SMART、传感器温度这些要管理员才读得到的会显示「—」。
+#   要拍带真实读数的图，从管理员终端里跑。
+if (-not $SelfTest -and -not $AutoClean -and -not $Shot -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     try {
         $exe = (Get-Process -Id $PID).Path
         $argv = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
@@ -2229,16 +2234,20 @@ $xamlText = @'
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
-          <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+          <!-- ★ 一屏只能有一个主按钮 ★
+                 原来「重新体检」和「为什么我帧数没变？」都是主按钮样式，
+                 两个一样重就等于都不重，用户不知道该先点哪个。
+                 WrapPanel：窗口拉窄的时候按钮换行，不会被顶出可视区。 -->
+          <WrapPanel Grid.Row="0" Margin="0,0,0,10">
             <Button x:Name="BtnHealthScan" Content="重新体检" Style="{DynamicResource ButtonPrimary}"/>
-            <Button x:Name="BtnFpsDiag" Content="为什么我帧数没变？" Style="{DynamicResource ButtonPrimary}"/>
+            <Button x:Name="BtnFpsDiag" Content="为什么我帧数没变？"/>
             <Button x:Name="BtnOcCoach" Content="我能超频吗？"/>
             <Button x:Name="BtnVendor" Content="该装哪个厂商工具"/>
             <Button x:Name="BtnAddExclusion" Content="把游戏文件夹加入杀毒白名单"/>
             <Button x:Name="BtnSfc" Content="检查系统文件完整性"/>
             <Button x:Name="BtnCopyReport" Content="复制体检报告"/>
             <Button x:Name="BtnExportReport" Content="导出诊断报告到桌面"/>
-          </StackPanel>
+          </WrapPanel>
           <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="460"/>
@@ -5086,54 +5095,97 @@ function Build-HealthUI {
     $info.Children.Clear()
     $sb = New-Object System.Text.StringBuilder
 
-    $t = New-TextBlock -Text '硬件信息' -Size 15 -Bold $true
-    $t.Margin = New-Thick 0 0 0 12
-    $info.Children.Add($t) | Out-Null
+    # ==================== 登记信息 ====================
+    #   化验单最上面那一栏：姓名、年龄、送检科室。
+    #   两列对齐（标签 | 值），细线分隔 —— 这样才扫得快。
+    $info.Children.Add((New-RptSection -Title '受检机器')) | Out-Null
 
     foreach ($row in (Get-SystemReport)) {
-        $k = New-TextBlock -Text $row.Key -Size 11.5 -Color '#55606F'
-        $info.Children.Add($k) | Out-Null
-        $v = New-TextBlock -Text $row.Value -Size 12.5 -Color '#2B2A26' -Wrap $true
-        $v.Margin = New-Thick 0 1 0 11
-        $info.Children.Add($v) | Out-Null
+        $b = New-Object System.Windows.Controls.Border
+        $b.BorderBrush = Get-Brush $Script:CARD_BORDER
+        $b.BorderThickness = New-Thick 0 0 0 1
+        $b.Padding = New-Thick 0 9 0 9
+
+        $g = New-Object System.Windows.Controls.Grid
+        $cdK = New-Object System.Windows.Controls.ColumnDefinition
+        $cdK.Width = New-Object System.Windows.GridLength 108.0
+        $g.ColumnDefinitions.Add($cdK)
+        $cdV = New-Object System.Windows.Controls.ColumnDefinition
+        $cdV.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        $g.ColumnDefinitions.Add($cdV)
+
+        $k = New-TextBlock -Text $row.Key -Size 13 -Color '#66635B' -Wrap $true
+        $k.VerticalAlignment = 'Top'
+        $g.Children.Add($k) | Out-Null
+
+        $v = New-TextBlock -Text $row.Value -Size 14 -Color '#2B2A26' -Wrap $true
+        [System.Windows.Documents.Typography]::SetNumeralAlignment($v, 'Tabular')
+        [System.Windows.Controls.Grid]::SetColumn($v, 1)
+        $g.Children.Add($v) | Out-Null
+
+        $b.Child = $g
+        $info.Children.Add($b) | Out-Null
         [void]$sb.AppendLine("$($row.Key)：$($row.Value)")
     }
 
+    # ==================== 体检结论 ====================
     Set-Status '正在做系统体检…'
     Sync-UI
     $ap = $Script:UI.AdvicePanel
     $ap.Children.Clear()
-    $t2 = New-TextBlock -Text '体检结论（按性价比从高到低排序）' -Size 15 -Bold $true
-    $t2.Margin = New-Thick 0 0 0 12
-    $ap.Children.Add($t2) | Out-Null
+    $ap.Children.Add((New-RptSection -Title '检验结论' -Aside '按性价比从高到低排')) | Out-Null
     [void]$sb.AppendLine()
     [void]$sb.AppendLine('===== 体检结论 =====')
 
     foreach ($a in (Get-HealthAdvice)) {
-        $c = switch ($a.Level) {
-            '严重' { @{ Line = '#8A5750'; Bg = '#EFE3E0' } }
-            '建议' { @{ Line = '#7A6B45'; Bg = '#F0EADC' } }
-            default { @{ Line = '#556B54'; Bg = '#E7EBE4' } }
+        # ★ 判读标记，不是彩色药丸 ★
+        #   上一版每条是「圆角卡 + 整块底色 + 4px 彩色左边条 + 彩色标签」，
+        #   三档各一种颜色，满屏都是色块 —— 真正「严重」的那条反而不跳。
+        $mark = switch ($a.Level) { '严重' { '↑↑' } '建议' { '↑' } default { '' } }
+        $abn = [bool]$mark
+
+        $row = New-Object System.Windows.Controls.Border
+        $row.Background = [System.Windows.Media.Brushes]::Transparent
+        $row.BorderBrush = Get-Brush $Script:CARD_BORDER
+        $row.BorderThickness = New-Thick 0 0 0 1
+        $row.Padding = New-Thick 0 13 14 14
+
+        $g = New-Object System.Windows.Controls.Grid
+        foreach ($w in @(34.0, 0.0, 64.0)) {
+            $cd = New-Object System.Windows.Controls.ColumnDefinition
+            $cd.Width = if ($w -eq 0) {
+                New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+            } else {
+                New-Object System.Windows.GridLength $w
+            }
+            $g.ColumnDefinitions.Add($cd)
         }
-        $card = New-Object System.Windows.Controls.Border
-        $card.Background = Get-Brush $c.Bg
-        $card.BorderBrush = Get-Brush $c.Line
-        $card.BorderThickness = New-Thick 4 0 0 0
-        $card.CornerRadius = New-Object System.Windows.CornerRadius 6
-        $card.Padding = New-Thick 14 12 14 12
-        $card.Margin = New-Thick 0 0 0 10
+
+        $mk = New-TextBlock -Text $mark -Size 15 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+        if ($abn) { $mk.FontWeight = 'SemiBold' }
+        $mk.VerticalAlignment = 'Top'
+        $mk.Margin = New-Thick 0 1 0 0
+        $g.Children.Add($mk) | Out-Null
 
         $sp = New-Object System.Windows.Controls.StackPanel
-        $h = New-Object System.Windows.Controls.StackPanel
-        $h.Orientation = 'Horizontal'
-        $h.Children.Add((New-Badge -Text $a.Level -Fg $c.Line -Bg (Get-TintBg $c.Line))) | Out-Null
-        $sp.Children.Add($h) | Out-Null
-        $ttl = New-TextBlock -Text $a.Title -Size 14 -Bold $true -Wrap $true
-        $ttl.Margin = New-Thick 0 4 0 6
+        [System.Windows.Controls.Grid]::SetColumn($sp, 1)
+        $ttl = New-TextBlock -Text $a.Title -Size 15.5 -Color '#2B2A26' -Wrap $true
+        if ($abn) { $ttl.FontWeight = 'SemiBold' }
         $sp.Children.Add($ttl) | Out-Null
-        $sp.Children.Add((New-TextBlock -Text (Format-Reflow $a.Text) -Size 12.5 -Color '#565349' -Wrap $true)) | Out-Null
-        $card.Child = $sp
-        $ap.Children.Add($card) | Out-Null
+        $bd = New-TextBlock -Text (Format-Reflow $a.Text) -Size 13.5 -Color '#565349' -Wrap $true
+        $bd.Margin = New-Thick 0 7 0 0
+        $sp.Children.Add($bd) | Out-Null
+        $g.Children.Add($sp) | Out-Null
+
+        $lv = New-TextBlock -Text $a.Level -Size 13.5 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+        if ($abn) { $lv.FontWeight = 'SemiBold' }
+        $lv.TextAlignment = 'Right'
+        $lv.VerticalAlignment = 'Top'
+        [System.Windows.Controls.Grid]::SetColumn($lv, 2)
+        $g.Children.Add($lv) | Out-Null
+
+        $row.Child = $g
+        $ap.Children.Add($row) | Out-Null
 
         [void]$sb.AppendLine()
         [void]$sb.AppendLine("[$($a.Level)] $($a.Title)")
@@ -5633,10 +5685,16 @@ $Script:Window.Add_Closed({ try { Stop-DashTimer; Close-Dash } catch { } })
 if ($Shot) {
     try { if (-not (Test-Path $Shot)) { New-Item -ItemType Directory -Path $Shot -Force | Out-Null } } catch { }
 
+    # 窗口挪到屏幕外：RenderTargetBitmap 画的是可视树，
+    # 不需要窗口真的显示在屏幕上 —— 不必在人眼前一直闪。
+    $Script:Window.WindowStartupLocation = 'Manual'
+    $Script:Window.Left = -4000
+    $Script:Window.Top = 0
+    $Script:Window.ShowInTaskbar = $false
+
     $Script:Window.Add_ContentRendered({
             if ($ShotH -gt 0) {
                 $Script:Window.Height = $ShotH
-                $Script:Window.Top = 0
                 Sync-UI
             }
             $tabs = $Script:UI.Tabs
