@@ -142,7 +142,7 @@ function Get-AppxKnowledge {
 '@ }
 
         'Microsoft.MicrosoftOfficeHub' = @{ Verdict = '可以删'; Label = 'Office 推广入口'; Size = '—'; Text = @'
-★ 注意：这个**不是 Office**，只是个推广壳子。★
+【注意：这个**不是 Office**，只是个推广壳子。】
 
 它的作用是在开始菜单放一个「Office」图标，点开引导你订阅
 Microsoft 365。你真正装的 Word / Excel 和它没关系，
@@ -208,7 +208,7 @@ UWP 版的通讯录应用。
         'MicrosoftTeams' = @{ Verdict = '可以删'; Label = 'Teams 个人版（聊天）'; Size = '约 150 MB'; Text = @'
 Win11 任务栏上那个紫色的「聊天」图标。
 
-★ 注意区分：★
+【注意区分：】
 · 这个是**个人版** Teams，微软硬塞的，国内几乎没人用
 · 如果你公司用 Teams 办公，那装的是「Microsoft Teams (work or school)」，
   是另一个包，不是这个
@@ -258,7 +258,7 @@ Win11 新塞的开发者工具面板。
 
         # ---- 媒体扩展：名字看着像可删的小组件，其实删了会出事 ----
         'Microsoft.HEIFImageExtension' = @{ Verdict = '必须留'; Label = 'HEIF 图片格式支持'; Size = '—'; Text = @'
-★ 看着不起眼，但删了会出问题。★
+【看着不起眼，但删了会出问题。】
 
 这是解码 HEIC / HEIF 格式图片的组件。
 **iPhone 拍的照片默认就是 HEIC 格式** —— 删了之后
@@ -269,7 +269,7 @@ Win11 新塞的开发者工具面板。
 '@ }
 
         'Microsoft.VP9VideoExtensions' = @{ Verdict = '必须留'; Label = 'VP9 视频解码'; Size = '—'; Text = @'
-★ 删了会影响看视频。★
+【删了会影响看视频。】
 
 VP9 是 YouTube、部分网页视频和很多录屏文件用的编码格式。
 删了之后这些视频可能**只有声音没有画面**，或者
@@ -279,7 +279,7 @@ VP9 是 YouTube、部分网页视频和很多录屏文件用的编码格式。
 '@ }
 
         'Microsoft.WebMediaExtensions' = @{ Verdict = '必须留'; Label = '网页媒体扩展'; Size = '—'; Text = @'
-★ 删了会影响网页播放。★
+【删了会影响网页播放。】
 
 支持 OGG / WebM 等开放格式的解码组件，很多网页播放器依赖它。
 
@@ -287,7 +287,7 @@ VP9 是 YouTube、部分网页视频和很多录屏文件用的编码格式。
 '@ }
 
         'Microsoft.AV1VideoExtension' = @{ Verdict = '必须留'; Label = 'AV1 视频解码'; Size = '—'; Text = @'
-★ 删了会影响看高清视频。★
+【删了会影响看高清视频。】
 
 AV1 是 B 站、YouTube、Netflix 正在推的新一代编码。
 删了之后这些平台的高清片源可能放不了，或者掉回 CPU 软解，
@@ -381,7 +381,7 @@ Win11 把记事本做成了可卸载的应用。
 '@ }
 
         'Microsoft.ScreenSketch' = @{ Verdict = '看情况'; Label = '截图工具 (Win+Shift+S)'; Size = '—'; Text = @'
-★ 删之前想清楚：这个就是 Win+Shift+S 截图。★
+【删之前想清楚：这个就是 Win+Shift+S 截图。】
 
 删了之后 **Win+Shift+S 快捷键会失效**，PrintScreen 截图
 也会受影响。
@@ -431,7 +431,7 @@ Win11 把记事本做成了可卸载的应用。
 
         # ================= Xbox 那一堆：单独说 =================
         'Microsoft.XboxGamingOverlay' = @{ Verdict = '看情况'; Label = 'Xbox Game Bar（Win+G）'; Size = '约 100 MB'; Text = @'
-★ 这个和游戏性能直接相关，要说清楚。★
+【这个和游戏性能直接相关，要说清楚。】
 
 按 Win+G 弹出来的那个游戏浮层，带录屏、性能监控、聊天。
 
@@ -467,7 +467,7 @@ Win11 上新版的 Xbox 应用，Game Pass 游戏从这里下载运行。
 '@ }
 
         'Microsoft.XboxIdentityProvider' = @{ Verdict = '必须留'; Label = 'Xbox 账号登录组件'; Size = '—'; Text = @'
-★ 这个看着像 Xbox 的东西，其实不能删。★
+【这个看着像 Xbox 的东西，其实不能删。】
 
 它负责 Xbox 账号的登录验证。**很多第三方 PC 游戏
 （包括 Steam 上买的）也用它来登录微软账号**，
@@ -491,7 +491,7 @@ Game Bar 的旧版辅助组件。
 
         # ================= 必须留 =================
         'Microsoft.WindowsStore' = @{ Verdict = '必须留'; Label = 'Microsoft Store 应用商店'; Size = '约 200 MB'; Text = @'
-★★ 千万别删这个。★★
+【千万别删这个。】
 
 删了应用商店之后，**上面所有应用你都装不回来了**。
 微软没有提供正常的重装途径，只能靠一堆命令行操作硬修，
@@ -503,7 +503,7 @@ Game Bar 的旧版辅助组件。
 '@ }
 
         'Microsoft.SecHealthUI' = @{ Verdict = '必须留'; Label = 'Windows 安全中心界面'; Size = '—'; Text = @'
-★ 不能删。★
+【不能删。】
 
 这是「Windows 安全中心」那个界面。删了之后你就**打不开
 病毒防护设置了** —— 杀毒还在跑，但你看不见也改不了，
@@ -511,7 +511,7 @@ Game Bar 的旧版辅助组件。
 '@ }
 
         'Microsoft.DesktopAppInstaller' = @{ Verdict = '必须留'; Label = '应用安装程序 / winget'; Size = '—'; Text = @'
-★ 不能删。★
+【不能删。】
 
 它负责安装 .appx/.msix 格式的应用，同时也是 winget
 （微软官方的命令行装软件工具）的本体。
@@ -638,7 +638,7 @@ function Remove-AppxSafe {
     <#
       卸载一个自带应用。
 
-      ★ 故意只卸当前用户，不加 -AllUsers、不动 ProvisionedPackage ★
+      故意只卸当前用户，不加 -AllUsers、不动 ProvisionedPackage 
         这样做的后果是「新建的 Windows 用户还会有这些应用」，
         听起来不够干净，但换来的是：
           · 随时能从应用商店原样装回来

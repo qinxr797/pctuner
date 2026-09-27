@@ -6,12 +6,12 @@
       「黑色的框突然弹出来，里面什么都没有，一闪就没了，
         有时候一下子弹四五个」
 
-  ★ 那是什么东西 ★
+  【那是什么东西】
     那是**控制台窗口**（cmd.exe / powershell.exe / cscript.exe）。
     有程序在后台调用了命令行工具，但没有把窗口隐藏起来，
     于是你就看到一个黑框一闪而过。框里没东西是因为它执行得太快。
 
-  ★ 本工具的核心判断：「这一项会不会弹黑框」★
+  【本工具的核心判断：「这一项会不会弹黑框」】
     一个东西要弹出黑框，必须【同时】满足三个条件：
         1. 它跑的是控制台程序（cmd / powershell / cscript / 批处理）
         2. 它运行在你的登录会话里（不是系统后台会话）
@@ -26,12 +26,12 @@
     属于典型的误报。现在只有「隐藏窗口 + 编码命令」这种
     组合拳才算可疑。
 
-  ★ 这个功能不做什么 ★
+  【这个功能不做什么】
     它**不是杀毒软件**。它找的是「持久化驻留点」和「会弹黑框的东西」，
     不做病毒特征比对。如果扫出「高危」条目，正确做法是
     用 Windows Defender 或火绒做一次全盘扫描，而不是只把它禁用。
 
-  ★ 安全原则 ★
+  【安全原则】
     所有操作都是【禁用】而不是【删除】，随时可以再启用。
 =====================================================================
 #>
@@ -89,7 +89,7 @@ $Script:SELF_MARKERS = @('PCTuner', 'PCTuner.ps1', '每周自动清理')
 
 # 已知的「正经但确实会弹黑框 / 白占资源」的东西
 $Script:KNOWN_NOISY = @(
-    @{ Match = 'OfficeBackgroundTaskHandler';     Who = 'Microsoft Office 后台任务'; Note = '★ 这是「每隔几分钟闪一个黑框」最经典的元凶。它只做 Office 的后台登记，关掉对 Office 使用毫无影响。如果你的弹窗有规律，先怀疑它。' }
+    @{ Match = 'OfficeBackgroundTaskHandler';     Who = 'Microsoft Office 后台任务'; Note = '这是「每隔几分钟闪一个黑框」最经典的元凶。它只做 Office 的后台登记，关掉对 Office 使用毫无影响。如果你的弹窗有规律，先怀疑它。' }
     @{ Match = 'user_feed_synchronization';        Who = 'Windows RSS 源同步';        Note = '老 Windows 留下的 RSS 订阅同步任务，现在几乎没人用，但它会规律性地弹黑框。可以关。' }
     @{ Match = 'GoogleUpdateTask';                 Who = 'Chrome 浏览器更新检查';      Note = '关掉后 Chrome 不再自动检查更新，需要手动在「关于 Chrome」里更新。' }
     @{ Match = 'MicrosoftEdgeUpdateTask';          Who = 'Edge 浏览器更新检查';        Note = '同上，关掉后需要手动更新 Edge。' }

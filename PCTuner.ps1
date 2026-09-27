@@ -455,7 +455,7 @@ function Get-Brush {
     <#
       拿一支画笔。
 
-      ★ 换肤的关键在这里 ★
+      【换肤的关键在这里】
       界面代码里写的是「默认皮肤的那个色号」，比如 Get-Brush '#F6F5F2'。
       这个函数会先查一遍当前皮肤的映射表：
       如果这个色号属于可换肤的中性色/主色，就换成当前皮肤的对应色；
@@ -577,7 +577,7 @@ function New-SplineAnim {
     <#
       用 KeySpline 做出精确的 cubic-bezier 曲线。
 
-      ★ 为什么不用 CubicEase / QuarticEase 那些内置的 ★
+      【为什么不用 CubicEase / QuarticEase 那些内置的】
         它们是固定公式，曲线偏软，动起来「温吞」。
         KeySpline 的两个控制点 = cubic-bezier 的四个参数，
         想要什么曲线就是什么曲线，不用将就。
@@ -643,7 +643,7 @@ function Start-StaggerIn {
     <#
       一批元素错峰进场，每个比前一个晚 45ms。
 
-      ★ 为什么要错峰 ★
+      【为什么要错峰】
         全部同时淡入，眼睛会把它们当成一整块，感觉不到「逐个出现」，
         反而显得生硬。差几十毫秒，大脑就读成有节奏的序列。
         超过 6 个就不再往后加延迟 —— 再排下去最后一个要等半秒，
@@ -673,17 +673,17 @@ function Start-ColorFade {
     <#
       背景色平滑过渡。用在卡片悬停上。
 
-      ★ 悬停必须极短 ★
+      【悬停必须极短】
         悬停是一天要发生几十上百次的动作。按 Emil 的频率分级，
         这一档「只能做到几乎察觉不到，否则就别做」。
         110ms 是能感觉到「柔和」但不会觉得「在等」的上限。
 
-      ★ 用 ColorAnimation 而不是关键帧 ★
+      【用 ColorAnimation 而不是关键帧】
         鼠标可以在两张卡之间快速来回扫，动画会被反复打断。
         ColorAnimation 会从「当前实际颜色」重新出发；
         关键帧则每次都从头播，来回扫的时候会闪。
 
-      ★ 注意冻结画笔 ★
+      【注意冻结画笔】
         主题里那批资源画笔是 Frozen 的（渲染更快），
         直接对它做动画会抛 InvalidOperationException。
         所以这里每次都换一支独立的、可动画的画笔给这个控件用。
@@ -781,7 +781,7 @@ function Add-CardShadow {
       给卡片加一层很淡的投影，让它从背景上「浮」起来一点 ——
       质感差距最明显的一处，而且改动极小。
 
-      ★ 为什么挂在效果开关下面 ★
+      【为什么挂在效果开关下面】
         投影是 GPU 每帧都要算的（DropShadowEffect 走像素着色器）。
         一页几十张卡片同时投影，在集显老机器上是实打实的负担，
         而这工具恰恰有一大票老机器用户。关掉效果时就不加。
@@ -804,7 +804,7 @@ function New-ListCard {
     <#
       列表里的一条。
 
-      ★ 这不再是「卡片」★
+      【这不再是「卡片」】
         报告单上的一行就是一行：上下留白 + 一条行间细线。
         没有圆角、没有边框盒子、没有阴影 ——
         craft-floor 拒绝「同尺寸卡片当页面结构」，
@@ -855,7 +855,7 @@ function Format-Reflow {
     if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
 
     # 这些开头的行保持原样：项目符号 / 编号 / 小标题 / 提示符号 / 缩进
-    $keep = '^(\s{2,}|[·•\-—>|★☆✓✗⚠※]|【|\d+[\.\)、]|第[一二三四五六七八九十]|[A-Da-d][\.\)]\s)'
+    $keep = '^(\s{2,}|[·•\-—>|☆✓✗⚠※]|【|\d+[\.\)、]|第[一二三四五六七八九十]|[A-Da-d][\.\)]\s)'
     $out = New-Object System.Collections.ArrayList
     foreach ($line in ($Text -split "`r?`n")) {
         $t = $line.TrimEnd()
@@ -1079,7 +1079,7 @@ function Set-RptMark {
     <#
       设置一行的标记，并按标记决定结果值的墨色与字重。
 
-      ★ 正常值不标色、不加粗 ★
+      【正常值不标色、不加粗】
         这是报告单可信的来源：满页平静，只有真出问题的那几行跳出来。
         如果每一行都有颜色，异常就不再显眼 —— 那正是上一版的毛病。
     #>
@@ -1128,15 +1128,35 @@ function New-RptSection {
 }
 
 function New-Badge {
+    <#
+      报告单上的「标注」，不是徽章。
+
+      【过去这里是圆角药丸 + 底色】
+        一行上挂三四个彩色药丸，是 SaaS 后台的长相；
+        而且它违反了这一版的核心法则 ——
+        **颜色只在标记上，阅读区永远消色**（见 .impeccable\surfaces\pctuner-ps1.md）。
+        一页几十个彩色色块之后，真正超差的那一项就再也跳不出来了。
+
+      化验单上的标注长这样：小字、消色、项与项之间用竖线分开；
+      只有**超出参考范围**的那一个上法定墨。
+      所以这里不给底色、不给圆角，靠字号和墨色区分。
+
+      $Bg 参数保留是为了不用改 21 处调用点 —— 它现在只用来判断
+      「这是不是一个异常标注」：底色属于语义色系的就上法定墨。
+    #>
     param([string]$Text, [string]$Fg, [string]$Bg)
+
     $b = New-Object System.Windows.Controls.Border
-    $b.Background = Get-Brush $Bg
-    $b.CornerRadius = New-Object System.Windows.CornerRadius 5
-    $b.Padding = New-Thick 8 3 8 3
-    $b.Margin = New-Thick 0 0 6 4
-    $b.VerticalAlignment = 'Center'      # 不加这句，徽章和旁边的文字会错开半行
-    $tb = New-TextBlock -Text $Text -Size 11 -Color $Fg
-    $tb.FontWeight = 'SemiBold'
+    $b.Background = [System.Windows.Media.Brushes]::Transparent
+    $b.Padding = New-Thick 0 0 0 0
+    $b.Margin = New-Thick 0 0 12 2
+    $b.VerticalAlignment = 'Center'      # 不加这句，标注和旁边的文字会错开半行
+
+    # 语义色系的前景（绿/卡其/玫瑰/陶）保留原色号，换肤映射表会把它
+    # 翻成当前皮肤的墨；中性色一律降成次要墨。
+    $isSemantic = $Fg -in @('#556B54', '#7A6B45', '#8A5750', '#89694F')
+    $tb = New-TextBlock -Text $Text -Size 11.5 -Color $(if ($isSemantic) { $Fg } else { '#66635B' })
+    if ($isSemantic) { $tb.FontWeight = 'SemiBold' }
     $b.Child = $tb
     return $b
 }
@@ -1257,13 +1277,13 @@ $xamlText = @'
     <!-- ================================================================
          报告单页眉
 
-         ★ 不做「品牌 banner」★
+         【不做「品牌 banner」】
            一张检验报告的抬头不是 logo 墙，是四个事实：
            这是什么报告、给哪台机器出的、什么时候出的、编号是多少。
            陌生人下载一个会改注册表的工具，第一眼要看到的就是这四条 ——
            它们合起来说明「这东西在如实记录，不是在推销加速」。
 
-         ★ 下面那条粗线是报告单的表头线 ★
+         【下面那条粗线是报告单的表头线】
            整个界面靠线重分层，不靠卡片和阴影。
          ================================================================ -->
     <Border Grid.Row="0" Background="{DynamicResource PanelBg}" Padding="28,16,28,0"
@@ -1323,7 +1343,7 @@ $xamlText = @'
               <!-- ============================================================
                    本次检验摘要
 
-                   ★ 这里过去是四张圆角卡 + 大数字 + sparkline ★
+                   【这里过去是四张圆角卡 + 大数字 + sparkline】
                      那是 craft-floor 明令拒绝的两样东西叠在一起：
                      「hero-metric 模板」和「sparkline 当内容用」。
                      换成四栏表之后，同样的四个数字多带了一栏
@@ -1366,11 +1386,13 @@ $xamlText = @'
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
               <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
             <!-- ================================================================
-                 预设区。★ 必须可以收起 ★
+                 预设区。【必须可以收起】
                    12 张卡片分三组排开有 490px 高，而整个左栏只有 610px ——
                    展开着的时候，下面那个「优化项列表」会被挤成 0 高度，
                    用户在这一页上根本看不见自己要勾的东西。
@@ -1381,7 +1403,7 @@ $xamlText = @'
                     BorderThickness="1" Padding="13,10" Margin="0,0,0,10">
               <StackPanel>
                 <!-- 「按用途选」永远露在外面 —— 这是绝大多数人该走的那条路。
-                     ★ 必须是竖向 StackPanel，不能是 WrapPanel ★
+                     【必须是竖向 StackPanel，不能是 WrapPanel】
                        里面装的是「组标题 + 该组卡片的 WrapPanel」一对一对往下排；
                        写成 WrapPanel 的话，卡片一加宽，内层期望宽度变了，
                        外层就会把组标题横着甩到卡片右边，整个预设区排版全乱。 -->
@@ -1416,10 +1438,23 @@ $xamlText = @'
               <Button x:Name="BtnPickNone" Content="全部不选"/>
               <Button x:Name="BtnRescan" Content="重新检测状态"/>
             </StackPanel>
-            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <!-- 四栏表头。没有它，右边那三列就是三串没名字的东西 -->
+            <Grid Grid.Row="2" Margin="0,4,10,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="66"/>
+                <ColumnDefinition Width="24"/>
+                <ColumnDefinition Width="76"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="检验项目" Grid.Column="0" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}" Margin="26,0,0,0"/>
+              <TextBlock Text="结果" Grid.Column="1" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
+              <TextBlock Text="参考范围" Grid.Column="3" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
+            </Grid>
+            <Rectangle Grid.Row="3" Height="1.5" Fill="{DynamicResource BorderMed}" Margin="0,6,10,0"/>
+            <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel x:Name="TweakPanel" Margin="0,0,10,0"/>
             </ScrollViewer>
-            <Border Grid.Row="3" BorderBrush="{DynamicResource BorderMed}" BorderThickness="0,1,0,0" Padding="0,12,0,0" Margin="0,10,0,0">
+            <Border Grid.Row="5" BorderBrush="{DynamicResource BorderMed}" BorderThickness="0,1,0,0" Padding="0,12,0,0" Margin="0,10,0,0">
               <StackPanel Orientation="Horizontal">
                 <Button x:Name="BtnApplySelected" Content="应用选中的优化" Style="{DynamicResource ButtonPrimary}"/>
                 <Button x:Name="BtnRevertSelected" Content="还原选中的优化"/>
@@ -1645,7 +1680,7 @@ $xamlText = @'
           </Grid.RowDefinitions>
           <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
             <Button x:Name="BtnHealthScan" Content="重新体检" Style="{DynamicResource ButtonPrimary}"/>
-            <Button x:Name="BtnFpsDiag" Content="★ 为什么我帧数没变？" Style="{DynamicResource ButtonPrimary}"/>
+            <Button x:Name="BtnFpsDiag" Content="为什么我帧数没变？" Style="{DynamicResource ButtonPrimary}"/>
             <Button x:Name="BtnOcCoach" Content="我能超频吗？"/>
             <Button x:Name="BtnVendor" Content="该装哪个厂商工具"/>
             <Button x:Name="BtnAddExclusion" Content="把游戏文件夹加入杀毒白名单"/>
@@ -1802,18 +1837,18 @@ function Stop-DashTimer {
 
 # 预设 Id -> 副标题（卡片第二行）。标题里已经有的信息不重复。
 $Script:PresetSubtitle = @{
-    FPS3   = '★ 主推 · 三个 FPS 都受益'
+    FPS3   = '三个 FPS 都受益，不确定就选这个'
     CS2    = '三合一 + CPU 调度'
     VAL    = '三合一 + ACE 反作弊兼容'
     DF     = '三合一 + 画面稳定'
     SAFE   = '只做零风险项，不碰安全设置'
     AAA    = '黑神话 / 艾尔登法环，要的是不卡顿'
     MMO    = '梦幻 / 剑网3 / 原神，重点在延迟'
-    OFFICE = '★ 办公上网，只想电脑别这么卡'
+    OFFICE = '办公上网，只想电脑别这么卡'
     OLDPC  = '内存小 / 机械盘，避开帮倒忙的项'
-    BROW1  = '零代价 · 只关后台常驻'
-    BROW2  = '推荐 · 再关一批没人用的功能'
-    BROW3  = '有代价 · 同站标签页共用进程'
+    BROW1  = '零代价，只关后台常驻'
+    BROW2  = '再关一批没人用的功能'
+    BROW3  = '有代价：同站标签页共用进程'
 }
 
 # 分组 -> 色条颜色（用语义色，跟着皮肤走）
@@ -1832,7 +1867,7 @@ function Get-RptRange {
     <#
       一个检验项目的参考范围。返回 @{ Text; Lo; Hi }
 
-      ★ 这些阈值必须有出处，不许拍脑袋 ★
+      【这些阈值必须有出处，不许拍脑袋】
         参考范围是这个产品唯一无法被抄的东西，写错了整套就失去意义。
           显卡温度 83  —— NVIDIA 消费级显卡默认温度墙就是 83°C，超过开始降频
           处理器温度 95 —— AMD/Intel 移动端 Tjmax 约 100~105°C，
@@ -1877,7 +1912,7 @@ function Build-DashUI {
     <#
       概览页 = 一张检验报告。
 
-      ★ 这里过去是四张圆角卡 + 76px 大数字 + 走纸曲线 ★
+      【这里过去是四张圆角卡 + 76px 大数字 + 走纸曲线】
         craft-floor 把这三样都点名拒绝了：hero-metric 模板、
         sparkline 当内容用、同尺寸卡片当页面结构。
         换成四栏表之后信息反而更多了 —— 多出来的那一栏「参考范围」
@@ -1959,7 +1994,7 @@ function Update-DashScore {
     <#
       检验结论。
 
-      ★ 不做健康度大数字 ★
+      【不做健康度大数字】
         「96 分」是 hero-metric 模板，而且分数本身不可行动 ——
         用户拿着 96 分不知道该干什么。
         报告单的结论是一行计数加一段备注：核对了多少项、合格多少、
@@ -2097,7 +2132,7 @@ function New-PresetCard {
     <#
       一个「受检类别」选项。返回 Border，Tag 挂着预设对象。
 
-      ★ 这里过去是圆角卡片 + 4px 彩色左边条 + 阴影 ★
+      【这里过去是圆角卡片 + 4px 彩色左边条 + 阴影】
         craft-floor 同时拒绝这三样：
           · 同尺寸卡片（图标+标题+说明）当页面结构 —— 卡片是偷懒的容器
           · 卡片/列表项上超过 1px 的彩色左右边条
@@ -2109,7 +2144,7 @@ function New-PresetCard {
       选中的那一行换实心记号，并且整行压一条粗下划线 ——
       层次靠线重和字重，一点颜色都不用。
 
-      ★ 记号用几何图形画，不用 Unicode 字符 ★
+      【记号用几何图形画，不用 Unicode 字符】
         craft-floor：「Unicode 字符或 emoji 冒充图标系统」是被禁的。
         ○ ● 这种字符在不同字体里大小位置都不一样，还会跟着字重变形。
         这里用 Ellipse 画，描边粗细和直径由模数定死。
@@ -2402,7 +2437,7 @@ function Show-TweakDetail {
 
 · **大型单机 3A** —— 黑神话、艾尔登法环这类，要的是不卡顿、读图快
 · **网游 / 挂机 / 多开** —— 重点在网络延迟和后台别抢带宽
-· **★ 不玩游戏** —— 办公上网刷视频，只想电脑别这么卡
+· **不玩游戏** —— 办公上网刷视频，只想电脑别这么卡
 · **老机器救急** —— 配置吃紧、内存小、机械盘
 
 只玩竞技射击的，用下面「竞技射击」那一排。
@@ -2613,11 +2648,19 @@ function Build-TweakUI {
             $card.Tag = $tw
             $card.Add_MouseLeftButtonUp({ Show-TweakDetail $this.Tag })
 
+            # 列轨：勾选框 / 项目 / 结果 / 标记 / 参考范围
+            # 后三列定宽，整列右边缘对齐，一眼能顺着扫下来 ——
+            # 这是表格相对于卡片最实在的好处。
             $g = New-Object System.Windows.Controls.Grid
-            foreach ($w in @('Auto', '*', 'Auto')) {
+            foreach ($w in @(0, -1, 66, 24, 76)) {
                 $cd = New-Object System.Windows.Controls.ColumnDefinition
-                $cd.Width = [System.Windows.GridLength]::Auto
-                if ($w -eq '*') { $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star) }
+                $cd.Width = if ($w -eq -1) {
+                    New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+                } elseif ($w -eq 0) {
+                    [System.Windows.GridLength]::Auto
+                } else {
+                    New-Object System.Windows.GridLength ([double]$w)
+                }
                 $g.ColumnDefinitions.Add($cd)
             }
 
@@ -2629,34 +2672,49 @@ function Build-TweakUI {
             $g.Children.Add($cb) | Out-Null
 
             $sp = New-Object System.Windows.Controls.StackPanel
-            $nameTb = New-TextBlock -Text $tw.Name -Size 13.5 -Bold $true
+            $nameTb = New-TextBlock -Text $tw.Name -Size 13.5
             $nameTb.TextWrapping = 'Wrap'
             $sp.Children.Add($nameTb) | Out-Null
-            $meta = New-TextBlock -Text ("风险 {0}  ·  {1}" -f $tw.Risk, $tw.Effect) -Size 11.5 -Color '#66635B'
+            $meta = New-TextBlock -Text ("风险 {0}　{1}" -f $tw.Risk, $tw.Effect) -Size 11.5 -Color '#66635B'
             $meta.TextWrapping = 'Wrap'
             $meta.Margin = New-Thick 0 3 0 0
             $sp.Children.Add($meta) | Out-Null
             [System.Windows.Controls.Grid]::SetColumn($sp, 1)
             $g.Children.Add($sp) | Out-Null
 
-            # 状态做成固定宽度的「药丸」，这样一列下来右边缘是对齐的；
-            # 原来是长度不一的纯文字（已优化✓ / 未优化 / 不适用），看着参差不齐
-            $pill = New-Object System.Windows.Controls.Border
-            $pill.MinWidth = 66
-            $pill.CornerRadius = New-Object System.Windows.CornerRadius 10
-            $pill.Padding = New-Thick 9 3 9 4
-            $pill.Margin = New-Thick 10 0 0 0
-            $pill.VerticalAlignment = 'Center'
-            $badge = New-TextBlock -Text '检测中' -Size 11.5 -Color '#66635B'
-            $badge.HorizontalAlignment = 'Center'
-            $pill.Child = $badge
-            [System.Windows.Controls.Grid]::SetColumn($pill, 2)
-            $g.Children.Add($pill) | Out-Null
+            # ================================================================
+            #  结果 / 标记 / 参考范围 —— 和概览页同一套四栏语法
+            #
+            #  ★ 原来这里是一个圆角药丸，只显示「当前是什么状态」★
+            #    报告单多给一栏「参考范围」：这一项**对你这类用户应该是什么**。
+            #    信息量实打实多了一层，用户不用点进去才知道该不该动。
+            #
+            #  ★ 正常的行一律不标色不加粗 ★
+            #    只有「该开却没开」的行才上法定墨和 ↑，
+            #    满页平静，真要处理的那几行才跳出来。
+            # ================================================================
+            $res = New-TextBlock -Text '检测中' -Size 13 -Color '#2B2A26'
+            $res.TextAlignment = 'Right'
+            $res.VerticalAlignment = 'Center'
+            [System.Windows.Controls.Grid]::SetColumn($res, 2)
+            $g.Children.Add($res) | Out-Null
+
+            $mk = New-TextBlock -Text '' -Size 13 -Color '#66635B'
+            $mk.TextAlignment = 'Center'
+            $mk.VerticalAlignment = 'Center'
+            [System.Windows.Controls.Grid]::SetColumn($mk, 3)
+            $g.Children.Add($mk) | Out-Null
+
+            $rf = New-TextBlock -Size 12 -Color '#66635B' -Text $(if ($tw.Recommended) { '建议 开启' } else { '可选' })
+            $rf.TextAlignment = 'Right'
+            $rf.VerticalAlignment = 'Center'
+            [System.Windows.Controls.Grid]::SetColumn($rf, 4)
+            $g.Children.Add($rf) | Out-Null
 
             $card.Child = $g
             $panel.Children.Add($card) | Out-Null
 
-            $Script:TweakRows[$tw.Id] = @{ Check = $cb; Badge = $badge; Pill = $pill; Tweak = $tw; Card = $card }
+            $Script:TweakRows[$tw.Id] = @{ Check = $cb; Badge = $res; Mark = $mk; Ref = $rf; Tweak = $tw; Card = $card }
         }
     }
     Show-TweakDetail $null
@@ -2671,25 +2729,44 @@ function Update-TweakStates {
         if (-not $row) { continue }
         $available = Test-TweakAvailable $tw
         if (-not $available) {
-            $row.Badge.Text = '不适用'
+            # 本机不适用的项用「未上墨」表达：结果写一个长横、整行降到 0.45。
+            # 化验单上没做的项目是留白，不会专门涂一块灰遮罩。
+            $row.Badge.Text = [char]0x2014
             $row.Badge.Foreground = Get-Brush '#66635B'
-            $row.Pill.Background = Get-Brush '#EAE9E3'
+            $row.Badge.FontWeight = 'Normal'
+            $row.Mark.Text = ''
+            $row.Ref.Text = '本机不适用'
             $row.Check.IsEnabled = $false
             $row.Check.IsChecked = $false
-            $row.Card.Opacity = 0.55
+            $row.Card.Opacity = 0.45
             continue
         }
         $row.Check.IsEnabled = $true
         $row.Card.Opacity = 1.0
         $applied = Test-TweakApplied $tw
+        $row.Ref.Text = $(if ($tw.Recommended) { '建议 开启' } else { '可选' })
         if ($applied) {
-            $row.Badge.Text = '已优化 ✓'
-            $row.Badge.Foreground = Get-Brush '#556B54'
-            $row.Pill.Background = Get-Brush '#DCE8DA'
+            $row.Badge.Text = '已开启'
+            $row.Badge.Foreground = Get-Brush '#2B2A26'
+            $row.Badge.FontWeight = 'Normal'
+            $row.Mark.Text = ''
+            $row.Mark.Foreground = Get-Brush '#66635B'
+            $row.Mark.FontWeight = 'Normal'
+        } elseif ($tw.Recommended) {
+            # 该开却没开 = 超出参考范围。整行唯一上法定墨的情况。
+            $row.Badge.Text = '未开启'
+            $row.Badge.Foreground = Get-Brush '#8A5750'
+            $row.Badge.FontWeight = 'SemiBold'
+            $row.Mark.Text = [char]0x2191
+            $row.Mark.Foreground = Get-Brush '#8A5750'
+            $row.Mark.FontWeight = 'SemiBold'
         } else {
-            $row.Badge.Text = '未优化'
-            $row.Badge.Foreground = Get-Brush '#66635B'
-            $row.Pill.Background = Get-Brush '#EAE9E3'
+            $row.Badge.Text = '未开启'
+            $row.Badge.Foreground = Get-Brush '#2B2A26'
+            $row.Badge.FontWeight = 'Normal'
+            $row.Mark.Text = ''
+            $row.Mark.Foreground = Get-Brush '#66635B'
+            $row.Mark.FontWeight = 'Normal'
         }
         if ($PreselectRecommended) {
             $row.Check.IsChecked = ($tw.Recommended -and -not $applied)
@@ -2838,10 +2915,15 @@ function Build-CleanUI {
         $card.Add_MouseLeftButtonUp({ Show-CleanDetail $this.Tag })
 
         $g = New-Object System.Windows.Controls.Grid
-        foreach ($w in @('Auto', '*', 'Auto')) {
+        foreach ($w in @(0, -1, 92)) {
             $cd = New-Object System.Windows.Controls.ColumnDefinition
-            $cd.Width = [System.Windows.GridLength]::Auto
-            if ($w -eq '*') { $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star) }
+            $cd.Width = if ($w -eq -1) {
+                New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+            } elseif ($w -eq 0) {
+                [System.Windows.GridLength]::Auto
+            } else {
+                New-Object System.Windows.GridLength ([double]$w)
+            }
             $g.ColumnDefinitions.Add($cd)
         }
 
@@ -2854,15 +2936,18 @@ function Build-CleanUI {
         $g.Children.Add($cb) | Out-Null
 
         $sp = New-Object System.Windows.Controls.StackPanel
-        $nameTb = New-TextBlock -Text $it.Name -Size 13.5 -Bold $true
+        $nameTb = New-TextBlock -Text $it.Name -Size 13.5
         $nameTb.TextWrapping = 'Wrap'
         $sp.Children.Add($nameTb) | Out-Null
         [System.Windows.Controls.Grid]::SetColumn($sp, 1)
         $g.Children.Add($sp) | Out-Null
 
-        $size = New-TextBlock -Text '—' -Size 13 -Color '#66635B' -Bold $true
+        # 扫描结果：等宽数位右对齐，和别的表一个语汇。
+        # 不加粗 —— 加粗是留给「超出参考范围」的。
+        $size = New-TextBlock -Text ([string][char]0x2014) -Size 13 -Color '#2B2A26'
         $size.VerticalAlignment = 'Center'
-        $size.Margin = New-Thick 10 0 0 0
+        $size.TextAlignment = 'Right'
+        [System.Windows.Documents.Typography]::SetNumeralAlignment($size, 'Tabular')
         [System.Windows.Controls.Grid]::SetColumn($size, 2)
         $g.Children.Add($size) | Out-Null
 
@@ -4328,7 +4413,7 @@ function Build-OcCoachUI {
     <#
       超频陪练。
 
-      ★ 这一页不改任何东西 ★ 它只认卡、讲清每个滑块是干什么的、
+      【这一页不改任何东西】 它只认卡、讲清每个滑块是干什么的、
         给出一步步的试法。真正的调节交给 Afterburner / AMD 驱动面板。
         理由写在 Modules\Overclock.ps1 开头。
     #>

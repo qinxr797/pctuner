@@ -18,7 +18,7 @@
     Test        自定义「当前是否已优化」检测
     Available   返回 $false 时这一项会变灰（比如机械盘就不显示固态专用项）
 
-  ★ 关于 Effect 的诚实说明 ★
+  【关于 Effect 的诚实说明】
     网上很多「游戏优化」其实是安慰剂。这份清单里标了「几乎无感」
     的项目就是真的几乎无感，我把它们留下来只是因为有人想要，
     但它们不在「推荐」里。别指望改几个注册表就把 5 年前的机器
@@ -1357,7 +1357,7 @@ NetworkPredictionOptions = 2（2 = 从不预测）
 【关了之后】
 资讯瀑布流没了，新标签页秒开。
 
-★ 你自己的那排快捷方式（常用网站磁贴）**会保留** ★
+【你自己的那排快捷方式（常用网站磁贴）**会保留**】
    收藏夹栏也不受影响。
 
 （早期版本把快捷方式一起关掉了，而且是默认勾选的，
@@ -1377,7 +1377,7 @@ NewTabPageContentEnabled = 0      资讯流内容
         Category = '浏览器'; Risk = '低'; Effect = '纯观感 —— 对性能几乎没影响'
         Recommended = $false; Reboot = $false
         Detail = @'
-★ 这一项默认不勾。想要全空白页再开。★
+【这一项默认不勾。想要全空白页再开。】
 
 【这是干什么的】
 在上面那条「关掉资讯流」的基础上，把新标签页上**你自己的那排
@@ -1591,7 +1591,7 @@ ComponentUpdatesEnabled = 0
         Category = '浏览器'; Risk = '高'; Effect = '小幅省资源，但安全性明显下降'
         Recommended = $false; Reboot = $false
         Detail = @'
-★ 这一项拿安全换性能，收益很小，代价很大。看清楚再决定。★
+【这一项拿安全换性能，收益很小，代价很大。看清楚再决定。】
 
 【这是干什么的】
 关掉 Microsoft Defender SmartScreen。它的工作是：你每打开一个
@@ -1633,10 +1633,10 @@ SmartScreenEnabled = 0
 
     $tweaks += @{
         Id = 'SpectreMitigations'; Name = '关闭 Spectre / Meltdown 漏洞缓解措施'
-        Category = '激进优化'; Risk = '高'; Effect = '★ 这一组里最大的一条，老 CPU 上 5%~30%'
+        Category = '激进优化'; Risk = '高'; Effect = '这一组里最大的一条，老 CPU 上 5%~30%'
         Recommended = $false; Reboot = $true
         Detail = @'
-★ 如果你觉得「之前那些优化都没用」，先看这一条。★
+【如果你觉得「之前那些优化都没用」，先看这一条。】
   这是所有 Windows 设置里，对 CPU 性能影响最大的一项，
   而且绝大多数人的机器上它是开着的（= 一直在损失性能）。
 
@@ -1889,7 +1889,7 @@ HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\TdrDelay = 10
         Category = '激进优化'; Risk = '高'; Effect = '游戏加载和读图明显变快；但机器等于裸奔'
         Recommended = $false; Reboot = $false
         Detail = @'
-★★ 这是整个工具里代价最大的一项。看完再决定。★★
+【这是整个工具里代价最大的一项。看完再决定。】
 
 【这是干什么的】
 关掉 Windows Defender 的实时监控。
@@ -2098,10 +2098,10 @@ Windows 不再插手。
 
     $tweaks += @{
         Id = 'DefenderCloud'; Name = '关闭 Defender 云查杀与样本上传（保留本地防护）'
-        Category = '激进优化'; Risk = '中'; Effect = '★ 「关掉实时保护」的温和替代品，先试这个'
+        Category = '激进优化'; Risk = '中'; Effect = '「关掉实时保护」的温和替代品，先试这个'
         Recommended = $false; Reboot = $false
         Detail = @'
-★ 如果你在考虑「关闭 Defender 实时保护」，先看这一条。★
+【如果你在考虑「关闭 Defender 实时保护」，先看这一条。】
 
 【这是干什么的】
 只关掉 Defender 的两个联网功能，**本地的病毒特征库扫描照常工作**：
@@ -2269,7 +2269,7 @@ HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\Disabled = 1
         Category = '安全性权衡'; Risk = '高'; Effect = 'CS2 实测约 +25 帧；无畏契约国服/三角洲是启动硬性要求'
         Recommended = $false; Reboot = $true
         Detail = @'
-【★ 玩腾讯系 FPS 的话，这一项不是优化，是必须做 ★】
+【【玩腾讯系 FPS 的话，这一项不是优化，是必须做】】
 无畏契约【国服】和三角洲行动都用腾讯 ACE 反作弊。
 ACE 需要独占 CPU 虚拟化来对抗 DMA 硬件外挂，
 所以内存完整性(HVCI)开着的时候，游戏会弹
@@ -2331,7 +2331,7 @@ Win11 和部分预装 Win10 的品牌机默认是开着的。
         Category = '安全性权衡'; Risk = '高'; Effect = '无畏契约国服/三角洲的启动硬性要求；用 WSL 的人会坏事'
         Recommended = $false; Reboot = $true
         Detail = @'
-【★ 和上一项配套，玩腾讯系 FPS 必须做 ★】
+【【和上一项配套，玩腾讯系 FPS 必须做】】
 Hyper-V 开着的时候，它会把 CPU 的虚拟化功能【独占】走。
 腾讯 ACE 反作弊（无畏契约国服 / 三角洲行动）也要用虚拟化，
 拿不到就弹「CPU虚拟化未开启或被其他软件占用」，游戏起不来。
