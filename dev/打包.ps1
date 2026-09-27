@@ -19,7 +19,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $stage = Join-Path $env:TEMP ('pctuner-pack-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 $out = Join-Path ([Environment]::GetFolderPath('Desktop')) '电脑调优助手.zip'
 
-$skipDirs = @('Backup', 'dev', 'Launcher', 'docs', '.git', '.impeccable')
+$skipDirs = @('Backup', 'dev', 'Launcher', 'docs', '.git')
 $skipFiles = @('design.md', 'PRODUCT.md', 'CLAUDE.md')
 
 $dest = Join-Path $stage 'PCTuner'
