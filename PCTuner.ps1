@@ -1824,28 +1824,40 @@ $xamlText = @'
                    抬头那一行随时能再点开。
                  ================================================================ -->
             <Border Grid.Row="0" Background="{DynamicResource CardBg}" CornerRadius="8" BorderBrush="{DynamicResource BorderMed}"
-                    BorderThickness="1" Padding="13,10" Margin="0,0,0,10">
+                    BorderThickness="1" Padding="14,9" Margin="0,0,0,8">
               <StackPanel>
-                <!-- 「按用途选」永远露在外面 —— 这是绝大多数人该走的那条路。
-                     【必须是竖向 StackPanel，不能是 WrapPanel】
-                       里面装的是「组标题 + 该组卡片的 WrapPanel」一对一对往下排；
-                       写成 WrapPanel 的话，卡片一加宽，内层期望宽度变了，
-                       外层就会把组标题横着甩到卡片右边，整个预设区排版全乱。 -->
-                <StackPanel x:Name="PresetPrimary"/>
-
-                <!-- 其余分组默认收起。理由：12 张卡全展开有 490px 高，
-                     而整个左栏只有 610px —— 下面那个优化项列表会被挤成 0 高度，
-                     用户在这一页上根本看不见自己要勾的东西。 -->
-                <Grid x:Name="PresetHeader" Cursor="Hand" Background="Transparent" Margin="0,4,0,0">
+                <!-- ★ 整个预设区并成一行 ★
+                       这一页的主角是下面那 55 个优化项（老板定位：鼓励用户
+                       自己手动调整）。预设区原来占 200px、内容区的三分之一，
+                       把列表挤得只剩 3 行，主次完全颠倒。
+                       组名、四个选项、「更多」全排进同一行，压到约 44px。 -->
+                <Grid>
                   <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
-                  <TextBlock x:Name="PresetMoreHint" Grid.Column="0"
-                             Text="只玩竞技射击、或者想给浏览器瘦身 —— 在这里"
-                             Foreground="{DynamicResource TextDim}" FontSize="12" VerticalAlignment="Center"/>
-                  <TextBlock x:Name="PresetToggle" Grid.Column="1" Text="展开" FontSize="12"
-                             Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="12,0,2,0"/>
+
+                  <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0">
+                    <Border Width="3" Height="15" CornerRadius="1" VerticalAlignment="Center"
+                            Background="{DynamicResource TextMid}" Margin="0,0,8,0"/>
+                    <TextBlock Text="按用途选" FontSize="14" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextMain}" VerticalAlignment="Center"/>
+                  </StackPanel>
+
+                  <!-- 卡片区。★ 必须是竖向 StackPanel，不能是 WrapPanel ★
+                       内层 WrapPanel 的期望宽度一变，外层就会把内容横着甩乱。 -->
+                  <StackPanel x:Name="PresetPrimary" Grid.Column="1" VerticalAlignment="Center"/>
+
+                  <!-- 其余分组默认收起：12 张卡全展开有 490px 高，
+                       展开着的时候下面的列表会被挤没。 -->
+                  <StackPanel x:Name="PresetHeader" Grid.Column="2" Orientation="Horizontal"
+                              Cursor="Hand" Background="Transparent" VerticalAlignment="Center" Margin="14,0,0,0">
+                    <TextBlock x:Name="PresetMoreHint" Text="更多"
+                               Foreground="{DynamicResource TextDim}" FontSize="12.5" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="PresetToggle" Text="展开" FontSize="12.5"
+                               Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="8,0,2,0"/>
+                  </StackPanel>
                 </Grid>
                 <StackPanel x:Name="PresetBody" Margin="0,8,0,0" Visibility="Collapsed">
                   <StackPanel x:Name="PresetBar"/>
@@ -2645,13 +2657,14 @@ function New-PresetCard {
         ○ ● 这种字符在不同字体里大小位置都不一样，还会跟着字重变形。
         这里用 Ellipse 画，描边粗细和直径由模数定死。
     #>
-    param($Preset, [bool]$Big = $false)
+    param($Preset, [bool]$Big = $false, [bool]$Compact = $false)
 
     $row = New-Object System.Windows.Controls.Border
     $row.Background = [System.Windows.Media.Brushes]::Transparent
     $row.BorderBrush = Get-Brush $Script:CARD_BORDER
-    $row.BorderThickness = New-Thick 0 0 0 1        # 行间细线，和检验表同一套
-    $row.Padding = New-Thick 2 9 2 9
+    # 紧凑模式是横排一行，不画行间线（那是竖排列表的语汇）
+    $row.BorderThickness = $(if ($Compact) { New-Thick 0 } else { New-Thick 0 0 0 1 })
+    $row.Padding = $(if ($Compact) { New-Thick 0 5 12 5 } else { New-Thick 2 9 2 9 })
     $row.Cursor = 'Hand'
     $row.Tag = $Preset
 
@@ -2664,9 +2677,9 @@ function New-PresetCard {
 
     # --- 勾选记号：空心圆 / 选中时中间加实心点 ---
     $markBox = New-Object System.Windows.Controls.Grid
-    $markBox.Width = 22; $markBox.Height = 18
-    $markBox.VerticalAlignment = 'Top'
-    $markBox.Margin = New-Thick 0 2 0 0
+    $markBox.Width = 18; $markBox.Height = 18
+    $markBox.VerticalAlignment = $(if ($Compact) { 'Center' } else { 'Top' })
+    $markBox.Margin = $(if ($Compact) { New-Thick 0 } else { New-Thick 0 2 0 0 })
 
     $ring = New-Object System.Windows.Shapes.Ellipse
     $ring.Width = 11; $ring.Height = 11
@@ -2690,12 +2703,14 @@ function New-PresetCard {
     $sp = New-Object System.Windows.Controls.StackPanel
     [System.Windows.Controls.Grid]::SetColumn($sp, 1)
 
-    $title = New-TextBlock -Text $Preset.Name -Size 15 -Wrap $true
+    $title = New-TextBlock -Text $Preset.Name -Size 14.5 -Wrap (-not $Compact)
+    $title.VerticalAlignment = 'Center'
     $title.FontWeight = 'SemiBold'
     $sp.Children.Add($title) | Out-Null
 
+    # 紧凑模式不画副标题 —— 信息不丢，点选之后右栏会显示完整说明
     $subText = $Script:PresetSubtitle["$($Preset.Id)"]
-    if ($subText) {
+    if ($subText -and -not $Compact) {
         $sub = New-TextBlock -Text $subText -Size 12 -Color '#66635B' -Wrap $true
         $sub.Margin = New-Thick 0 3 0 0
         $sp.Children.Add($sub) | Out-Null
@@ -2817,13 +2832,19 @@ function Build-PresetUI {
             $hh.Margin = New-Thick 10 1 0 0
             $head.Children.Add($hh) | Out-Null
         }
-        $slot.Children.Add($head) | Out-Null
+        # 第一组的组标题已经写死在 XAML 那一行里，这里不再重复画
+        if ($gi -ne 0) { $slot.Children.Add($head) | Out-Null }
 
         # 卡片区。用 WrapPanel 自动换行 ——
         # 它的父级是竖向 StackPanel，宽度是实际宽度，能正常换行。
+        # ★ 常驻的第一组走紧凑模式 ★
+        #   这一页的主角是下面那 55 个优化项（老板定位：鼓励用户自己手动调整）。
+        #   预设区原来占 200px、内容区的三分之一，把列表挤得只剩 3 行 ——
+        #   主次完全颠倒。紧凑模式一行四个，压到约 48px。
+        $compact = ($gi -eq 0)
         $wrap = New-Object System.Windows.Controls.WrapPanel
         foreach ($ps in ($Script:Presets | Where-Object { $_.Group -eq $grp })) {
-            $card = New-PresetCard -Preset $ps
+            $card = New-PresetCard -Preset $ps -Compact $compact
             [void]$Script:PresetCardList.Add($card)
             $wrap.Children.Add($card) | Out-Null
         }
@@ -2837,11 +2858,7 @@ function Set-PresetExpanded {
     $Script:PresetExpanded = $On
     $Script:UI.PresetBody.Visibility = if ($On) { 'Visible' } else { 'Collapsed' }
     $Script:UI.PresetToggle.Text = if ($On) { '收起' } else { '展开' }
-    $Script:UI.PresetMoreHint.Text = if ($On) {
-        '还有这两组 —— 看完点右边收起，好腾地方给下面的列表'
-    } else {
-        '只玩竞技射击、或者想给浏览器瘦身 —— 在这里'
-    }
+    $Script:UI.PresetMoreHint.Text = if ($On) { '收起' } else { '更多' }
 }
 
 function Select-Preset {
