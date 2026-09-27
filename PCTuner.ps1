@@ -5742,6 +5742,7 @@ if ($Script:FontLoaded) {
     Write-Log "随包字体没加载上，退回系统字体。$Script:FontLoadError" '警告'
 }
 
+Install-PressFeedback      # 所有按钮按下缩 0.97、松手弹簧回弹（类级注册，切到哪页都有）
 Build-NavUI
 Build-TweakUI
 Build-PresetUI
@@ -5754,7 +5755,6 @@ Update-TweakStates -PreselectRecommended $true
 
 # 启动项和体检比较慢，等窗口显示出来之后再在后台补上
 $Script:Window.Add_ContentRendered({
-        # 按钮的按下反馈是 MDIX 的水波纹（压淡），不用再给每个按钮挂缩放
         Build-StartupUI
         Build-MaintainUI
         Build-BigFileDrives

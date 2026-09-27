@@ -347,3 +347,53 @@ function Test-IsSelectedRow {
     if ($Border.Resources['__sel'] -eq $true) { return $true }
     return ($Script:SelectedCard -eq $Border -or $Script:SelectedPresetCard -eq $Border)
 }
+
+# =====================================================================
+#  按钮按下（A3 手感）
+# ---------------------------------------------------------------------
+#  按下 90ms 缩到 0.97（ease-out，立刻到位），松手 / 移出用弹簧弹回 1。
+#  回答「点上了吗」—— 老板原话「点按钮没有动画」就是缺这个。
+#  MDIX 的水波纹还在（压淡），两者是一回事的两个面：缩放说「按下了」，波纹说「按在哪」。
+#
+#  ★ 类级注册，不遍历可视树 ★
+#    TabControl 只给当前页建可视树，启动时遍历只挂得上概览页的按钮（v5 踩过）。
+#    给 Button 这个类型注册一次，之后创建的每个按钮都自动带上。
+#  ★ 只挂 Button ★ 勾选框、开关有自己的动效；滚动条里的 RepeatButton 不该缩。
+# =====================================================================
+function Get-PressScale {
+    <# 拿到（必要时装上）按钮的 ScaleTransform，缩放中心在正中 —— 默认左上角缩会往左上跑 #>
+    param($Ctrl)
+    if ($Ctrl.RenderTransform -is [System.Windows.Media.ScaleTransform] -and -not $Ctrl.RenderTransform.IsFrozen) { return $Ctrl.RenderTransform }
+    $Ctrl.RenderTransformOrigin = New-Object System.Windows.Point 0.5, 0.5
+    $sc = New-Object System.Windows.Media.ScaleTransform 1, 1
+    $Ctrl.RenderTransform = $sc
+    return $sc
+}
+
+function Set-PressScale {
+    param($Ctrl, [bool]$Down)
+    if (-not $Ctrl.IsEnabled) { return }
+    $sc = Get-PressScale $Ctrl
+    foreach ($prop in @([System.Windows.Media.ScaleTransform]::ScaleXProperty, [System.Windows.Media.ScaleTransform]::ScaleYProperty)) {
+        if ($Down) { Start-Prop $sc $prop $null 0.97 $Script:Dur.Press $Script:Ease.Out }
+        else { Start-Spring $sc $prop 1.0 }
+    }
+}
+
+function Install-PressFeedback {
+    if ($Script:PressInstalled) { return }
+    try {
+        $down = [System.Windows.Input.MouseButtonEventHandler] { param($s, $e) Set-PressScale $s $true }
+        $up = [System.Windows.Input.MouseButtonEventHandler] { param($s, $e) Set-PressScale $s $false }
+        $leave = [System.Windows.Input.MouseEventHandler] {
+            param($s, $e)
+            $sc = $s.RenderTransform
+            if ($sc -is [System.Windows.Media.ScaleTransform] -and $sc.ScaleX -lt 0.999) { Set-PressScale $s $false }
+        }
+        $t = [System.Windows.Controls.Button]
+        [System.Windows.EventManager]::RegisterClassHandler($t, [System.Windows.UIElement]::PreviewMouseLeftButtonDownEvent, $down, $true)
+        [System.Windows.EventManager]::RegisterClassHandler($t, [System.Windows.UIElement]::PreviewMouseLeftButtonUpEvent, $up, $true)
+        [System.Windows.EventManager]::RegisterClassHandler($t, [System.Windows.UIElement]::MouseLeaveEvent, $leave, $true)
+        $Script:PressInstalled = $true
+    } catch { $Script:PressError = "$($_.Exception.Message)" }
+}
