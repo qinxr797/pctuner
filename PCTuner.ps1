@@ -2272,15 +2272,19 @@ $xamlText = @'
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
-          <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+          <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
             <Button x:Name="BtnOpenBackup" Content="打开备份 / 日志文件夹"/>
+            <Button x:Name="BtnCopyLog" Content="复制全部日志"/>
             <TextBlock Text="所有修改的原始值都保存在备份文件夹里，「还原」功能依赖它，请不要删除。"
-                       Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="8,0,0,0" FontSize="12"/>
+                       Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="8,0,0,0" FontSize="13"/>
           </StackPanel>
-          <TextBox Grid.Row="1" x:Name="LogBox" IsReadOnly="True" AcceptsReturn="True"
-                   Background="{DynamicResource NeutralTint}" Foreground="{DynamicResource TextMid}" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1"
-                   FontSize="12" Padding="12"
-                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+          <!-- ★ 这里以前是一个只读 TextBox ★
+                 HandyControl 的输入框样式把内容竖着居中了，几行日志飘在一个大空框正中间，
+                 看着像出了 bug。而且时间、级别、内容挤在一行纯文本里，扫不出任何结构。
+                 改成三列表：时间 | 类别 | 内容，和全app一套语汇。 -->
+          <ScrollViewer Grid.Row="1" x:Name="LogScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel x:Name="LogPanel" Margin="0,0,10,0"/>
+          </ScrollViewer>
         </Grid>
       </TabItem>
     </TabControl>
@@ -2340,10 +2344,95 @@ foreach ($n in @(
         'RecentRunPanel', 'BtnRecentRuns', 'BtnEnableTaskLog',
         'BtnWatchStart', 'BtnWatchStop', 'BtnProcAudit', 'BtnProcLog', 'WatchStatus',
         'InfoPanel', 'AdvicePanel', 'BtnHealthScan', 'BtnFpsDiag', 'BtnOcCoach', 'BtnVendor', 'BtnAddExclusion', 'BtnSfc', 'BtnCopyReport', 'BtnExportReport',
-        'LogBox', 'BtnOpenBackup', 'StatusText', 'BusyBar')) {
+        'LogPanel', 'LogScroll', 'BtnOpenBackup', 'BtnCopyLog', 'StatusText', 'BusyBar')) {
     $Script:UI[$n] = $Script:Window.FindName($n)
 }
-$Script:LogBox = $Script:UI.LogBox
+# ---------------------------------------------------------------------
+#  操作日志表
+# ---------------------------------------------------------------------
+function Add-LogRow {
+    <#
+      一行日志。错误 ↑↑、警告 ↑，信息和成功不标不上墨 ——
+      和全app同一套判读语法：满页平静，出事的那几行自己跳出来。
+    #>
+    param([string]$Time, [string]$Level, [string]$Message)
+    $p = $Script:UI.LogPanel
+    if ($null -eq $p) { return }
+
+    $mark = switch ($Level) { '错误' { '↑↑' } '警告' { '↑' } default { '' } }
+    $abn = [bool]$mark
+
+    $b = New-Object System.Windows.Controls.Border
+    $b.BorderBrush = Get-Brush $Script:CARD_BORDER
+    $b.BorderThickness = New-Thick 0 0 0 1
+    $b.Padding = New-Thick 0 7 0 7
+
+    $g = New-Object System.Windows.Controls.Grid
+    foreach ($w in @(28.0, 78.0, 58.0, 0.0)) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = if ($w -eq 0) {
+            New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        } else {
+            New-Object System.Windows.GridLength $w
+        }
+        $g.ColumnDefinitions.Add($cd)
+    }
+
+    $mk = New-TextBlock -Text $mark -Size 13.5 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+    if ($abn) { $mk.FontWeight = 'SemiBold' }
+    $mk.VerticalAlignment = 'Top'
+    $g.Children.Add($mk) | Out-Null
+
+    # ★ 表格数位 ★ 时间列不加这句，1 比 8 窄，整列时间对不齐
+    $tm = New-TextBlock -Text $Time -Size 13 -Color '#66635B'
+    [System.Windows.Documents.Typography]::SetNumeralAlignment($tm, 'Tabular')
+    $tm.VerticalAlignment = 'Top'
+    [System.Windows.Controls.Grid]::SetColumn($tm, 1)
+    $g.Children.Add($tm) | Out-Null
+
+    $lv = New-TextBlock -Text $Level -Size 13 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+    if ($abn) { $lv.FontWeight = 'SemiBold' }
+    $lv.VerticalAlignment = 'Top'
+    [System.Windows.Controls.Grid]::SetColumn($lv, 2)
+    $g.Children.Add($lv) | Out-Null
+
+    $ms = New-TextBlock -Text $Message -Size 13.5 -Color '#2B2A26' -Wrap $true
+    if ($abn) { $ms.FontWeight = 'SemiBold' }
+    [System.Windows.Controls.Grid]::SetColumn($ms, 3)
+    $g.Children.Add($ms) | Out-Null
+
+    $b.Child = $g
+    $p.Children.Add($b) | Out-Null
+}
+
+function Build-LogUI {
+    <# 按 LogEntries 重画整张日志表。换肤和首次建表都走这儿。 #>
+    $p = $Script:UI.LogPanel
+    if ($null -eq $p) { return }
+    $p.Children.Clear()
+    Add-ColHeader -Panel $p -First '内容' -Cols @() -Indent 164
+    # ★ 列名要和行里的列轨对齐 ★ 前三列 28+78+58 = 164
+    $hdr = $p.Children[0].Children[0]
+    foreach ($c in @(@{ T = '时间'; X = 28.0 }, @{ T = '类别'; X = 106.0 })) {
+        $t = New-TextBlock -Text $c.T -Size 13 -Color '#66635B'
+        $t.FontWeight = 'SemiBold'
+        $t.Margin = New-Thick $c.X 0 0 0
+        $t.HorizontalAlignment = 'Left'
+        $hdr.Children.Add($t) | Out-Null
+    }
+
+    foreach ($en in $Script:LogEntries) {
+        Add-LogRow -Time $en.Time -Level $en.Level -Message $en.Message
+    }
+}
+
+# 日志出口切到这张表；之前已经记下的几条会在 Build-LogUI 里补画出来
+$Script:LogBox = $null
+$Script:LogSink = {
+    param($t, $l, $m)
+    Add-LogRow -Time $t -Level $l -Message $m
+    try { $Script:UI.LogScroll.ScrollToEnd() } catch { }
+}
 
 # ---------------------------------------------------------------------
 #  5. 性能优化页
@@ -3933,6 +4022,7 @@ function Redraw-AllPages {
         if ($Script:Findings -and $Script:Findings.Count -gt 0) { Show-Findings }
         else { $Script:UI.InspectPanel.Children.Clear(); Set-InspectEmpty }
     } catch { }
+    try { Build-LogUI } catch { }
     # 大文件查找：只重画空状态。已经扫出来的结果不动 ——
     # 重扫要一两分钟，为了换个皮肤把用户等来的结果清掉，那是本末倒置。
     try {
@@ -5395,6 +5485,13 @@ $Script:UI.BtnInspectFilter.Add_Click({
         if ($Script:Findings.Count -gt 0) { Show-Findings }
     })
 $Script:UI.BtnRecentRuns.Add_Click({ Build-RecentRuns; Set-Status '任务运行记录已刷新' })
+$Script:UI.BtnCopyLog.Add_Click({
+        # 表格不像 TextBox 能直接框选复制，所以给一个「全拿走」的出口
+        try {
+            [System.Windows.Clipboard]::SetText(($Script:LogLines -join [Environment]::NewLine))
+            Set-Status ('已复制 {0} 条日志到剪贴板' -f $Script:LogLines.Count)
+        } catch { Set-Status '复制失败，日志文件在备份文件夹里' }
+    })
 $Script:UI.BtnWatchStart.Add_Click({ Start-LiveWatch })
 $Script:UI.BtnWatchStop.Add_Click({ Stop-LiveWatch })
 $Script:UI.BtnProcLog.Add_Click({ Show-ProcLog })
@@ -5561,7 +5658,11 @@ $Script:UI.SubTitle.Text = "受检机器  $machine　·　$osCaption"
 $Script:UI.RptNo.Text    = "编号  PCT-$Script:AppVersion-$((Get-Date).ToString('MMdd'))"
 $Script:UI.RptDate.Text  = "报告日期  $((Get-Date).ToString('yyyy-MM-dd'))"
 
-Write-Log '=== 电脑调优助手已启动（管理员模式）===' '信息'
+# ★ 写真实的权限状态 ★
+#   这句话原来是写死的「管理员模式」。出图模式不提权之后，
+#   日志里会出现一句假话 —— 日志写假话比没日志更坏。
+$Script:IsAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+Write-Log ('=== 电脑调优助手已启动（{0}）===' -f $(if ($Script:IsAdmin) { '管理员模式' } else { '普通权限 —— 传感器、SMART、系统设置读不到也改不了' })) '信息'
 if ($Script:FontLoaded) {
     Write-Log "随包字体 MiSans 已加载（不装进系统）：$Script:FontStack" '信息'
 } else {
@@ -5588,6 +5689,7 @@ $Script:Window.Add_ContentRendered({
         Build-BigFileDrives
         Build-RecentRuns
         Set-InspectEmpty        # 弹窗排查页扫描前的空状态
+        Build-LogUI             # 把窗口出来之前记下的那几条日志补画出来
         Build-ThemeUI
         # 概览页：先建壳子再开硬件监控。
         # Initialize-Dash 要枚举全部硬件，实测约 3 秒，所以放在

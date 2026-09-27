@@ -23,7 +23,9 @@ $Script:LogLines   = New-Object System.Collections.ArrayList
 $Script:Backup     = @{}        # 备份仓库：键 = "REG|路径|名称" 或 "SVC|服务名" 或 "FLAG|优化项ID"
 $Script:BackupFile = $null
 $Script:LogFile    = $null
-$Script:LogBox     = $null      # 界面上的日志框，由主程序赋值
+$Script:LogBox     = $null      # 界面上的日志框，由主程序赋值（旧出口，静默模式还在用）
+$Script:LogSink    = $null      # 界面上的日志表，由主程序赋值。设了就走它，不走 LogBox
+$Script:LogEntries = New-Object System.Collections.ArrayList   # 结构化的日志，界面重建时照它重画
 
 function Initialize-Engine {
     <# 初始化：准备备份目录、日志文件，并把上次的备份读回内存 #>
@@ -46,10 +48,16 @@ function Write-Log {
         [string]$Message,
         [ValidateSet('信息','成功','警告','错误')][string]$Level = '信息'
     )
-    $line = '[{0}] [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'), $Level, $Message
+    $ts = Get-Date -Format 'HH:mm:ss'
+    $line = '[{0}] [{1}] {2}' -f $ts, $Level, $Message
     [void]$Script:LogLines.Add($line)
+    [void]$Script:LogEntries.Add([PSCustomObject]@{ Time = $ts; Level = $Level; Message = $Message })
     try { Add-Content -LiteralPath $Script:LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue } catch { }
-    if ($Script:LogBox) {
+    # 界面上的出口。设了 LogSink 就走它（日志表），否则退回老的 TextBox。
+    # 静默清理模式两个都是 $null，直接只写文件。
+    if ($Script:LogSink) {
+        try { & $Script:LogSink $ts $Level $Message } catch { }
+    } elseif ($Script:LogBox) {
         try {
             $Script:LogBox.AppendText($line + [Environment]::NewLine)
             $Script:LogBox.ScrollToEnd()
