@@ -32,7 +32,7 @@ $ErrorActionPreference = 'Continue'
 
 # ===== 版本号 =====
 # 改版本号只改这一处，标题栏 / 副标题 / 诊断报告都从这里取。
-$Script:AppVersion     = '4.2'
+$Script:AppVersion     = '5.0'
 $Script:AppVersionDate = '2026-09-27'
 
 # ---------------------------------------------------------------------
@@ -1751,102 +1751,10 @@ $Script:PresetGroupColor = @{
     '浏览器瘦身' = '#7A6B45'
 }
 
-function New-PresetCard {
-    <#
-      一张预设卡片。返回 Border，Tag 挂着预设对象。
-      Big=$true 用在概览页（更大、副标题更长）。
-    #>
-    param($Preset, [bool]$Big = $false)
-
-    $accent = $Script:PresetGroupColor["$($Preset.Group)"]
-    if (-not $accent) { $accent = '#55606F' }
-
-    $card = New-Object System.Windows.Controls.Border
-    $card.Background = Get-Brush $Script:CARD_BG
-    $card.BorderBrush = Get-Brush $Script:CARD_BORDER
-    $card.BorderThickness = New-Thick 1
-    $card.CornerRadius = New-Object System.Windows.CornerRadius 10
-    $card.Padding = New-Thick 0
-    # 概览页那排只有一行，给下边距会白占 12px，把整块挤出可视区
-    $card.Margin = $(if ($Big) { New-Thick 0 0 12 0 } else { New-Thick 0 0 12 12 })
-    $card.Cursor = 'Hand'
-    $card.Tag = $Preset
-    # 宽度按「一行正好三张」算。预设区可用内宽实测 714，
-    # 每张右边还有 10 的间距，所以 3 × (W + 10) ≤ 714 → W ≤ 228。
-    # 以前是 196，一行三张只占 618，右边白白空着 96，
-    # 副标题却被截成「黑神话 / 艾尔登法环，要的…」。
-    $card.Width = $(if ($Big) { 228 } else { 226 })
-    Add-CardShadow $card
-
-    $g = New-Object System.Windows.Controls.Grid
-    foreach ($w in 'Auto', '*') {
-        $cd = New-Object System.Windows.Controls.ColumnDefinition
-        $cd.Width = if ($w -eq 'Auto') { [System.Windows.GridLength]::Auto } else { New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star) }
-        $g.ColumnDefinitions.Add($cd)
-    }
-
-    # 左侧色条
-    $bar = New-Object System.Windows.Controls.Border
-    $bar.Width = 4
-    $bar.Background = Get-Brush $accent
-    $bar.CornerRadius = New-Object System.Windows.CornerRadius 10, 0, 0, 10
-    [System.Windows.Controls.Grid]::SetColumn($bar, 0)
-    $g.Children.Add($bar) | Out-Null
-
-    $sp = New-Object System.Windows.Controls.StackPanel
-    $sp.Margin = New-Thick 16 12 16 12
-    [System.Windows.Controls.Grid]::SetColumn($sp, 1)
-
-    $title = New-TextBlock -Text $Preset.Name -Size 14.5 -Bold $true
-    $title.TextTrimming = 'CharacterEllipsis'
-    $sp.Children.Add($title) | Out-Null
-
-    $subText = $Script:PresetSubtitle["$($Preset.Id)"]
-    if ($subText) {
-        $sub = New-TextBlock -Text $subText -Size 12 -Color '#66635B'
-        # ★ 标题和副标题都限一行、超出省略 ★
-        #   允许换行的话，名字长一点卡片就变三行高，
-        #   12 张卡叠起来能把整个左栏占满，下面的优化项列表就看不见了。
-        $sub.TextTrimming = 'CharacterEllipsis'
-        $sub.Margin = New-Thick 0 4 0 0
-        $sp.Children.Add($sub) | Out-Null
-    }
-
-    $g.Children.Add($sp) | Out-Null
-    $card.Child = $g
-
-    $card.Add_MouseEnter({ if ($Script:SelectedPresetCard -ne $this) { Start-ColorFade $this $Script:CARD_HOVER } })
-    $card.Add_MouseLeave({ if ($Script:SelectedPresetCard -ne $this) { Start-ColorFade $this $Script:CARD_BG } })
-    $card.Add_MouseLeftButtonUp({
-            Select-PresetCard $this
-            Select-Preset $this.Tag
-        })
-    return $card
-}
 
 $Script:SelectedPresetCard = $null
 $Script:PresetCardList = New-Object System.Collections.ArrayList
 
-function Select-PresetCard {
-    <# 标记当前选中的预设卡片，上一张恢复原样 #>
-    param($Card)
-    foreach ($c in $Script:PresetCardList) {
-        if ($null -eq $c) { continue }
-        try {
-            $c.Background = Get-Brush $Script:CARD_BG
-            $c.BorderBrush = Get-Brush $Script:CARD_BORDER
-            $c.BorderThickness = New-Thick 1
-        } catch { }
-    }
-    $Script:SelectedPresetCard = $Card
-    if ($Card) {
-        try {
-            $Card.Background = Get-Brush $Script:CARD_SEL_BG
-            $Card.BorderBrush = Get-Brush $Script:CARD_SEL_BD
-            $Card.BorderThickness = New-Thick 2
-        } catch { }
-    }
-}
 
 function Get-RptRange {
     <#
@@ -2111,6 +2019,131 @@ function Update-DashUI {
         $Script:DashRows['Disk'].Note.Text = "$($d.Drive) 共 $($d.TotalGB) GB，已用 $($d.UsedPct)%"
         $Script:DashRows['Disk'].Note.Visibility = 'Visible'
     }
+}
+
+function New-PresetCard {
+    <#
+      一个「受检类别」选项。返回 Border，Tag 挂着预设对象。
+
+      ★ 这里过去是圆角卡片 + 4px 彩色左边条 + 阴影 ★
+        craft-floor 同时拒绝这三样：
+          · 同尺寸卡片（图标+标题+说明）当页面结构 —— 卡片是偷懒的容器
+          · 卡片/列表项上超过 1px 的彩色左右边条
+          · 深色界面上的投影（深度只能来自表面阶梯和发丝线）
+
+      报告单上的「参考人群」不是卡片，是一组勾选行：
+        ○ 大型单机 3A      黑神话 / 艾尔登法环，要的是不卡顿
+        ● 不玩游戏         办公上网刷视频，只想电脑别这么卡
+      选中的那一行换实心记号，并且整行压一条粗下划线 ——
+      层次靠线重和字重，一点颜色都不用。
+
+      ★ 记号用几何图形画，不用 Unicode 字符 ★
+        craft-floor：「Unicode 字符或 emoji 冒充图标系统」是被禁的。
+        ○ ● 这种字符在不同字体里大小位置都不一样，还会跟着字重变形。
+        这里用 Ellipse 画，描边粗细和直径由模数定死。
+    #>
+    param($Preset, [bool]$Big = $false)
+
+    $row = New-Object System.Windows.Controls.Border
+    $row.Background = [System.Windows.Media.Brushes]::Transparent
+    $row.BorderBrush = Get-Brush $Script:CARD_BORDER
+    $row.BorderThickness = New-Thick 0 0 0 1        # 行间细线，和检验表同一套
+    $row.Padding = New-Thick 2 9 2 9
+    $row.Cursor = 'Hand'
+    $row.Tag = $Preset
+
+    $g = New-Object System.Windows.Controls.Grid
+    $cdA = New-Object System.Windows.Controls.ColumnDefinition
+    $cdA.Width = New-Object System.Windows.GridLength 22
+    $cdB = New-Object System.Windows.Controls.ColumnDefinition
+    $cdB.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+    $g.ColumnDefinitions.Add($cdA); $g.ColumnDefinitions.Add($cdB)
+
+    # --- 勾选记号：空心圆 / 选中时中间加实心点 ---
+    $markBox = New-Object System.Windows.Controls.Grid
+    $markBox.Width = 22; $markBox.Height = 18
+    $markBox.VerticalAlignment = 'Top'
+    $markBox.Margin = New-Thick 0 2 0 0
+
+    $ring = New-Object System.Windows.Shapes.Ellipse
+    $ring.Width = 11; $ring.Height = 11
+    $ring.StrokeThickness = 1.2
+    $ring.Stroke = Get-Brush '#66635B'
+    $ring.HorizontalAlignment = 'Left'
+    $ring.VerticalAlignment = 'Center'
+    $markBox.Children.Add($ring) | Out-Null
+
+    $dot = New-Object System.Windows.Shapes.Ellipse
+    $dot.Width = 5; $dot.Height = 5
+    $dot.Fill = Get-Brush '#2B2A26'
+    $dot.HorizontalAlignment = 'Left'
+    $dot.VerticalAlignment = 'Center'
+    $dot.Margin = New-Thick 3 0 0 0
+    $dot.Visibility = 'Collapsed'
+    $markBox.Children.Add($dot) | Out-Null
+    $g.Children.Add($markBox) | Out-Null
+
+    # --- 名称 + 说明 ---
+    $sp = New-Object System.Windows.Controls.StackPanel
+    [System.Windows.Controls.Grid]::SetColumn($sp, 1)
+
+    $title = New-TextBlock -Text $Preset.Name -Size 13.5 -Wrap $true
+    $title.FontWeight = 'SemiBold'
+    $sp.Children.Add($title) | Out-Null
+
+    $subText = $Script:PresetSubtitle["$($Preset.Id)"]
+    if ($subText) {
+        $sub = New-TextBlock -Text $subText -Size 12 -Color '#66635B' -Wrap $true
+        $sub.Margin = New-Thick 0 3 0 0
+        $sp.Children.Add($sub) | Out-Null
+    }
+    $g.Children.Add($sp) | Out-Null
+    $row.Child = $g
+
+    # 记号和标题存起来，选中时要改
+    $row.Resources['__preset'] = @{ Ring = $ring; Dot = $dot; Title = $title }
+
+    $row.Add_MouseEnter({
+            if ($Script:SelectedPresetCard -ne $this) { $this.Background = Get-Brush $Script:CARD_HOVER }
+        })
+    $row.Add_MouseLeave({
+            if ($Script:SelectedPresetCard -ne $this) { $this.Background = [System.Windows.Media.Brushes]::Transparent }
+        })
+    $row.Add_MouseLeftButtonUp({
+            Select-PresetCard $this
+            Select-Preset $this.Tag
+        })
+    return $row
+}
+
+function Select-PresetCard {
+    <#
+      切换选中的「受检类别」。
+      选中的表现：记号填实 + 整行下划线加粗 —— 不换底色、不上强调色。
+      报告单上「当前适用的参考人群」就是这么标的。
+    #>
+    param($Card)
+    if ($Script:SelectedPresetCard -and $Script:SelectedPresetCard -ne $Card) {
+        $old = $Script:SelectedPresetCard
+        try {
+            $m = $old.Resources['__preset']
+            $m.Dot.Visibility = 'Collapsed'
+            $m.Ring.Stroke = Get-Brush '#66635B'
+            $old.BorderThickness = New-Thick 0 0 0 1
+            $old.BorderBrush = Get-Brush $Script:CARD_BORDER
+            $old.Background = [System.Windows.Media.Brushes]::Transparent
+        } catch { }
+    }
+    $Script:SelectedPresetCard = $Card
+    if ($null -eq $Card) { return }
+    try {
+        $m = $Card.Resources['__preset']
+        $m.Dot.Visibility = 'Visible'
+        $m.Ring.Stroke = Get-Brush '#2B2A26'
+        $Card.BorderThickness = New-Thick 0 0 0 2
+        $Card.BorderBrush = Get-Brush '#565349'
+        $Card.Background = [System.Windows.Media.Brushes]::Transparent
+    } catch { }
 }
 
 function Build-PresetUI {
@@ -4446,7 +4479,16 @@ $Script:Window.Title = "电脑调优助手 v$Script:AppVersion"
 #   写清楚这是给这台机器出的，用户才知道下面的参考范围是按他的硬件算的。
 try {
     $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-    $machine = if ($cs) { ("{0} {1}" -f $cs.Manufacturer, $cs.Model).Trim() } else { $env:COMPUTERNAME }
+    # 厂商名和型号都要收拾一下：
+    #   OEM 写进 BIOS 的字符串常常是「ASUSTeK COMPUTER INC.」这种带法律后缀的，
+    #   型号还经常是「G533QR_G533QR」这种自我重复。
+    #   报告单的抬头要的是人能认出来的那个名字。
+    $mk = "$($cs.Manufacturer)" -replace '(?i)\s*(computer|technology|technologies|electronics)?\s*(inc|corp|corporation|co|ltd|limited|gmbh)\.?,?\s*$', ''
+    $md = "$($cs.Model)".Trim()
+    # 「ROG Strix G533QR_G533QR」这种：尾巴上那段用下划线接的东西
+    # 如果前面已经出现过，就是 OEM 自我重复，砍掉。
+    if ($md -match '^(.*?)_([^_\s]+)$' -and $Matches[1] -like "*$($Matches[2])*") { $md = $Matches[1] }
+    $machine = if ($cs) { ("$mk $md").Trim() } else { $env:COMPUTERNAME }
 } catch { $machine = $env:COMPUTERNAME }
 $Script:UI.SubTitle.Text = "受检机器  $machine　·　$osCaption"
 $Script:UI.RptNo.Text    = "编号  PCT-$Script:AppVersion-$((Get-Date).ToString('MMdd'))"
@@ -4479,7 +4521,7 @@ $Script:Window.Add_ContentRendered({
         Start-DashTimer
         if (Test-ProcAuditEnabled) { $Script:UI.BtnProcAudit.Content = '关闭持续记录' }
         Build-HealthUI
-        Set-Status '就绪 —— 概览页有实时硬件状态；要动手就去「性能优化」页，在「按用途选」里点你属于的那一类'
+        Set-Status '报告已出 —— 超出参考范围的项列在「检验结论」里；要动手去「性能优化」页'
     })
 
 # ---------------------------------------------------------------------
