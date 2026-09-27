@@ -1,0 +1,454 @@
+﻿#Requires -Version 5.1
+<#
+=====================================================================
+  交互引擎
+---------------------------------------------------------------------
+  这个模块存在的理由，是老板的一句话：
+  「交互的逻辑太机械和简单了，能不能和市面上的软件一样更鲜活」。
+
+  他说得对。在这之前，界面上所有东西都是**瞬间切换**的：
+  健康度 96 是一下子蹦出来的，进度条是一下子到位的，
+  卡片按下去毫无反应，数字每秒跳一次像秒表。
+  功能全对，但没有一点「过程感」——用起来像个脚本，不像个软件。
+
+  ★ 一条分界线，别搞混 ★
+    网页设计的那套动画规矩（「每个区块都淡入上移会显得廉价」）
+    是给**营销页**写的。工具软件不一样：这里的动效不是装饰，
+    是**操作反馈** —— 它回答「我刚才按的那下生效了吗」
+    「这个数字是变了还是我看错了」。该有的必须有。
+
+    判断标准：这个动效在回答用户的一个问题吗？
+      · 按钮按下去缩一下   → 回答「点上了吗」        ✔ 留
+      · 数字滚上去          → 回答「这是新值」        ✔ 留
+      · 每个区块进场都上移  → 不回答任何问题          ✘ 砍
+
+  ★ 缓动曲线来自 Emil Kowalski（Sonner / Vaul 作者）那套 ★
+    WPF 自带的 CubicEase 太软，一律用 KeySpline
+    —— 它和 CSS 的 cubic-bezier 是同一个东西，控制点可以直接照抄。
+
+  ★ 性能 ★
+    这工具的用户有一大票老机器。所以：
+      · 只动 Opacity / Transform（走 GPU 合成，不触发重新布局）
+      · 不做每帧回调的 JS 式补间，全部交给 WPF 的 Storyboard
+      · 系统「显示动画」关掉时自动降级（见 Test-SystemReducedMotion）
+      · 用户在「个性化」页关掉效果时，所有函数直接返回，不建 Storyboard
+=====================================================================
+#>
+
+# ---------------------------------------------------------------------
+#  缓动曲线
+# ---------------------------------------------------------------------
+#  等价的 CSS 写法写在注释里，方便和网页那边对照。
+$Script:Ease = @{
+    # cubic-bezier(.23,1,.32,1) —— 冲出去然后很快稳住。默认用这个
+    Out    = @(0.23, 1.0, 0.32, 1.0)
+    # cubic-bezier(.77,0,.175,1) —— 两头慢中间快，用于位置移动
+    InOut  = @(0.77, 0.0, 0.175, 1.0)
+    # cubic-bezier(.34,1.56,.64,1) —— 末尾冲过头一点再回来，用于「弹起来」
+    Spring = @(0.34, 1.56, 0.64, 1.0)
+    # cubic-bezier(.4,0,1,1) —— 起步慢、越来越快，用于「消失」
+    In     = @(0.4, 0.0, 1.0, 1.0)
+}
+
+# 时长（毫秒）。统一在这里改，别在调用处写死数字。
+$Script:Dur = @{
+    # ★ 产品 UI 的动效一律压在 150~250ms ★
+    #   用户在任务流里，不想等编排。900ms 的数字滚动是营销页的节奏，
+    #   放在一个每秒刷新的读数上只会一直在抖。
+    Press   = 90     # 按下
+    Hover   = 130    # 悬停
+    Tab     = 170    # 切页
+    Panel   = 200    # 面板进场
+    Count   = 240    # 数字补间
+    Bar     = 220    # 进度条补间
+    Flash   = 380    # 数值变化闪一下
+    Stagger = 35     # 依次错开的步长
+}
+
+function Test-MotionOn {
+    <# 动效总开关：用户关了、或者系统关了「显示动画」，就全部不做 #>
+    if (-not $Script:AnimEnabled) { return $false }
+    return $true
+}
+
+function New-Spline {
+    <# 把四个控制点变成 WPF 的 KeySpline（= CSS cubic-bezier） #>
+    param([double[]]$P)
+    New-Object System.Windows.Media.Animation.KeySpline (
+        (New-Object System.Windows.Point $P[0], $P[1]),
+        (New-Object System.Windows.Point $P[2], $P[3]))
+}
+
+function New-DoubleTween {
+    <#
+      造一条 double 动画。所有补间的地基。
+      Curve 传 $Script:Ease 里的某一条。
+    #>
+    param(
+        [double]$From, [double]$To, [double]$Ms,
+        [double[]]$Curve = $null, [double]$DelayMs = 0
+    )
+    if (-not $Curve) { $Curve = $Script:Ease.Out }
+    $a = New-Object System.Windows.Media.Animation.DoubleAnimationUsingKeyFrames
+    $a.Duration = [Windows.Duration]::new([TimeSpan]::FromMilliseconds($Ms + $DelayMs))
+    if ($DelayMs -gt 0) {
+        # 用一个「停在原地」的关键帧来做延迟，比 BeginTime 更好控
+        $hold = New-Object System.Windows.Media.Animation.DiscreteDoubleKeyFrame (
+            $From, [Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::FromMilliseconds(0)))
+        $a.KeyFrames.Add($hold) | Out-Null
+        $hold2 = New-Object System.Windows.Media.Animation.DiscreteDoubleKeyFrame (
+            $From, [Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::FromMilliseconds($DelayMs)))
+        $a.KeyFrames.Add($hold2) | Out-Null
+    }
+    $kf = New-Object System.Windows.Media.Animation.SplineDoubleKeyFrame (
+        $To,
+        [Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::FromMilliseconds($Ms + $DelayMs)),
+        (New-Spline $Curve))
+    $a.KeyFrames.Add($kf) | Out-Null
+    return $a
+}
+
+function Start-Prop {
+    <# 把一条 double 动画挂到某个元素的某个属性上跑起来 #>
+    param($Element, $Property, [double]$From, [double]$To, [double]$Ms,
+        [double[]]$Curve = $null, [double]$DelayMs = 0)
+    if ($null -eq $Element) { return }
+    try {
+        $Element.BeginAnimation($Property, (New-DoubleTween -From $From -To $To -Ms $Ms -Curve $Curve -DelayMs $DelayMs))
+    } catch { }
+}
+
+# =====================================================================
+#  数字滚动
+# =====================================================================
+function Start-CountUp {
+    <#
+      让一个数字从当前值**滚**到目标值，而不是啪地换掉。
+
+      ★ 为什么值得专门做 ★
+        「96」直接出现，用户不确定它是不是刚算出来的；
+        从 0 滚到 96，这个过程本身就在说「我刚给你测完」。
+        这是整个界面最容易做出「活」的一处。
+
+      ★ 实现上不用 Storyboard ★
+        WPF 没法直接补间 TextBlock.Text（那是字符串）。
+        所以补一个挂在元素上的附加 double，每帧回调里改文字。
+        这是全模块唯一一处每帧回调，所以特意限制了时长和帧数。
+
+      Decimals 给小数位数；Suffix 拼在后面（比如 '' 或 ' GB'）。
+    #>
+    param(
+        $Target,                       # TextBlock
+        [double]$To,
+        [int]$Decimals = 0,
+        [string]$Suffix = '',
+        [double]$Ms = 0
+    )
+    if ($null -eq $Target) { return }
+    if ($Ms -le 0) { $Ms = $Script:Dur.Count }
+
+    # 从当前显示的数字起步。读不出来（比如现在是「--」）就从 0 起步
+    $from = 0.0
+    $cur = "$($Target.Text)" -replace '[^\d.\-]', ''
+    if ($cur -and [double]::TryParse($cur, [ref]$null)) { $from = [double]$cur }
+
+    $fmt = if ($Decimals -gt 0) { "F$Decimals" } else { 'F0' }
+
+    # 动效关了就直接写最终值
+    if (-not (Test-MotionOn)) {
+        $Target.Text = $To.ToString($fmt) + $Suffix
+        return
+    }
+    # 差得太小不值得动（比如占用率从 21 变 22），直接写，省得一直在抖
+    if ([math]::Abs($To - $from) -lt ([math]::Pow(10, -$Decimals) * 2)) {
+        $Target.Text = $To.ToString($fmt) + $Suffix
+        return
+    }
+
+    # ★ 必须先掐掉这个元素上还没跑完的那个补间 ★
+    #   读数每秒刷一次，上一轮的 380ms 补间可能还在跑。
+    #   两个 DispatcherTimer 同时往一个 TextBlock 里写字，
+    #   数字会来回跳（一帧 21、一帧 19），看起来像读数不稳 ——
+    #   而这个工具最不能出现的就是「数字看起来不可信」。
+    try { if ($Target.Tag -is [System.Windows.Threading.DispatcherTimer]) { $Target.Tag.Stop() } } catch { }
+
+    $spline = New-Spline $Script:Ease.Out
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $timer = New-Object System.Windows.Threading.DispatcherTimer
+    # 约 60fps。老机器上 WPF 自己会丢帧，不会因为这里排得密就卡住
+    $timer.Interval = [TimeSpan]::FromMilliseconds(16)
+    $state = @{ T = $Target; From = $from; To = $To; Ms = $Ms; Fmt = $fmt; Suffix = $Suffix; Sw = $sw; Sp = $spline }
+    $timer.Add_Tick({
+            $st = $this.Tag
+            $p = $st.Sw.Elapsed.TotalMilliseconds / $st.Ms
+            if ($p -ge 1) {
+                $st.T.Text = $st.To.ToString($st.Fmt) + $st.Suffix
+                $this.Stop()
+                return
+            }
+            # GetSplineProgress 就是 CSS 那条 cubic-bezier 在 p 处的 y 值
+            $e = $st.Sp.GetSplineProgress($p)
+            $v = $st.From + ($st.To - $st.From) * $e
+            $st.T.Text = $v.ToString($st.Fmt) + $st.Suffix
+        })
+    $timer.Tag = $state
+    $Target.Tag = $timer      # 记住它，下一轮好掐掉
+    $timer.Start()
+}
+
+function Start-ValueFlash {
+    <#
+      读数变了，让它极短暂地提亮一下再回落。
+
+      解决的问题：四个读数每秒都在刷，用户盯着看的时候
+      分不清「这个数刚变了」还是「我眼花」。闪一下就说清了。
+      幅度必须很小 —— 一秒闪一次的东西稍微夸张一点就会烦人。
+    #>
+    param($Element)
+    if (-not (Test-MotionOn) -or $null -eq $Element) { return }
+    try {
+        $a = New-Object System.Windows.Media.Animation.DoubleAnimationUsingKeyFrames
+        $a.Duration = [Windows.Duration]::new([TimeSpan]::FromMilliseconds($Script:Dur.Flash))
+        # ★ 最后一帧必须回到 1.0 ★
+        #   动画结束后属性会**停在最后一帧的值**上。
+        #   写成「1.0 → 0.82」的话，读数每闪一次就停在 0.82，
+        #   下一次又从 1.0 掉到 0.82 —— 看起来是「越刷越暗」，
+        #   而且永远回不到正常亮度。必须闪下去再回来。
+        $a.KeyFrames.Add((New-Object System.Windows.Media.Animation.SplineDoubleKeyFrame (
+                    0.72, [Windows.Media.Animation.KeyTime]::FromPercent(0.14), (New-Spline $Script:Ease.Out)))) | Out-Null
+        $a.KeyFrames.Add((New-Object System.Windows.Media.Animation.SplineDoubleKeyFrame (
+                    1.0, [Windows.Media.Animation.KeyTime]::FromPercent(1.0), (New-Spline $Script:Ease.Out)))) | Out-Null
+        $Element.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $a)
+    } catch { }
+}
+
+function Start-BarTo {
+    <#
+      进度条/填充条平滑滑到目标宽度。
+      直接设 Width 是瞬间跳变，看不出「涨了还是跌了」。
+    #>
+    param($Bar, [double]$ToWidth, [double]$Ms = 0)
+    if ($null -eq $Bar) { return }
+    if ($Ms -le 0) { $Ms = $Script:Dur.Bar }
+    if (-not (Test-MotionOn)) { $Bar.Width = $ToWidth; return }
+    $from = if ([double]::IsNaN($Bar.Width)) { 0 } else { [double]$Bar.Width }
+    Start-Prop $Bar ([System.Windows.FrameworkElement]::WidthProperty) $from $ToWidth $Ms $Script:Ease.Out
+}
+
+# =====================================================================
+#  可交互元素：悬停 / 按下 / 焦点
+# =====================================================================
+function Add-Interactive {
+    <#
+      一行给任意 Border 挂上完整的交互反馈。
+      以后所有可点的卡片都走这个，别再各写各的。
+
+        悬停  底色过渡 + 边框提亮 + 上移 1px
+        按下  整体缩到 0.985（有「被按进去」的实感）
+        松开  用 Spring 曲线弹回来
+
+      ★ 为什么缩放而不是变暗 ★
+        变暗在深色皮肤上几乎看不出来。缩放是尺寸变化，
+        任何配色下都能感知到，而且走 RenderTransform 不触发重新布局。
+
+      ★ 缩放中心必须设在正中 ★
+        默认中心在左上角，缩放时整张卡会往左上角跑，像在抖。
+    #>
+    param(
+        $Border,
+        [string]$BgNormal = $null,
+        [string]$BgHover = $null,
+        [string]$BorderNormal = $null,
+        [string]$BorderHover = $null,
+        [switch]$NoLift
+    )
+    if ($null -eq $Border) { return }
+    if (-not $BgNormal) { $BgNormal = $Script:CARD_BG }
+    if (-not $BgHover) { $BgHover = $Script:CARD_HOVER }
+    if (-not $BorderNormal) { $BorderNormal = $Script:CARD_BORDER }
+    if (-not $BorderHover) { $BorderHover = '#D2D0C9' }   # BorderMed
+
+    try {
+        $Border.RenderTransformOrigin = New-Object System.Windows.Point 0.5, 0.5
+        $tg = New-Object System.Windows.Media.TransformGroup
+        $tg.Children.Add((New-Object System.Windows.Media.ScaleTransform 1, 1)) | Out-Null
+        $tg.Children.Add((New-Object System.Windows.Media.TranslateTransform 0, 0)) | Out-Null
+        $Border.RenderTransform = $tg
+    } catch { return }
+
+    # ★ 绝对不能用 $Border.Tag 存配置 ★
+    #   整个项目里 Tag 是「卡片背后的那条数据」：
+    #     预设卡   Select-Preset $this.Tag
+    #     优化项卡 Show-TweakDetail $this.Tag
+    #     清理项卡 Show-CleanDetail $this.Tag
+    #   在这里覆盖掉，点卡片就把一个 hashtable 当数据传下去 ——
+    #   表现是「点了没反应」，不报错，极难查。（真踩过。）
+    #   改用元素自带的 Resources 字典：跟着元素生命周期走，不泄漏。
+    $Border.Resources['__motion'] = @{
+        BgN = $BgNormal; BgH = $BgHover; BdN = $BorderNormal; BdH = $BorderHover
+        Lift = (-not $NoLift)
+    }
+
+    $Border.Add_MouseEnter({
+            $m = $this.Resources['__motion']
+            if ($Script:SelectedCard -eq $this -or $Script:SelectedPresetCard -eq $this) { return }
+            Start-ColorFade $this $m.BgH
+            try { $this.BorderBrush = Get-Brush $m.BdH } catch { }
+            if ($m.Lift -and (Test-MotionOn)) {
+                Start-Prop $this.RenderTransform.Children[1] ([System.Windows.Media.TranslateTransform]::YProperty) `
+                    0 -1 $Script:Dur.Hover $Script:Ease.Out
+            }
+        })
+    $Border.Add_MouseLeave({
+            $m = $this.Resources['__motion']
+            if ($Script:SelectedCard -eq $this -or $Script:SelectedPresetCard -eq $this) { return }
+            Start-ColorFade $this $m.BgN
+            try { $this.BorderBrush = Get-Brush $m.BdN } catch { }
+            if (Test-MotionOn) {
+                Start-Prop $this.RenderTransform.Children[1] ([System.Windows.Media.TranslateTransform]::YProperty) `
+                    -1 0 $Script:Dur.Hover $Script:Ease.Out
+                Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 0.985 1 $Script:Dur.Press $Script:Ease.Out
+                Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 0.985 1 $Script:Dur.Press $Script:Ease.Out
+            }
+        })
+    $Border.Add_PreviewMouseLeftButtonDown({
+            if (-not (Test-MotionOn)) { return }
+            Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 1 0.985 $Script:Dur.Press $Script:Ease.Out
+            Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 1 0.985 $Script:Dur.Press $Script:Ease.Out
+        })
+    $Border.Add_PreviewMouseLeftButtonUp({
+            if (-not (Test-MotionOn)) { return }
+            # Spring 曲线：弹回时稍微过冲一点，手感比线性回弹「实」
+            Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 0.985 1 200 $Script:Ease.Spring
+            Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 0.985 1 200 $Script:Ease.Spring
+        })
+}
+
+function Add-PressFeedback {
+    <#
+      给普通 Button 加按下反馈。
+      HandyControl 的按钮自带颜色变化，但没有位移/缩放，
+      在深色皮肤下那点颜色变化几乎看不出来。
+    #>
+    param($Button)
+    if ($null -eq $Button) { return }
+    try {
+        $Button.RenderTransformOrigin = New-Object System.Windows.Point 0.5, 0.5
+        $Button.RenderTransform = New-Object System.Windows.Media.ScaleTransform 1, 1
+    } catch { return }
+    $Button.Add_PreviewMouseLeftButtonDown({
+            if (-not (Test-MotionOn)) { return }
+            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 1 0.96 $Script:Dur.Press $Script:Ease.Out
+            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 1 0.96 $Script:Dur.Press $Script:Ease.Out
+        })
+    $Button.Add_PreviewMouseLeftButtonUp({
+            if (-not (Test-MotionOn)) { return }
+            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 0.96 1 220 $Script:Ease.Spring
+            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 0.96 1 220 $Script:Ease.Spring
+        })
+}
+
+function Add-PressFeedbackAll {
+    <# 把窗口里所有 Button 一次性挂上按下反馈 #>
+    param($Root)
+    if ($null -eq $Root) { return }
+    try {
+        foreach ($b in (Find-Descendants $Root ([System.Windows.Controls.Button]))) {
+            Add-PressFeedback $b
+        }
+    } catch { }
+}
+
+function Find-Descendants {
+    <# 在可视树里找出某个类型的全部后代 #>
+    param($Root, [Type]$Type)
+    $out = New-Object System.Collections.ArrayList
+    if ($null -eq $Root) { return $out }
+    $n = [System.Windows.Media.VisualTreeHelper]::GetChildrenCount($Root)
+    for ($i = 0; $i -lt $n; $i++) {
+        $c = [System.Windows.Media.VisualTreeHelper]::GetChild($Root, $i)
+        if ($Type.IsInstanceOfType($c)) { [void]$out.Add($c) }
+        foreach ($g in (Find-Descendants $c $Type)) { [void]$out.Add($g) }
+    }
+    return $out
+}
+
+# =====================================================================
+#  进场
+# =====================================================================
+function Start-RevealIn {
+    <#
+      元素淡入 + 轻微上移。
+
+      ★ 只在「用户刚做了一个动作、内容因此变了」的时候用 ★
+        比如点了某一项、切了页、筛选完。
+        纯粹的页面加载不要用 —— 那属于没人问的问题。
+    #>
+    param($Element, [double]$Ms = 0, [double]$SlideY = 8, [double]$DelayMs = 0)
+    if ($null -eq $Element) { return }
+    if ($Ms -le 0) { $Ms = $Script:Dur.Panel }
+    if (-not (Test-MotionOn)) { try { $Element.Opacity = 1 } catch { }; return }
+
+    # 系统级「减弱动效」：保留淡入，去掉位移（会关这个的人多半有晕动症）
+    if ($Script:SystemAnimOff) { $SlideY = 0 }
+
+    try {
+        if ($SlideY -ne 0) {
+            $tt = New-Object System.Windows.Media.TranslateTransform 0, $SlideY
+            $Element.RenderTransform = $tt
+            Start-Prop $tt ([System.Windows.Media.TranslateTransform]::YProperty) $SlideY 0 $Ms $Script:Ease.Out $DelayMs
+        }
+        Start-Prop $Element ([System.Windows.UIElement]::OpacityProperty) 0 1 $Ms $Script:Ease.Out $DelayMs
+    } catch { }
+}
+
+function Start-RevealList {
+    <#
+      一串元素依次进场。
+
+      ★ 错开最多 6 个 ★
+        再多的话最后几个要等半天才出来，用户会以为卡住了。
+        第 7 个开始全部用第 6 个的延迟。
+    #>
+    param($Elements, [double]$Ms = 0, [double]$SlideY = 8)
+    if ($Ms -le 0) { $Ms = $Script:Dur.Panel }
+    $i = 0
+    foreach ($e in @($Elements)) {
+        $d = [math]::Min($i, 6) * $Script:Dur.Stagger
+        Start-RevealIn -Element $e -Ms $Ms -SlideY $SlideY -DelayMs $d
+        $i++
+    }
+}
+
+# =====================================================================
+#  忙碌指示
+# =====================================================================
+function Start-Pulse {
+    <#
+      让元素持续明暗呼吸，表示「正在算，还没出结果」。
+      用在启动时那十几秒 —— 在这之前那段时间界面是死的，
+      用户不知道是在加载还是已经卡死了。
+    #>
+    param($Element, [double]$Ms = 1100)
+    if ($null -eq $Element) { return }
+    if (-not (Test-MotionOn)) { return }
+    try {
+        $a = New-Object System.Windows.Media.Animation.DoubleAnimationUsingKeyFrames
+        $a.Duration = [Windows.Duration]::new([TimeSpan]::FromMilliseconds($Ms))
+        $a.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+        $a.AutoReverse = $true
+        $a.KeyFrames.Add((New-Object System.Windows.Media.Animation.SplineDoubleKeyFrame (
+                    0.35, [Windows.Media.Animation.KeyTime]::FromPercent(1.0), (New-Spline $Script:Ease.InOut)))) | Out-Null
+        $Element.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $a)
+    } catch { }
+}
+
+function Stop-Pulse {
+    <# 停掉呼吸，回到不透明 #>
+    param($Element)
+    if ($null -eq $Element) { return }
+    try {
+        $Element.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null)
+        $Element.Opacity = 1
+    } catch { }
+}

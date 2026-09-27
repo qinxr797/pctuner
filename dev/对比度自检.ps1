@@ -35,7 +35,7 @@ function Get-ContrastRatio([string]$Fg, [string]$Bg) {
 
 $themes = Get-BuiltinThemes
 $fgKeys = @('TextMain', 'TextMid', 'TextDim')
-$bgKeys = @('WindowBg', 'PanelBg', 'CardBg', 'CardHover', 'SurfaceAlt')
+$bgKeys = @('WindowBg', 'PanelBg', 'CardBg', 'CardHover', 'SurfaceAlt', 'SurfaceSunken')
 $bad = 0
 
 foreach ($name in $themes.Keys) {
@@ -47,6 +47,26 @@ foreach ($name in $themes.Keys) {
             if ($r -lt 4.5) {
                 $bad++
                 Write-Host ("不达标  {0,-10} {1,-9}{2}  在  {3,-11}{4}  = {5}" -f $name, $fg, $c[$fg], $bg, $c[$bg], $r) -ForegroundColor Red
+            }
+        }
+    }
+
+    # ---- 语义色前景也要查 ----
+    #   ★ 这一块以前漏了 ★ 「高危」「超出参考范围」这些标记是**最需要被看清**的字，
+    #   结果反而没进自检。皮肤自带 Semantic 表就查它的（检验单的法定墨走这条）。
+    if ($themes[$name].Contains('Semantic')) {
+        $sem = $themes[$name].Semantic
+        $paper = @($bgKeys | Where-Object { $c.ContainsKey($_) } | ForEach-Object { $c[$_] })
+        foreach ($k in $sem.Keys) {
+            $v = "$($sem[$k])"
+            if ($paper -contains $v) { continue }   # 映射到纸色的是背景，不是墨
+            foreach ($bg in $bgKeys) {
+                if (-not $c.ContainsKey($bg)) { continue }
+                $r = Get-ContrastRatio $v $c[$bg]
+                if ($r -lt 4.5) {
+                    $bad++
+                    Write-Host ("不达标  {0,-10} 语义墨 {1}  在  {2,-11}{3}  = {4}" -f $name, $v, $bg, $c[$bg], $r) -ForegroundColor Red
+                }
             }
         }
     }

@@ -76,6 +76,39 @@ try {
 }
 
 # ---------------------------------------------------------------------
+#  0.6 加载随包字体（MiSans，小米出品，免费商用）
+# ---------------------------------------------------------------------
+#  ★ 为什么非要自带字体 ★
+#    不带的话界面用 Windows 自带的「微软雅黑 UI」。那是系统默认字，
+#    字形偏宽、可用字重只有常规和粗体两档 —— 做不出报告单需要的
+#    「表头半粗 / 结果常规 / 参考范围细」三层，一眼就是系统默认样子。
+#
+#  ★ 不安装到系统 ★
+#    直接从 Fonts\ 目录按文件 URI 加载，注册表和系统字体目录一点不动，
+#    删掉文件夹就干干净净，也不需要管理员权限。
+#
+#  ★ 授权 ★
+#    MiSans 允许作为嵌入式字体随软件分发，但要求在软件中注明。
+#    见 Fonts\字体说明.txt、README 和「使用说明」。
+#
+#  加载失败不影响功能，按 $Script:FontStack 一路退回去找。
+$Script:FontLoaded = $false
+$Script:FontStack = 'Microsoft YaHei UI, Segoe UI'
+try {
+    $fontDir = Join-Path (Split-Path -Parent $PSCommandPath) 'Fonts'
+    if (Test-Path -LiteralPath (Join-Path $fontDir 'MiSans-Regular.ttf')) {
+        # ★ 基准 URI 必须以 / 结尾 ★ 少了斜杠，WPF 会把最后一段当文件名，
+        #   拼出来的路径指向 Fonts 的上级目录，**静默**拿不到字体。
+        $fontBase = 'file:///' + (($fontDir -replace '\', '/') -replace ' ', '%20') + '/'
+        $probe = New-Object System.Windows.Media.FontFamily ([Uri]$fontBase), './#MiSans'
+        if (@($probe.GetTypefaces()).Count -gt 0) {
+            $Script:FontLoaded = $true
+            $Script:FontStack = "$fontBase#MiSans, MiSans, Noto Sans SC, Microsoft YaHei UI, Segoe UI"
+        }
+    }
+} catch { $Script:FontLoadError = "$($_.Exception.Message)" }
+
+# ---------------------------------------------------------------------
 #  1. 检查管理员权限，没有就重新以管理员身份启动自己
 #     （修改注册表 HKLM、系统服务、电源计划都需要管理员）
 # ---------------------------------------------------------------------
@@ -100,7 +133,7 @@ if (-not $SelfTest -and -not $AutoClean -and -not $principal.IsInRole([Security.
 # ---------------------------------------------------------------------
 $Script:AppRoot = Split-Path -Parent $PSCommandPath
 # 载入顺序有依赖：Engine 提供日志和注册表底座，其余模块都用得到，必须第一个
-$Script:ModuleNames = @('Engine', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme', 'Dash', 'Overclock')
+$Script:ModuleNames = @('Engine', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Inspect', 'SysInfo', 'Startup', 'Appx', 'Theme', 'Dash', 'Overclock', 'Motion')
 
 # ---------- 1.1 先查文件齐不齐 ----------
 # 为什么要专门查一遍：通过微信/QQ 传「文件夹」过去经常会漏文件
@@ -730,6 +763,12 @@ function Add-CardShadow {
         而这工具恰恰有一大票老机器用户。关掉效果时就不加。
     #>
     param($Element, [string]$Level = 'EffectShadow1')
+    # ★ 深色皮肤一律不加阴影（design.md 4.2）★
+    #   深色界面上的深度只有两个来源：表面阶梯（亮一级 = 近一层）和 1px 发丝线。
+    #   在近黑底上打灰阴影是看不见的，只会白白烧 GPU；而「每张卡下面
+    #   同一种灰阴影」恰恰是 SaaS 卡片套装最好认的特征。
+    #   Linear 和 Raycast 都是全系统零阴影，深度全靠色阶。
+    if ($Script:ThemeIsDark) { return }
     if (-not $Script:AnimEnabled) { return }
     try {
         $fx = $Script:Window.TryFindResource($Level)
@@ -853,6 +892,208 @@ function Get-TintBg {
     }
 }
 
+# =====================================================================
+#  检验报告单的排版原语
+# ---------------------------------------------------------------------
+#  整个界面的母题是「你这台机器的检验报告」。见
+#  .impeccable\surfaces\pctuner-ps1.md 的 Direction contract。
+#
+#  ★ 四栏骨架统治每一个列表 ★
+#        项目 │ 结果 │ 标记 │ 参考范围 │ 单位
+#    「参考范围」那一栏就是这个产品唯一无法被抄的机制：
+#    同一项对不同使用场景，合格范围本来就不一样 ——
+#    跟化验单上血红蛋白男女参考范围不同是同一回事。
+#
+#  ★ 分级靠标记，不靠颜色 ★
+#        （空）  在参考范围内。不标色、不加粗，和别的行一模一样
+#        *      需实测，脚注引到下方备注区
+#        ↑ / ↓  超出上限 / 低于下限
+#        ↑↑     显著超出（高风险）
+#        —      本机不适用 / 读不到
+#    这套标记来自真实化验单（H/L/HH 那一套的中文形态），
+#    好处是**定性项目也能表达**：「已启用 / 建议已关闭」这种布尔项
+#    在化验单上就是「阴性（参考：阴性）」，不需要数值区间。
+#
+#  ★ 颜色只在标记上 ★
+#    法定墨只有一种，法定含义只有一个：超出参考范围。
+#    正文字段永远消色 —— 不许给行加底色，不许给卡片加彩色左边条。
+# =====================================================================
+
+# 报告表的列轨。★ 这是模数，别在调用处手填宽度 ★
+#   窄了缩列，不重排 —— 四栏的相对位置在任何宽度下都不变，
+#   这样用户扫第二行时不用重新找「结果」在哪。
+$Script:RptCol = @{ Result = 92; Mark = 30; Ref = 132; Unit = 52 }
+
+function New-RptGrid {
+    <# 造一个符合列轨的 Grid：项目(*) 结果 标记 参考范围 单位 #>
+    $g = New-Object System.Windows.Controls.Grid
+    foreach ($w in @(0, $Script:RptCol.Result, $Script:RptCol.Mark, $Script:RptCol.Ref, $Script:RptCol.Unit)) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = if ($w -eq 0) {
+            New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        } else {
+            New-Object System.Windows.GridLength ([double]$w)
+        }
+        $g.ColumnDefinitions.Add($cd)
+    }
+    return $g
+}
+
+function New-RptHeader {
+    <# 表头行：项目 / 结果 / 参考范围 / 单位，下面一条粗线 #>
+    param([string]$First = '项目')
+    $sp = New-Object System.Windows.Controls.StackPanel
+
+    $g = New-RptGrid
+    $g.Margin = New-Thick 0 0 0 6
+    $cells = @(
+        @{ T = $First; Col = 0; Align = 'Left' },
+        @{ T = '结果'; Col = 1; Align = 'Right' },
+        @{ T = ''; Col = 2; Align = 'Center' },
+        @{ T = '参考范围'; Col = 3; Align = 'Right' },
+        @{ T = '单位'; Col = 4; Align = 'Right' })
+    foreach ($c in $cells) {
+        if (-not $c.T) { continue }
+        $t = New-TextBlock -Text $c.T -Size 12 -Color '#66635B'
+        $t.FontWeight = 'SemiBold'
+        $t.HorizontalAlignment = $c.Align
+        [System.Windows.Controls.Grid]::SetColumn($t, $c.Col)
+        $g.Children.Add($t) | Out-Null
+    }
+    $sp.Children.Add($g) | Out-Null
+
+    # 表头下那条粗线。报告单上这条线是分隔「栏目名」和「数据」的，必须比行间线重
+    $rule = New-Object System.Windows.Shapes.Rectangle
+    $rule.Height = 1.5
+    $rule.Fill = Get-Brush '#D2D0C9'     # BorderMed
+    $sp.Children.Add($rule) | Out-Null
+    return $sp
+}
+
+function New-RptRow {
+    <#
+      一行检验项目。返回 @{ Row; Name; Result; Mark; Ref; Unit; Note }
+
+      Mark 取值：'' / '*' / '↑' / '↓' / '↑↑' / '—'
+      只有 ↑ ↓ ↑↑ 会上法定墨并加粗；其余一律消色普通字重。
+    #>
+    param(
+        [string]$Name = '',
+        [string]$Result = '',
+        [string]$Mark = '',
+        [string]$Ref = '',
+        [string]$Unit = '',
+        [string]$Note = '',
+        [bool]$Zebra = $false
+    )
+    $wrap = New-Object System.Windows.Controls.Border
+    $wrap.Padding = New-Thick 0 7 0 7
+    $wrap.BorderBrush = Get-Brush $Script:CARD_BORDER
+    $wrap.BorderThickness = New-Thick 0 0 0 1     # 行间细线
+    if ($Zebra) { $wrap.Background = Get-Brush '#EAE9E3' }   # SurfaceAlt
+
+    $outer = New-Object System.Windows.Controls.StackPanel
+    $g = New-RptGrid
+
+    # --- 项目名 ---
+    $nm = New-TextBlock -Text $Name -Size 13.5 -Color '#4A4842' -Wrap $true
+    [System.Windows.Controls.Grid]::SetColumn($nm, 0)
+    $g.Children.Add($nm) | Out-Null
+
+    # --- 结果（等宽数位，右对齐）---
+    #   ★ 必须表格数位 ★ 不加的话 1 比 8 窄，每秒刷新时整列左右抖
+    $rs = New-TextBlock -Text $Result -Size 15 -Color '#2B2A26'
+    $rs.HorizontalAlignment = 'Right'
+    $rs.Margin = New-Thick 0 -1 0 0
+    [System.Windows.Documents.Typography]::SetNumeralAlignment($rs, 'Tabular')
+    [System.Windows.Controls.Grid]::SetColumn($rs, 1)
+    $g.Children.Add($rs) | Out-Null
+
+    # --- 标记 ---
+    $mk = New-TextBlock -Text $Mark -Size 13 -Color '#4A4842'
+    $mk.HorizontalAlignment = 'Center'
+    [System.Windows.Controls.Grid]::SetColumn($mk, 2)
+    $g.Children.Add($mk) | Out-Null
+
+    # --- 参考范围 ---
+    $rf = New-TextBlock -Text $Ref -Size 12.5 -Color '#66635B'
+    $rf.HorizontalAlignment = 'Right'
+    [System.Windows.Documents.Typography]::SetNumeralAlignment($rf, 'Tabular')
+    [System.Windows.Controls.Grid]::SetColumn($rf, 3)
+    $g.Children.Add($rf) | Out-Null
+
+    # --- 单位 ---
+    $un = New-TextBlock -Text $Unit -Size 11.5 -Color '#66635B'
+    $un.HorizontalAlignment = 'Right'
+    [System.Windows.Controls.Grid]::SetColumn($un, 4)
+    $g.Children.Add($un) | Out-Null
+
+    $outer.Children.Add($g) | Out-Null
+
+    # --- 附注（项目名下方的小字，不占表格列）---
+    $nt = New-TextBlock -Text $Note -Size 12 -Color '#66635B' -Wrap $true
+    $nt.Margin = New-Thick 0 3 0 0
+    if (-not $Note) { $nt.Visibility = 'Collapsed' }
+    $outer.Children.Add($nt) | Out-Null
+
+    $wrap.Child = $outer
+    $r = @{ Row = $wrap; Name = $nm; Result = $rs; Mark = $mk; Ref = $rf; Unit = $un; Note = $nt }
+    Set-RptMark $r $Mark
+    return $r
+}
+
+function Set-RptMark {
+    <#
+      设置一行的标记，并按标记决定结果值的墨色与字重。
+
+      ★ 正常值不标色、不加粗 ★
+        这是报告单可信的来源：满页平静，只有真出问题的那几行跳出来。
+        如果每一行都有颜色，异常就不再显眼 —— 那正是上一版的毛病。
+    #>
+    param($Row, [string]$Mark)
+    if ($null -eq $Row) { return }
+    $Row.Mark.Text = $Mark
+    $abnormal = ($Mark -eq '↑' -or $Mark -eq '↓' -or $Mark -eq '↑↑' -or $Mark -eq '↓↓')
+    if ($abnormal) {
+        # 法定墨：色号写的是「高危」那一个，换肤映射表会把它翻成当前皮肤的法定墨
+        $Row.Result.Foreground = Get-Brush '#8A5750'
+        $Row.Result.FontWeight = 'SemiBold'
+        $Row.Mark.Foreground = Get-Brush '#8A5750'
+        $Row.Mark.FontWeight = 'SemiBold'
+    } else {
+        $Row.Result.Foreground = Get-Brush '#2B2A26'
+        $Row.Result.FontWeight = 'Normal'
+        $Row.Mark.Foreground = Get-Brush '#66635B'
+        $Row.Mark.FontWeight = 'Normal'
+    }
+}
+
+function New-RptSection {
+    <# 分区标题 + 下方一条细线。报告单用分区把「血常规 / 肝功能」分开 #>
+    param([string]$Title, [string]$Aside = '')
+    $sp = New-Object System.Windows.Controls.StackPanel
+    $sp.Margin = New-Thick 0 0 0 8
+
+    $row = New-Object System.Windows.Controls.Grid
+    $t = New-TextBlock -Text $Title -Size 15 -Bold $true
+    $row.Children.Add($t) | Out-Null
+    if ($Aside) {
+        $a = New-TextBlock -Text $Aside -Size 12 -Color '#66635B'
+        $a.HorizontalAlignment = 'Right'
+        $a.VerticalAlignment = 'Bottom'
+        $a.Margin = New-Thick 0 0 0 1
+        $row.Children.Add($a) | Out-Null
+    }
+    $sp.Children.Add($row) | Out-Null
+
+    $rule = New-Object System.Windows.Shapes.Rectangle
+    $rule.Height = 1
+    $rule.Fill = Get-Brush $Script:CARD_BORDER
+    $rule.Margin = New-Thick 0 6 0 0
+    $sp.Children.Add($rule) | Out-Null
+    return $sp
+}
+
 function New-Badge {
     param([string]$Text, [string]$Fg, [string]$Bg)
     $b = New-Object System.Windows.Controls.Border
@@ -941,27 +1182,44 @@ $xamlText = @'
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
-    <!-- ========== 顶部标题栏 ========== -->
-    <Border Grid.Row="0" Background="{DynamicResource CardBg}" Padding="20,13" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0,0,0,1">
+    <!-- ================================================================
+         报告单页眉
+
+         ★ 不做「品牌 banner」★
+           一张检验报告的抬头不是 logo 墙，是四个事实：
+           这是什么报告、给哪台机器出的、什么时候出的、编号是多少。
+           陌生人下载一个会改注册表的工具，第一眼要看到的就是这四条 ——
+           它们合起来说明「这东西在如实记录，不是在推销加速」。
+
+         ★ 下面那条粗线是报告单的表头线 ★
+           整个界面靠线重分层，不靠卡片和阴影。
+         ================================================================ -->
+    <Border Grid.Row="0" Background="{DynamicResource PanelBg}" Padding="28,16,28,0"
+            BorderBrush="{DynamicResource BorderMed}" BorderThickness="0,0,0,1.5">
       <Grid>
-        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-          <Border Width="34" Height="34" CornerRadius="9" Background="{DynamicResource Accent}" VerticalAlignment="Center">
-            <TextBlock Text="调" FontSize="17" FontWeight="Bold" Foreground="{DynamicResource OnAccent}"
-                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-          </Border>
-          <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-            <StackPanel Orientation="Horizontal">
-              <TextBlock Text="电脑调优助手" FontSize="18" FontWeight="Bold"/>
-              <Border Background="{DynamicResource AccentTint}" CornerRadius="3" Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center">
-                <TextBlock x:Name="VerBadge" Text="" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource Accent}"/>
-              </Border>
-            </StackPanel>
-            <TextBlock x:Name="SubTitle" Text="" FontSize="11.5" Foreground="{DynamicResource TextDim}" Margin="0,2,0,0"/>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+          <StackPanel>
+            <TextBlock Text="系统检验报告" FontSize="20" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextMain}"/>
+            <TextBlock x:Name="SubTitle" Text="" FontSize="12" Foreground="{DynamicResource TextDim}" Margin="0,3,0,0"/>
           </StackPanel>
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-          <CheckBox x:Name="ChkRestorePoint" Content="操作前自动创建系统还原点" IsChecked="True"
-                    Foreground="{DynamicResource TextDim}" FontSize="12" Margin="0,0,14,0"/>
+          <StackPanel HorizontalAlignment="Right" VerticalAlignment="Top">
+            <TextBlock x:Name="RptNo" Text="" FontSize="12" Foreground="{DynamicResource TextDim}"
+                       HorizontalAlignment="Right" Typography.NumeralAlignment="Tabular"/>
+            <TextBlock x:Name="RptDate" Text="" FontSize="12" Foreground="{DynamicResource TextDim}"
+                       HorizontalAlignment="Right" Margin="0,3,0,0" Typography.NumeralAlignment="Tabular"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- 全局动作跟着页眉走，不单独做一条工具栏 -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,12">
+          <CheckBox x:Name="ChkRestorePoint" Content="动手前自动创建系统还原点" IsChecked="True"
+                    Foreground="{DynamicResource TextDim}" FontSize="12" Margin="0,0,16,0"/>
           <Button x:Name="BtnRestorePoint" Content="立即创建还原点"/>
         </StackPanel>
       </Grid>
@@ -982,87 +1240,46 @@ $xamlText = @'
            ================================================================ -->
       <TabItem Header="概览">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-          <StackPanel Margin="18,16,18,20">
+          <Grid Margin="28,20,28,20">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="300"/>
+            </Grid.ColumnDefinitions>
 
-            <!-- ================================================================
-                 健康度读数 + 量程标尺
+            <StackPanel Grid.Column="0" Margin="0,0,40,0">
 
-                 ★ 刻意不用环形进度条 ★
-                   大圆环 + 中间一个数字，是仪表盘小组件的默认长相，
-                   哪个产品套上去都一样。仪器上的读数是
-                   「数字 + 它在量程里的位置」，所以这里是一条带
-                   0 / 50 / 100 标注的标尺 —— 刻度本身携带信息，不是装饰。
+              <!-- ============================================================
+                   本次检验摘要
 
-                 数字巨大、单位小而压低，是仪器面板的排版惯例。
-                 数字用 Segoe UI 的表格数位（Tabular），
-                 这样每秒刷新时数字宽度恒定，不会左右跳。
-                 ================================================================ -->
-            <Border Background="{DynamicResource PanelBg}" CornerRadius="4" Padding="26,20,26,18"
-                    BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1" Margin="0,0,0,12">
-              <Grid>
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="230"/>
-                  <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
+                   ★ 这里过去是四张圆角卡 + 大数字 + sparkline ★
+                     那是 craft-floor 明令拒绝的两样东西叠在一起：
+                     「hero-metric 模板」和「sparkline 当内容用」。
+                     换成四栏表之后，同样的四个数字多带了一栏
+                     **参考范围** —— 那一栏才是这个产品真正独有的东西：
+                     同一个值对不同机器、不同用途，合格线本来就不一样。
+                   ============================================================ -->
+              <StackPanel x:Name="DashSummary"/>
 
-                <StackPanel Grid.Column="0">
-                  <TextBlock Text="健康度" FontSize="12.5" Foreground="{DynamicResource TextDim}"/>
-                  <StackPanel Orientation="Horizontal">
-                    <TextBlock x:Name="DashScoreText" Text="--" FontSize="64" FontWeight="Light"
-                               Foreground="{DynamicResource TextMain}" LineHeight="72"
-                               FontFamily="Segoe UI" Typography.NumeralAlignment="Tabular"/>
-                    <TextBlock Text="分" FontSize="13" Foreground="{DynamicResource TextDim}"
-                               VerticalAlignment="Bottom" Margin="7,0,0,13"/>
-                  </StackPanel>
+              <!-- 检验结论：一行判定 + 超差项的备注 -->
+              <StackPanel x:Name="DashVerdict" Margin="0,28,0,0"/>
 
-                  <Grid Height="5" Margin="0,2,0,0">
-                    <Border Background="{DynamicResource SurfaceSunken}"/>
-                    <Border x:Name="DashScoreBar" Background="{DynamicResource TextMain}"
-                            HorizontalAlignment="Left" Width="0"/>
-                  </Grid>
-                  <Canvas x:Name="DashScaleTicks" Height="4" Margin="0,0,0,0"/>
-                  <Grid Margin="0,2,0,0">
-                    <TextBlock Text="0" FontSize="10.5" Foreground="{DynamicResource TextDim}" HorizontalAlignment="Left"/>
-                    <TextBlock Text="50" FontSize="10.5" Foreground="{DynamicResource TextDim}" HorizontalAlignment="Center"/>
-                    <TextBlock Text="100" FontSize="10.5" Foreground="{DynamicResource TextDim}" HorizontalAlignment="Right"/>
-                  </Grid>
-                </StackPanel>
+            </StackPanel>
 
-                <StackPanel Grid.Column="1" Margin="30,2,0,0">
-                  <TextBlock x:Name="DashHeadline" Text="正在检查" FontSize="17" FontWeight="SemiBold"
-                             Foreground="{DynamicResource TextMain}" TextWrapping="Wrap"/>
-                  <StackPanel x:Name="DashScoreItems" Margin="0,11,0,0"/>
-                </StackPanel>
-              </Grid>
-            </Border>
+            <!-- ============================================================
+                 右栏：按用途选
 
-            <!-- ================================================================
-                 实时读数：一整块面板，读数之间用刻线分开
+                 放右边而不是底部，是因为它是「选择受检类别」——
+                 化验单上「按年龄/性别选参考范围」也是登记信息，
+                 不是结果的一部分。选了它，左边整张表的参考范围会变。
+                 ============================================================ -->
+            <StackPanel Grid.Column="1">
+              <StackPanel x:Name="DashPickHead"/>
+              <StackPanel x:Name="DashQuickPick" Margin="0,4,0,0"/>
 
-                 ★ 上一版是四张独立圆角卡 + 同一种软阴影 ★
-                   那是「SaaS 卡片套装」—— 内容切成一模一样的卡片、
-                   所有东西同一个圆角、每张下面同一种灰阴影。
-                   仪器的面板是一整块金属，读数之间是刻线，不是四个盒子。
-                 ================================================================ -->
-            <Border Background="{DynamicResource PanelBg}" CornerRadius="4" Padding="0"
-                    BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1" Margin="0,0,0,12">
-              <UniformGrid x:Name="DashMetrics" Columns="4"/>
-            </Border>
-
-            <!-- 下半：按用途快选。圆角和边框跟上面两块保持一致 ——
-                 同一页上出现 4 和 14 两种圆角，看起来就是拼出来的 -->
-            <Border Background="{DynamicResource PanelBg}" CornerRadius="4" Padding="22,18"
-                    BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1">
-              <StackPanel>
-                <TextBlock Text="你主要拿这台电脑干什么" FontSize="15" FontWeight="Bold"
-                           Foreground="{DynamicResource TextMain}"/>
-                <TextBlock Text="点一下自动勾好对应的优化项，然后到「性能优化」页确认再应用。"
-                           FontSize="12" Foreground="{DynamicResource TextDim}" Margin="0,5,0,12" TextWrapping="Wrap"/>
-                <WrapPanel x:Name="DashQuickPick"/>
-              </StackPanel>
-            </Border>
-
-          </StackPanel>
+              <!-- 签发区：报告单右下角那一块 -->
+              <StackPanel x:Name="DashSignOff" Margin="0,32,0,0"/>
+            </StackPanel>
+          </Grid>
         </ScrollViewer>
       </TabItem>
 
@@ -1431,12 +1648,18 @@ if ($Script:HcTheme) {
     try { $Script:Window.Resources.MergedDictionaries.Add((New-Object HandyControl.Themes.Theme)) } catch { }
 }
 
+# 把随包字体套到整个窗口。
+# 必须在这里做而不是写死在 XAML 里 —— 字体路径是运行时算出来的
+# （取决于程序被解压到哪儿），XAML 里写不了。
+try {
+    $Script:Window.FontFamily = New-Object System.Windows.Media.FontFamily $Script:FontStack
+} catch { }
+
 # 把所有命名控件收集到 $Script:UI
 $Script:UI = @{}
 foreach ($n in @(
-        'SubTitle', 'VerBadge', 'ChkRestorePoint', 'BtnRestorePoint', 'Tabs',
-        'DashScoreText', 'DashScoreBar', 'DashScaleTicks', 'DashHeadline', 'DashScoreItems',
-        'DashMetrics', 'DashQuickPick',
+        'SubTitle', 'RptNo', 'RptDate', 'ChkRestorePoint', 'BtnRestorePoint', 'Tabs',
+        'DashSummary', 'DashVerdict', 'DashPickHead', 'DashQuickPick', 'DashSignOff',
         'TweakPanel', 'TweakDetail', 'BtnPickRecommended', 'BtnPickNone', 'BtnRescan', 'PresetBar',
         'PresetHeader', 'PresetToggle', 'PresetBody', 'PresetPrimary', 'PresetMoreHint',
         'BtnApplySelected', 'BtnRevertSelected', 'BtnRevertAll',
@@ -1472,317 +1695,13 @@ $Script:Presets = Get-GamePresets
 #    「优化工具自己是最大的后台负担」—— 所以切走立刻停表。
 # =====================================================================
 $Script:DashTimer = $null
-$Script:DashCards = @{}
+$Script:DashRows = @{}
 $Script:DashScoreCache = $null
 
-function New-MetricCard {
-    <#
-      面板上的一格读数。不是卡片 —— 没有圆角、没有阴影、没有自己的底色，
-      靠左边一条刻线跟邻格分开，像仪器面板上的分区。
 
-      排版按仪器惯例：
-        标签小而灰 → 数字巨大 → 单位小且压在数字基线上 → 附注 → 波形
 
-      返回 @{ Card; Big; Unit; Sub; Line; Host }
-    #>
-    param([string]$Title, [bool]$First = $false)
 
-    $cell = New-Object System.Windows.Controls.Border
-    # 只有左边一条线，且第一格不画 —— 这样整排看起来是「被刻线分开的一块面板」，
-    # 而不是「四个并排的盒子」
-    $cell.BorderBrush = Get-Brush $Script:CARD_BORDER
-    $cell.BorderThickness = New-Thick $(if ($First) { 0 } else { 1 }) 0 0 0
-    $cell.Padding = New-Thick 20 16 18 15
 
-    $sp = New-Object System.Windows.Controls.StackPanel
-
-    $t = New-TextBlock -Text $Title -Size 12 -Color '#66635B'
-    $sp.Children.Add($t) | Out-Null
-
-    # 数字 + 单位同一行，单位压到基线
-    $row = New-Object System.Windows.Controls.StackPanel
-    $row.Orientation = 'Horizontal'
-    $row.Margin = New-Thick 0 3 0 0
-
-    $big = New-TextBlock -Text '--' -Size 34
-    $big.FontWeight = 'Light'
-    $big.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe UI'
-    $big.LineHeight = 38
-    # ★ 表格数位 ★ 每个数字等宽，每秒刷新时读数不会左右跳
-    [System.Windows.Documents.Typography]::SetNumeralAlignment($big, 'Tabular')
-    $row.Children.Add($big) | Out-Null
-
-    $unit = New-TextBlock -Text '' -Size 12 -Color '#66635B'
-    $unit.VerticalAlignment = 'Bottom'
-    $unit.Margin = New-Thick 4 0 0 6
-    $row.Children.Add($unit) | Out-Null
-    $sp.Children.Add($row) | Out-Null
-
-    $sub = New-TextBlock -Text '' -Size 11.5 -Color '#66635B' -Wrap $true
-    $sub.Margin = New-Thick 0 1 0 9
-    $sp.Children.Add($sub) | Out-Null
-
-    # ================================================================
-    #  走纸：最近 60 秒的曲线
-    #
-    #  这是整页唯一「动」的东西，所以给它足够的高度（44px）和
-    #  一条 50% 基准线 —— 光有一根线看不出高低，有了基准线才知道
-    #  「现在是闲着还是在干活」。这是示波器 / 心电图的做法。
-    #
-    #  曲线下方填一层很淡的同色块，让走势有体量感；
-    #  但填充透明度压到 0.10，不能抢读数。
-    # ================================================================
-    $hostGrid = New-Object System.Windows.Controls.Grid
-    $hostGrid.Height = 44
-    $hostGrid.Margin = New-Thick 0 2 0 0
-    $hostGrid.ClipToBounds = $true
-
-    # 50% 基准线（虚线，比曲线更淡）
-    $base = New-Object System.Windows.Shapes.Line
-    $base.X1 = 0; $base.Y1 = 22; $base.Y2 = 22
-    $base.Stroke = Get-Brush $Script:CARD_BORDER
-    $base.StrokeThickness = 1
-    $base.StrokeDashArray = New-Object System.Windows.Media.DoubleCollection(, [double[]]@(2, 4))
-    $base.HorizontalAlignment = 'Stretch'
-    $hostGrid.Children.Add($base) | Out-Null
-
-    $fill = New-Object System.Windows.Shapes.Polygon
-    $fill.Fill = Get-Brush '#565349'      # TextMid（换肤时自动跟着变）
-    $fill.Opacity = 0.10
-    $hostGrid.Children.Add($fill) | Out-Null
-
-    $line = New-Object System.Windows.Shapes.Polyline
-    $line.Stroke = Get-Brush '#565349'     # 同上
-    $line.StrokeThickness = 1.2
-    $line.StrokeLineJoin = 'Round'
-    $hostGrid.Children.Add($line) | Out-Null
-
-    $sp.Children.Add($hostGrid) | Out-Null
-
-    $cell.Child = $sp
-    return @{ Card = $cell; Big = $big; Unit = $unit; Sub = $sub; Line = $line; Fill = $fill; Base = $base; Holder = $hostGrid }
-}
-
-function Update-Sparkline {
-    <#
-      把一串 0~100 的数值画成折线。
-
-      ★ 必须按控件的实际宽度算 ★
-        用固定宽度的话，窗口一拉伸线就对不上了。
-        ActualWidth 在首次布局完成前是 0，那就先不画 —— 下一秒就有了。
-    #>
-    # ★ 参数不能叫 $Host ★
-    #   $Host 是 PowerShell 的保留自动变量（宿主对象），拿来当参数名会抛
-    #   「Cannot overwrite variable Host because it is read-only」。
-    #   而这个异常发生在 CPU 那次调用里，直接让整个刷新函数中断 ——
-    #   结果就是「只有处理器有读数，显卡/内存/系统盘全是 --」。
-    #   （同类保留变量还有 $PID、$PWD、$Error、$Input，都别用作参数名。）
-    param($Line, $Holder, $Values, [double]$Max = 100, $Fill = $null, $Base = $null)
-    if ($null -eq $Line -or $null -eq $Values) { return }
-    $n = @($Values).Count
-    if ($n -lt 2) { return }
-    $w = $Holder.ActualWidth
-    $h = $Holder.ActualHeight
-    if ($w -lt 5 -or $h -lt 5) { return }
-
-    # 基准线跟着宽度走，并且钉在纵向正中（= 50%）
-    if ($Base) { $Base.X2 = $w; $Base.Y1 = $h / 2; $Base.Y2 = $h / 2 }
-
-    $pts = New-Object System.Windows.Media.PointCollection
-    $step = $w / [math]::Max(1, ($n - 1))
-    for ($i = 0; $i -lt $n; $i++) {
-        $v = [double]$Values[$i]
-        if ($v -lt 0) { $v = 0 }
-        if ($v -gt $Max) { $v = $Max }
-        $y = $h - ($v / $Max * ($h - 3)) - 1.5
-        $pts.Add((New-Object System.Windows.Point (($i * $step), $y)))
-    }
-    $Line.Points = $pts
-
-    # 填充多边形 = 曲线 + 右下角 + 左下角，闭合出曲线下方那块面积
-    if ($Fill) {
-        $fp = New-Object System.Windows.Media.PointCollection
-        foreach ($p in $pts) { $fp.Add($p) }
-        $fp.Add((New-Object System.Windows.Point (($w), $h)))
-        $fp.Add((New-Object System.Windows.Point (0, $h)))
-        $Fill.Points = $fp
-    }
-}
-
-function Build-DashUI {
-    <# 建出四格读数和快选卡片。只建一次，之后靠 Update-DashUI 刷数 #>
-    $mg = $Script:UI.DashMetrics
-    $mg.Children.Clear()
-    $Script:DashCards = @{}
-
-    $defs = @(
-        @{ K = 'CPU'; T = '处理器' },
-        @{ K = 'GPU'; T = '显卡' },
-        @{ K = 'RAM'; T = '内存' },
-        @{ K = 'DISK'; T = '系统盘' })
-    $first = $true
-    foreach ($def in $defs) {
-        $c = New-MetricCard -Title $def.T -First $first
-        $Script:DashCards[$def.K] = $c
-        $mg.Children.Add($c.Card) | Out-Null
-        $first = $false
-    }
-
-    # 量程标尺上的刻度线：每 10 分一根，50 分那根画高一点
-    $tk = $Script:UI.DashScaleTicks
-    $tk.Children.Clear()
-    $tk.Add_SizeChanged({
-            $c = $this
-            $c.Children.Clear()
-            $w = $c.ActualWidth
-            if ($w -lt 10) { return }
-            for ($i = 0; $i -le 10; $i++) {
-                $r = New-Object System.Windows.Shapes.Rectangle
-                $r.Width = 1
-                $r.Height = $(if ($i % 5 -eq 0) { 4 } else { 2 })
-                $r.Fill = Get-Brush '#8A877F'
-                [System.Windows.Controls.Canvas]::SetLeft($r, [math]::Round($w * $i / 10))
-                [System.Windows.Controls.Canvas]::SetTop($r, 0)
-                $c.Children.Add($r) | Out-Null
-            }
-        })
-
-    # 按用途快选：复用「按用途选」那组预设
-    $qp = $Script:UI.DashQuickPick
-    $qp.Children.Clear()
-    foreach ($ps in ($Script:Presets | Where-Object { $_.Group -eq '按用途选' })) {
-        $card = New-PresetCard -Preset $ps -Big $true
-        # 点完跳到性能优化页，让他看见到底勾了什么 ——
-        # 不跳的话用户会以为「点了没反应」
-        $card.Add_MouseLeftButtonUp({ $Script:UI.Tabs.SelectedIndex = 1 })
-        $qp.Children.Add($card) | Out-Null
-    }
-}
-
-function Update-DashScore {
-    <#
-      算健康度。这个比较贵（要逐项 Test-TweakApplied，实测 1.2 秒），
-      所以**不跟着每秒刷新走**，只在进页面和手动重算时跑。
-    #>
-    $s = Get-DashScore
-    $Script:DashScoreCache = $s
-    $Script:UI.DashScoreText.Text = "$($s.Score)"
-    # 标尺填充宽度按分数占比算，父容器宽度变化时 SizeChanged 会重算
-    try {
-        $bar = $Script:UI.DashScoreBar
-        $track = $bar.Parent
-        if ($track -and $track.ActualWidth -gt 0) { $bar.Width = $track.ActualWidth * $s.Score / 100 }
-        $track.Add_SizeChanged({ $this.Children[1].Width = $this.ActualWidth * $Script:DashScoreCache.Score / 100 })
-    } catch { }
-
-    # 分数对应的一句话结论
-    $head = switch ($s.Score) {
-        { $_ -ge 90 } { '你的电脑状态很好' ; break }
-        { $_ -ge 75 } { '整体不错，还有一点余量' ; break }
-        { $_ -ge 55 } { '有几处明显可以改善' ; break }
-        default { '问题不少，建议逐项看一下' }
-    }
-    $Script:UI.DashHeadline.Text = $head
-
-    $box = $Script:UI.DashScoreItems
-    $box.Children.Clear()
-    foreach ($it in $s.Items) {
-        $row = New-Object System.Windows.Controls.StackPanel
-        $row.Orientation = 'Horizontal'
-        $row.Margin = New-Thick 0 0 0 5
-        $m = New-Badge -Text "-$($it.Minus)" -Fg '#8A5750' -Bg (Get-TintBg '#8A5750')
-        $m.Margin = New-Thick 0 0 8 0
-        $row.Children.Add($m) | Out-Null
-        $tx = New-TextBlock -Text $it.Name -Size 12.5 -Wrap $true
-        $tx.VerticalAlignment = 'Center'
-        $row.Children.Add($tx) | Out-Null
-        $box.Children.Add($row) | Out-Null
-
-        $why = New-TextBlock -Text $it.Why -Size 11.5 -Color '#66635B' -Wrap $true
-        $why.Margin = New-Thick 34 -2 0 8
-        $box.Children.Add($why) | Out-Null
-    }
-}
-
-function Update-DashUI {
-    <# 每秒刷一次实时读数。注意这里绝不做耗时的事 #>
-    if ($Script:DashCards.Count -eq 0) { return }
-    $Script:DashTick++
-    Update-DashSensors
-
-    # ---- CPU ----
-    $c = Get-DashCpu
-    $card = $Script:DashCards['CPU']
-    # ★ 不用「A · B · C」中点串 ★ 那是模板腔，哪个产品都长这样。
-    #   数值各占一行，读起来也更像仪表读数。
-    if ($null -ne $c.Temp) {
-        $card.Big.Text = "$($c.Temp)"
-        $card.Unit.Text = '°C'
-        $lines = @()
-        if ($null -ne $c.Load) { $lines += "占用 $($c.Load)%" }
-        if ($c.Clock) { $lines += "$([math]::Round($c.Clock/1000,2)) GHz" }
-        if ($c.Power) { $lines += "$($c.Power) W" }
-        $card.Sub.Text = ($lines -join "`r`n")
-    } elseif ($null -ne $c.Load) {
-        # 读不到温度时退而报占用率 —— 但频率、功耗如果读得到还是要给，
-        # 别因为缺一项就把整格降级成一个光秃秃的百分比
-        $card.Big.Text = "$($c.Load)"
-        $card.Unit.Text = '%'
-        $lines = @()
-        if ($c.Clock) { $lines += "$([math]::Round($c.Clock/1000,2)) GHz" }
-        if ($c.Power) { $lines += "$($c.Power) W" }
-        $lines += '温度读不到'
-        $card.Sub.Text = ($lines -join "`r`n")
-    } else {
-        $card.Big.Text = '--'
-        $card.Unit.Text = ''
-        $card.Sub.Text = '读不到'
-    }
-    Add-DashSample 'CPU' $c.Load
-    Update-Sparkline $card.Line $card.Holder $Script:DashHistory['CPU'] -Fill $card.Fill -Base $card.Base
-
-    # ---- GPU ----
-    $g = Get-DashGpu
-    $card = $Script:DashCards['GPU']
-    if ($null -ne $g.Temp) {
-        $card.Big.Text = "$($g.Temp)"
-        $card.Unit.Text = '°C'
-        $lines = @()
-        if ($null -ne $g.Load) { $lines += "占用 $($g.Load)%" }
-        if ($g.Name) { $lines += ($g.Name -replace 'NVIDIA GeForce |AMD |\(TM\)| Laptop GPU', '') }
-        $card.Sub.Text = ($lines -join "`r`n")
-    } elseif ($g.Name) {
-        $card.Big.Text = '--'
-        $card.Unit.Text = ''
-        $card.Sub.Text = "$($g.Name)`r`n这张卡读不到实时数据"
-    } else {
-        $card.Big.Text = '--'
-        $card.Unit.Text = ''
-        $card.Sub.Text = '没检测到显卡'
-    }
-    Add-DashSample 'GPU' $g.Load
-    Update-Sparkline $card.Line $card.Holder $Script:DashHistory['GPU'] -Fill $card.Fill -Base $card.Base
-
-    # ---- 内存 ----
-    $r = Get-DashRam
-    $card = $Script:DashCards['RAM']
-    if ($r) {
-        $card.Big.Text = "$($r.Percent)"
-        $card.Unit.Text = '%'
-        $card.Sub.Text = "已用 $($r.UsedGB) GB`r`n共 $($r.TotalGB) GB"
-        Add-DashSample 'RAM' $r.Percent
-        Update-Sparkline $card.Line $card.Holder $Script:DashHistory['RAM'] -Fill $card.Fill -Base $card.Base
-    }
-
-    # ---- 系统盘（变化慢，没有波形图）----
-    $d = Get-DashDisk
-    $card = $Script:DashCards['DISK']
-    if ($d) {
-        $card.Big.Text = "$($d.FreeGB)"
-        $card.Unit.Text = 'GB 可用'
-        $card.Sub.Text = "$($d.Drive) 共 $($d.TotalGB) GB`r`n已用 $($d.UsedPct)%"
-    }
-}
 
 function Start-DashTimer {
     if ($Script:DashTimer) { $Script:DashTimer.Start(); return }
@@ -1848,7 +1767,8 @@ function New-PresetCard {
     $card.BorderThickness = New-Thick 1
     $card.CornerRadius = New-Object System.Windows.CornerRadius 10
     $card.Padding = New-Thick 0
-    $card.Margin = New-Thick 0 0 10 10
+    # 概览页那排只有一行，给下边距会白占 12px，把整块挤出可视区
+    $card.Margin = $(if ($Big) { New-Thick 0 0 12 0 } else { New-Thick 0 0 12 12 })
     $card.Cursor = 'Hand'
     $card.Tag = $Preset
     # 宽度按「一行正好三张」算。预设区可用内宽实测 714，
@@ -1874,21 +1794,21 @@ function New-PresetCard {
     $g.Children.Add($bar) | Out-Null
 
     $sp = New-Object System.Windows.Controls.StackPanel
-    $sp.Margin = New-Thick 12 $(if ($Big) { 11 } else { 9 }) 12 $(if ($Big) { 11 } else { 9 })
+    $sp.Margin = New-Thick 16 12 16 12
     [System.Windows.Controls.Grid]::SetColumn($sp, 1)
 
-    $title = New-TextBlock -Text $Preset.Name -Size $(if ($Big) { 14 } else { 13 }) -Bold $true
+    $title = New-TextBlock -Text $Preset.Name -Size 14.5 -Bold $true
     $title.TextTrimming = 'CharacterEllipsis'
     $sp.Children.Add($title) | Out-Null
 
     $subText = $Script:PresetSubtitle["$($Preset.Id)"]
     if ($subText) {
-        $sub = New-TextBlock -Text $subText -Size 11.5 -Color '#66635B'
+        $sub = New-TextBlock -Text $subText -Size 12 -Color '#66635B'
         # ★ 标题和副标题都限一行、超出省略 ★
         #   允许换行的话，名字长一点卡片就变三行高，
         #   12 张卡叠起来能把整个左栏占满，下面的优化项列表就看不见了。
         $sub.TextTrimming = 'CharacterEllipsis'
-        $sub.Margin = New-Thick 0 3 0 0
+        $sub.Margin = New-Thick 0 4 0 0
         $sp.Children.Add($sub) | Out-Null
     }
 
@@ -1925,6 +1845,271 @@ function Select-PresetCard {
             $Card.BorderBrush = Get-Brush $Script:CARD_SEL_BD
             $Card.BorderThickness = New-Thick 2
         } catch { }
+    }
+}
+
+function Get-RptRange {
+    <#
+      一个检验项目的参考范围。返回 @{ Text; Lo; Hi }
+
+      ★ 这些阈值必须有出处，不许拍脑袋 ★
+        参考范围是这个产品唯一无法被抄的东西，写错了整套就失去意义。
+          显卡温度 83  —— NVIDIA 消费级显卡默认温度墙就是 83°C，超过开始降频
+          处理器温度 95 —— AMD/Intel 移动端 Tjmax 约 100~105°C，
+                            长期贴到 95 以上基本处在降频区
+          内存占用 85  —— 超过之后 Windows 开始大量换页，体感就是「卡一下」
+          系统盘可用 20 GB —— Windows 功能更新需要的临时空间下限
+        占用率这类瞬时读数**不设参考范围**（显示「—」）：
+        某一秒 100% 不说明任何问题，给个范围反而是误导。
+    #>
+    param([string]$Key)
+    switch ($Key) {
+        'CpuTemp' { return @{ Text = '< 95'; Lo = $null; Hi = 95 } }
+        'GpuTemp' { return @{ Text = '< 83'; Lo = $null; Hi = 83 } }
+        'Ram' { return @{ Text = '< 85'; Lo = $null; Hi = 85 } }
+        'Disk' { return @{ Text = '> 20'; Lo = 20; Hi = $null } }
+        default { return @{ Text = '—'; Lo = $null; Hi = $null } }
+    }
+}
+
+function Get-RptMarkFor {
+    <#
+      按值和参考范围算标记。
+        在范围内            -> ''      （不标色、不加粗，和别的行一样）
+        超出 / 低于         -> '↑' '↓'
+        超出上限 10% 以上   -> '↑↑'    （显著异常）
+        读不到              -> '—'
+    #>
+    param($Value, $Range)
+    if ($null -eq $Value) { return '—' }
+    if ($null -ne $Range.Hi -and $Value -gt $Range.Hi) {
+        if ($Value -gt ($Range.Hi * 1.1)) { return '↑↑' }
+        return '↑'
+    }
+    if ($null -ne $Range.Lo -and $Value -lt $Range.Lo) {
+        if ($Value -lt ($Range.Lo * 0.5)) { return '↓↓' }
+        return '↓'
+    }
+    return ''
+}
+
+function Build-DashUI {
+    <#
+      概览页 = 一张检验报告。
+
+      ★ 这里过去是四张圆角卡 + 76px 大数字 + 走纸曲线 ★
+        craft-floor 把这三样都点名拒绝了：hero-metric 模板、
+        sparkline 当内容用、同尺寸卡片当页面结构。
+        换成四栏表之后信息反而更多了 —— 多出来的那一栏「参考范围」
+        才是这个产品真正独有的东西。
+    #>
+    $Script:DashRows = @{}
+
+    # ---------- 摘要表 ----------
+    $sum = $Script:UI.DashSummary
+    $sum.Children.Clear()
+    $sum.Children.Add((New-RptSection -Title '本次检验摘要' -Aside '实时读数，每秒刷新')) | Out-Null
+    $sum.Children.Add((New-RptHeader -First '检验项目')) | Out-Null
+
+    $defs = @(
+        @{ K = 'CpuTemp'; N = '处理器温度'; U = '°C' },
+        @{ K = 'CpuLoad'; N = '处理器占用'; U = '%' },
+        @{ K = 'GpuTemp'; N = '显卡温度'; U = '°C' },
+        @{ K = 'GpuLoad'; N = '显卡占用'; U = '%' },
+        @{ K = 'Ram'; N = '内存占用'; U = '%' },
+        @{ K = 'Disk'; N = '系统盘可用'; U = 'GB' })
+    $i = 0
+    foreach ($d in $defs) {
+        $rg = Get-RptRange $d.K
+        $row = New-RptRow -Name $d.N -Result '—' -Ref $rg.Text -Unit $d.U -Zebra ($i % 2 -eq 1)
+        $Script:DashRows[$d.K] = $row
+        $sum.Children.Add($row.Row) | Out-Null
+        $i++
+    }
+
+    # ---------- 按用途选（右栏）----------
+    $ph = $Script:UI.DashPickHead
+    $ph.Children.Clear()
+    $ph.Children.Add((New-RptSection -Title '受检类别')) | Out-Null
+    $hint = New-TextBlock -Size 12 -Color '#66635B' -Wrap $true -Text (
+        '选一类，下面整张表的参考范围和推荐项都会按这一类给 —— ' +
+        '同一项对不同用途，合格线本来就不一样。')
+    $hint.Margin = New-Thick 0 0 0 4
+    $ph.Children.Add($hint) | Out-Null
+
+    $qp = $Script:UI.DashQuickPick
+    $qp.Children.Clear()
+    foreach ($ps in ($Script:Presets | Where-Object { $_.Group -eq '按用途选' })) {
+        $card = New-PresetCard -Preset $ps -Big $true
+        $card.Add_MouseLeftButtonUp({ $Script:UI.Tabs.SelectedIndex = 1 })
+        $qp.Children.Add($card) | Out-Null
+    }
+
+    # ---------- 签发区 ----------
+    #   报告单右下角那一块：谁检的、什么时候、盖章。
+    #   这里它同时是主操作的位置 —— 「签发」就是「应用改动」。
+    $so = $Script:UI.DashSignOff
+    $so.Children.Clear()
+    $rule = New-Object System.Windows.Shapes.Rectangle
+    $rule.Height = 1
+    $rule.Fill = Get-Brush $Script:CARD_BORDER
+    $rule.Margin = New-Thick 0 0 0 10
+    $so.Children.Add($rule) | Out-Null
+    foreach ($ln in @(
+            @{ L = '检验'; V = "电脑调优助手 v$Script:AppVersion" },
+            @{ L = '依据'; V = '本机原始值备份' },
+            @{ L = '日期'; V = (Get-Date).ToString('yyyy-MM-dd') })) {
+        $g = New-Object System.Windows.Controls.Grid
+        $g.Margin = New-Thick 0 0 0 5
+        $cd1 = New-Object System.Windows.Controls.ColumnDefinition
+        $cd1.Width = New-Object System.Windows.GridLength 44
+        $cd2 = New-Object System.Windows.Controls.ColumnDefinition
+        $cd2.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+        $g.ColumnDefinitions.Add($cd1); $g.ColumnDefinitions.Add($cd2)
+        $a = New-TextBlock -Text $ln.L -Size 11.5 -Color '#66635B'
+        $b = New-TextBlock -Text $ln.V -Size 12 -Color '#4A4842' -Wrap $true
+        [System.Windows.Controls.Grid]::SetColumn($b, 1)
+        $g.Children.Add($a) | Out-Null
+        $g.Children.Add($b) | Out-Null
+        $so.Children.Add($g) | Out-Null
+    }
+}
+
+function Update-DashScore {
+    <#
+      检验结论。
+
+      ★ 不做健康度大数字 ★
+        「96 分」是 hero-metric 模板，而且分数本身不可行动 ——
+        用户拿着 96 分不知道该干什么。
+        报告单的结论是一行计数加一段备注：核对了多少项、合格多少、
+        超差的是哪几项 —— 每一条都能直接点进去处理。
+    #>
+    $s = Get-DashScore
+    $Script:DashScoreCache = $s
+
+    $box = $Script:UI.DashVerdict
+    $box.Children.Clear()
+    $box.Children.Add((New-RptSection -Title '检验结论')) | Out-Null
+
+    $total = @($Script:Tweaks).Count
+    $bad = @($s.Items).Count
+    $ok = [math]::Max(0, $total - $bad)
+
+    # 判定行：四个计数横排，只有「超差」那个上法定墨
+    $tally = New-Object System.Windows.Controls.StackPanel
+    $tally.Orientation = 'Horizontal'
+    $tally.Margin = New-Thick 0 2 0 14
+    $cells = @(
+        @{ L = '已核对'; V = "$total"; Bad = $false },
+        @{ L = '合格'; V = "$ok"; Bad = $false },
+        @{ L = '超差'; V = "$bad"; Bad = ($bad -gt 0) })
+    foreach ($c in $cells) {
+        $sp = New-Object System.Windows.Controls.StackPanel
+        $sp.Orientation = 'Horizontal'
+        $sp.Margin = New-Thick 0 0 28 0
+        $l = New-TextBlock -Text $c.L -Size 12 -Color '#66635B'
+        $l.VerticalAlignment = 'Bottom'
+        $l.Margin = New-Thick 0 0 6 1
+        $sp.Children.Add($l) | Out-Null
+        $v = New-TextBlock -Text $c.V -Size 19 -Color $(if ($c.Bad) { '#8A5750' } else { '#2B2A26' })
+        if ($c.Bad) { $v.FontWeight = 'SemiBold' }
+        [System.Windows.Documents.Typography]::SetNumeralAlignment($v, 'Tabular')
+        $sp.Children.Add($v) | Out-Null
+        $tally.Children.Add($sp) | Out-Null
+    }
+    $box.Children.Add($tally) | Out-Null
+
+    # 备注区：超差项逐条列出。★ 备注在表格下方，不塞进表格 ★
+    if ($bad -gt 0) {
+        $nh = New-TextBlock -Text '备注' -Size 12 -Color '#66635B'
+        $nh.FontWeight = 'SemiBold'
+        $nh.Margin = New-Thick 0 0 0 6
+        $box.Children.Add($nh) | Out-Null
+        foreach ($it in $s.Items) {
+            $g = New-Object System.Windows.Controls.Grid
+            $g.Margin = New-Thick 0 0 0 9
+            $cd1 = New-Object System.Windows.Controls.ColumnDefinition
+            $cd1.Width = New-Object System.Windows.GridLength 26
+            $cd2 = New-Object System.Windows.Controls.ColumnDefinition
+            $cd2.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+            $g.ColumnDefinitions.Add($cd1); $g.ColumnDefinitions.Add($cd2)
+
+            $mk = New-TextBlock -Text '↑' -Size 13 -Color '#8A5750'
+            $mk.FontWeight = 'SemiBold'
+            $g.Children.Add($mk) | Out-Null
+
+            $sp = New-Object System.Windows.Controls.StackPanel
+            [System.Windows.Controls.Grid]::SetColumn($sp, 1)
+            $t1 = New-TextBlock -Text $it.Name -Size 13 -Color '#2B2A26' -Wrap $true
+            $sp.Children.Add($t1) | Out-Null
+            $t2 = New-TextBlock -Text $it.Why -Size 12 -Color '#66635B' -Wrap $true
+            $t2.Margin = New-Thick 0 2 0 0
+            $sp.Children.Add($t2) | Out-Null
+            $g.Children.Add($sp) | Out-Null
+            $box.Children.Add($g) | Out-Null
+        }
+    } else {
+        $t = New-TextBlock -Size 12.5 -Color '#66635B' -Wrap $true -Text '全部项目在参考范围内，没有需要处理的。'
+        $box.Children.Add($t) | Out-Null
+    }
+}
+
+function Set-RptReading {
+    <#
+      刷一行读数：写值、按参考范围算标记、变了就闪一下。
+      读不到一律 '—' + 标记 '—'，绝不编数字。
+    #>
+    param([string]$Key, $Value, [int]$Decimals = 0)
+    $row = $Script:DashRows[$Key]
+    if ($null -eq $row) { return }
+    if ($null -eq $Value) {
+        $row.Result.Text = '—'
+        Set-RptMark $row '—'
+        return
+    }
+    $fmt = if ($Decimals -gt 0) { "F$Decimals" } else { 'F0' }
+    $old = "$($row.Result.Text)" -replace '[^\d.\-]', ''
+    $changed = $true
+    if ($old -and [double]::TryParse($old, [ref]$null)) {
+        $changed = ([math]::Round([double]$old, $Decimals) -ne [math]::Round([double]$Value, $Decimals))
+    }
+    Start-CountUp -Target $row.Result -To ([double]$Value) -Decimals $Decimals -Ms 220
+    Set-RptMark $row (Get-RptMarkFor ([double]$Value) (Get-RptRange $Key))
+    if ($changed) { Start-ValueFlash $row.Result }
+}
+
+function Update-DashUI {
+    <# 每秒刷一次摘要表。这里绝不做耗时的事 #>
+    if (-not $Script:DashRows -or $Script:DashRows.Count -eq 0) { return }
+    $Script:DashTick++
+    Update-DashSensors
+
+    $c = Get-DashCpu
+    Set-RptReading 'CpuTemp' $c.Temp
+    Set-RptReading 'CpuLoad' $c.Load
+    if ($null -eq $c.Temp) { $Script:DashRows['CpuTemp'].Note.Text = '读不到 —— 需要管理员权限和厂商驱动支持'; $Script:DashRows['CpuTemp'].Note.Visibility = 'Visible' }
+
+    $g = Get-DashGpu
+    Set-RptReading 'GpuTemp' $g.Temp
+    Set-RptReading 'GpuLoad' $g.Load
+    if ($g.Name) {
+        $Script:DashRows['GpuTemp'].Note.Text = ($g.Name -replace 'NVIDIA GeForce |AMD |\(TM\)| Laptop GPU', '')
+        $Script:DashRows['GpuTemp'].Note.Visibility = 'Visible'
+    }
+
+    $r = Get-DashRam
+    if ($r) {
+        Set-RptReading 'Ram' $r.Percent
+        $Script:DashRows['Ram'].Note.Text = "已用 $($r.UsedGB) GB / 共 $($r.TotalGB) GB"
+        $Script:DashRows['Ram'].Note.Visibility = 'Visible'
+    }
+
+    $d = Get-DashDisk
+    if ($d) {
+        Set-RptReading 'Disk' $d.FreeGB 1
+        $Script:DashRows['Disk'].Note.Text = "$($d.Drive) 共 $($d.TotalGB) GB，已用 $($d.UsedPct)%"
+        $Script:DashRows['Disk'].Note.Visibility = 'Visible'
     }
 }
 
@@ -2875,6 +3060,8 @@ function Redraw-AllPages {
     Apply-PanelOpacity
     try { Build-TweakUI } catch { }
     try { Build-PresetUI } catch { }
+    # ★ 概览页也必须重建 ★ 漏了它的话换皮肤之后整张摘要表还是旧配色
+    try { if ($Script:DashRows -and $Script:DashRows.Count -gt 0) { Build-DashUI; Update-DashScore; Update-DashUI } } catch { }
     try { Build-CleanUI } catch { }
     try { Build-ThemeUI } catch { }
     try { if ($Script:UI.StartupPanel.Children.Count -gt 0) { Build-StartupUI } } catch { }
@@ -4252,9 +4439,18 @@ try {
     Apply-PanelOpacity
 } catch { Write-Log "套用皮肤失败，用默认配色：$($_.Exception.Message)" '警告' }
 
-$Script:Window.Title     = "电脑调优助手 v$Script:AppVersion"
-$Script:UI.VerBadge.Text = "v$Script:AppVersion"
-$Script:UI.SubTitle.Text = "v$Script:AppVersion  ·  管理员模式  ·  $osCaption  ·  改动全部可还原"
+$Script:Window.Title = "电脑调优助手 v$Script:AppVersion"
+
+# 页眉那四个事实。★ 受检机器要写真机型 ★
+#   报告单的抬头写的是「谁的报告」，不是「谁出的报告」。
+#   写清楚这是给这台机器出的，用户才知道下面的参考范围是按他的硬件算的。
+try {
+    $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $machine = if ($cs) { ("{0} {1}" -f $cs.Manufacturer, $cs.Model).Trim() } else { $env:COMPUTERNAME }
+} catch { $machine = $env:COMPUTERNAME }
+$Script:UI.SubTitle.Text = "受检机器  $machine　·　$osCaption"
+$Script:UI.RptNo.Text    = "编号  PCT-$Script:AppVersion-$((Get-Date).ToString('MMdd'))"
+$Script:UI.RptDate.Text  = "报告日期  $((Get-Date).ToString('yyyy-MM-dd'))"
 
 Write-Log '=== 电脑调优助手已启动（管理员模式）===' '信息'
 

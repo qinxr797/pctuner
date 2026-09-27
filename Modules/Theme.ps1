@@ -50,19 +50,24 @@ $Script:ThemeBaseKeys = @(
 #  ★ 成对是关键 ★ 只换前景不换背景，或者反过来，都会炸。
 # =====================================================================
 $Script:SemanticDark = @{
+    # ★ 背景那几个值是跟着画布一起定的 ★
+    #   画布从 #191D23 压到 #0B0D10 之后，原来那批（#2E3A2F 等）显得发灰发亮，
+    #   像一块块贴上去的补丁。现在整体再压暗一档，让状态卡片是「从面板里
+    #   透出来的一块色」而不是「浮在上面的色块」。见 design.md 1.3。
     # ---- 灰绿：良好 / 必做 / 低风险 ----
     '#556B54' = '#9CC49D'      # 前景：提亮成浅鼠尾草
-    '#E7EBE4' = '#2E3A2F'      # 背景：压成深绿灰
-    '#E2E7E0' = '#2E3A2F'
-    '#DCE8DA' = '#2E3A2F'
+    '#E7EBE4' = '#1B2A1D'      # 背景：压成深绿灰
+    '#E2E7E0' = '#1B2A1D'
+    '#DCE8DA' = '#1B2A1D'
     # ---- 灰卡其：需实测 / 中风险 / 可疑 ----
     '#7A6B45' = '#DCC68C'
-    '#EDE7D9' = '#3B3529'
-    '#F0EADC' = '#3B3529'
+    '#EDE7D9' = '#2A2418'
+    '#F0EADC' = '#2A2418'
+    '#EDE2D6' = '#2A2418'
     # ---- 灰玫瑰：高危 / 高风险 ----
     '#8A5750' = '#E4A69E'
-    '#EDE0DD' = '#3E2D2A'
-    '#EFE3E0' = '#3E2D2A'
+    '#EDE0DD' = '#2D1C19'
+    '#EFE3E0' = '#2D1C19'
     # ---- 灰陶：会弹黑框 ----
     '#89694F' = '#D6AB85'
 }
@@ -188,24 +193,62 @@ function Get-BuiltinThemes {
             }
         }
 
-        '仪表灰' = @{
-            Desc = '枪灰面板 + 暖白读数。照着量测仪器做的：颜色只用来表达状态，不当装饰。'
-            Swatch = @('#191D23', '#20252D', '#D8DEE9')
+        '检验单' = @{
+            Desc = '检验科终端上的报告单。阅读区完全消色，整套只有一种法定墨 —— 它只表示「超出参考范围」。'
+            Swatch = @('#0E0E0E', '#141414', '#E75640')
             Colors = @{
-                # 枪灰，不是「发暗的黑」—— 带一点蓝绿，像仪器外壳阳极氧化的面
-                WindowBg = '#191D23'; PanelBg = '#20252D'; CardBg = '#262C35'; CardHover = '#2D343E'
-                SurfaceAlt = '#2A313A'; SurfaceSunken = '#14171C'; NeutralTint = '#2A313A'
-                # 读数是暖白不是纯白 —— 纯白在深底上发飘，暖一点像背光面板
-                TextMain = '#E8EAEE'; TextDim = '#989EA7'; TextMid = '#C3C9D2'; OnAccent = '#191D23'
-                # 线分三档粗细，对应「分隔 / 结构 / 强调」三种信息量
-                BorderSoft = '#2E353F'; BorderMed = '#3B434F'; BorderStrong = '#4E5764'
-                ScrollThumbBg = '#3B434F'; ScrollThumbHover = '#4E5764'; ScrollThumbDrag = '#626C7A'
-                # ★ 故意不给高饱和强调色 ★
-                #   「近黑底 + 一个亮色强调」是 AI 生成界面最典型的长相之一
-                #   （上一版这里是 #00E5A0 酸绿，原样命中）。
-                #   现在主色就是读数本身的暖白；颜色只留给「状态」——
-                #   绿=正常 / 卡其=注意 / 红=超限，不当装饰用。
-                Accent = '#D8DEE9'; AccentDark = '#AFB7C4'; AccentLight = '#EDF0F4'; AccentTint = '#2A313A'
+                # ---- 消色阶梯 ----
+                #   ★ 刻意不带任何色相 ★
+                #   Linear #08090a、Raycast #07080a、我上一版 #0B0D10 全是偏蓝的近黑 ——
+                #   那是「深色工具软件」的集体长相。纯中性灰读起来是墨和纸，不是屏幕蓝光，
+                #   而且它让下面那一种法定墨成为整个界面唯一的颜色，无处可藏。
+                WindowBg = '#0E0E0E'      # 桌面（报告单以外的地方）
+                PanelBg = '#141414'       # 报告单本体
+                SurfaceAlt = '#181818'    # 斑马行 / 表头底
+                CardBg = '#161616'        # 次级分区
+                CardHover = '#1E1E1E'     # 悬停
+                SurfaceSunken = '#080808' # 凹陷：输入框、进度槽
+                NeutralTint = '#181818'
+                # ---- 墨色（全部消色）----
+                TextMain = '#EDEDED'      # 表头、结果值
+                TextMid = '#B8B8B8'       # 正文、项目名
+                TextDim = '#8A8A8A'       # 参考范围、单位、备注
+                OnAccent = '#0E0E0E'      # 压在实心墨块（主按钮）上的字
+                # ---- 线（报告单靠线重分层，不靠卡片和阴影）----
+                BorderSoft = '#242424'    # 行间细线、表框
+                BorderMed = '#3A3A3A'     # 表头下的粗线、分区线
+                BorderStrong = '#565656'  # 选中、聚焦
+                ScrollThumbBg = '#333333'; ScrollThumbHover = '#474747'; ScrollThumbDrag = '#5E5E5E'
+                # ---- 主操作 = 反白墨块，不是彩色按钮 ----
+                #   报告单上没有「强调色按钮」这种东西，只有签章。
+                #   所以主按钮做成实心浅墨块压深底，零色相、最高对比，一眼认得出。
+                #   ★ 法定墨绝对不能用在按钮上 ★ 它只表示「超出参考范围」。
+                Accent = '#E4E4E4'; AccentDark = '#BDBDBD'; AccentLight = '#F5F5F5'; AccentTint = '#1E1E1E'
+            }
+            # ================================================================
+            #  语义色在报告单世界里要塌缩
+            # ----------------------------------------------------------------
+            #  化验单上没有「四种状态色」这种东西。只有两种情况：
+            #      在参考范围内 —— 不标色、不加粗，和别的行长得一模一样
+            #      超出参考范围 —— 一种法定墨 + ↑ / ↑↑ 标记
+            #  分级靠**标记**不靠颜色：* 需实测、↑ 慎用、↑↑ 高危、— 不适用。
+            #
+            #  所以这里把原来的四色前景塌缩成「法定墨 / 消色」两档，
+            #  四色背景全部归到纸色（等于消失）——
+            #  这就是「颜色只在边缘，阅读区永远消色」那条纪律的落地方式。
+            #
+            #  好处是一行业务代码都不用改：65 个优化项、8 种场景结论
+            #  照旧用原来的色号，映射表在这里把它们翻译过去。
+            # ================================================================
+            Semantic = @{
+                '#556B54' = '#B8B8B8'   # 良好/低风险 -> 消色（正常值不标色）
+                '#7A6B45' = '#E75640'   # 需实测/中风险 -> 法定墨
+                '#8A5750' = '#E75640'   # 高危/高风险 -> 法定墨
+                '#89694F' = '#E75640'   # 会弹黑框 -> 法定墨
+                # 四种底色一律归到纸色：阅读区不许有色块
+                '#E7EBE4' = '#141414'; '#E2E7E0' = '#141414'; '#DCE8DA' = '#141414'
+                '#EDE7D9' = '#141414'; '#F0EADC' = '#141414'; '#EDE2D6' = '#141414'
+                '#EDE0DD' = '#141414'; '#EFE3E0' = '#141414'
             }
         }
 
@@ -244,9 +287,9 @@ function Get-ThemeFile { Join-Path $Script:BackupDir 'theme.json' }
 
 function Get-ThemeSetting {
     <# 返回 @{ Name; Image; Opacity; Anim } —— 读不到就给默认值 #>
-    # 默认皮肤是「仪表灰」——这个工具从头到尾在讲「你机器现在什么状态」，
-    # 深色面板配暖白读数才是它该有的样子。浅色那几套仍然随时可换。
-    $def = @{ Name = '仪表灰'; Image = ''; Opacity = 0.88; Anim = $true }
+    # 默认皮肤是「检验单」—— 这个工具从头到尾在做的事就是如实报告你机器的状态，
+    # 所以界面的母题是检验报告单，不是仪表盘。见 .impeccable\surfaces\pctuner-ps1.md。
+    $def = @{ Name = '检验单'; Image = ''; Opacity = 0.88; Anim = $true }
     try {
         $f = Get-ThemeFile
         if (-not (Test-Path -LiteralPath $f)) { return $def }
@@ -289,7 +332,7 @@ function Set-AppTheme {
     )
 
     $themes = Get-BuiltinThemes
-    if (-not $themes.Contains($Name)) { $Name = '暖灰（默认）' }
+    if (-not $themes.Contains($Name)) { $Name = '检验单' }
     $colors = $themes[$Name].Colors
 
     # ---- 1. 换掉 Window.Resources 里那 20 支画笔 ----
@@ -332,10 +375,16 @@ function Set-AppTheme {
     # 深色皮肤：语义色换成提亮版前景 + 压暗版背景（成对换，见文件开头说明）
     # 浅色皮肤不动，语义色保持原样。
     if (Test-ThemeIsDark $Name) {
-        foreach ($hex in $Script:SemanticDark.Keys) {
-            $remap[$hex.ToUpper()] = $Script:SemanticDark[$hex]
+        # 皮肤自带 Semantic 表就用它的（「检验单」靠这个把四色塌缩成法定墨），
+        # 没带就用通用的深色版语义色。
+        $sem = if ($themes[$Name].Contains('Semantic')) { $themes[$Name].Semantic } else { $Script:SemanticDark }
+        foreach ($hex in $sem.Keys) {
+            $remap[$hex.ToUpper()] = $sem[$hex]
         }
     }
+
+    # 供别处判断深浅用（Add-CardShadow 靠它决定加不加阴影）
+    $Script:ThemeIsDark = [bool](Test-ThemeIsDark $Name)
 
     # ---- 文字渲染方式跟着深浅走 ----
     #
