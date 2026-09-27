@@ -2264,6 +2264,14 @@ $xamlText = @'
                         <ColumnDefinition Width="80"/>
                       </Grid.ColumnDefinitions>
                       <TextBlock Text="检验项目" Grid.Column="0" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="38,0,0,0"/>
+                      <!-- v6.2：激进优化排在列表最下面，朋友往下拉了半天才找到。第一屏给个跳转入口（激进项本身不动：默认不勾、不进预设） -->
+                      <StackPanel x:Name="JumpAggressive" Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Right"
+                                  Margin="0,0,16,0" Cursor="Hand" Background="Transparent" ToolTip="跳到列表最下面的「激进优化」一组">
+                        <md:PackIcon Kind="LightningBolt" Width="14" Height="14" Foreground="{DynamicResource Accent}" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="JumpAggressiveText" Text="激进优化" FontSize="12" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                        <md:PackIcon Kind="ChevronDown" Width="14" Height="14" Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="2,0,0,0"/>
+                      </StackPanel>
                       <TextBlock Text="结果" Grid.Column="1" FontSize="11" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
                       <TextBlock Text="安全范围" Grid.Column="3" FontSize="11" Foreground="{DynamicResource TextDim}" TextAlignment="Right"/>
                     </Grid>
@@ -2632,7 +2640,7 @@ foreach ($n in @(
         'Tabs', 'NavPanel',
         'DashSummary', 'DashHero', 'DashCell1', 'DashCell2', 'DashCell3', 'DashCell4', 'DashCell5',
         'DashVerdict', 'DashPickHead', 'DashQuickPick', 'DashSignOff',
-        'TweakPanel', 'TweakDetail', 'BtnPickRecommended', 'BtnPickNone', 'BtnRescan', 'PresetBar',
+        'TweakPanel', 'TweakDetail', 'JumpAggressive', 'JumpAggressiveText', 'BtnPickRecommended', 'BtnPickNone', 'BtnRescan', 'PresetBar',
         'PresetHeader', 'PresetToggle', 'PresetBody', 'PresetPrimary', 'PresetMoreHint',
         'BtnApplySelected', 'BtnRevertSelected', 'BtnRevertAll',
         'CleanPanel', 'CleanDetail', 'BtnScanJunk', 'BtnPickCleanRec', 'BtnPickCleanNone', 'BtnClean', 'TotalJunkText',
@@ -3866,6 +3874,50 @@ function Update-TweakFilter {
     }
 }
 
+function Invoke-JumpToCategory {
+    <#
+      跳到某一组优化项（v6.2，给「激进优化」入口用）：
+      清掉搜索（不然那一组可能被筛掉了）、展开那一组、平滑滚过去、分组标题闪一下底色。
+      滚动走「屏幕内来回移动」那条 InOut 曲线，时长 Draw（design.md 5.3）。
+    #>
+    param([string]$Cat)
+    $h = $Script:TweakCatHeaders[$Cat]
+    if (-not $h) { return }
+    if ($Script:UI.TweakSearch.Text) { $Script:UI.TweakSearch.Text = '' }
+    if ($Script:TweakCatCollapsed[$Cat]) {
+        $Script:TweakCatCollapsed[$Cat] = $false
+        $h.Arrow.Kind = 'ChevronDown'
+    }
+    Update-TweakFilter
+    $Script:UI.TweakPanel.UpdateLayout()
+    $sv = $Script:UI.TweakPanel.Parent
+    if ($sv -isnot [System.Windows.Controls.ScrollViewer]) { return }
+    $to = [math]::Min($sv.ScrollableHeight, $h.Border.TranslatePoint((New-Object System.Windows.Point 0, 0), $Script:UI.TweakPanel).Y)
+    $from = $sv.VerticalOffset
+    if (-not (Test-MotionOn)) { $sv.ScrollToVerticalOffset($to) }
+    else {
+        try { if ($Script:JumpTimer) { $Script:JumpTimer.Stop() } } catch { }
+        $t = New-Object System.Windows.Threading.DispatcherTimer
+        $t.Interval = [TimeSpan]::FromMilliseconds(16)
+        $t.Tag = @{ SV = $sv; From = $from; To = $to; Sw = [Diagnostics.Stopwatch]::StartNew(); Sp = (New-Spline $Script:Ease.InOut); Ms = [double]$Script:Dur.Draw }
+        $t.Add_Tick({
+                $st = $this.Tag
+                $p = [math]::Min(1.0, $st.Sw.Elapsed.TotalMilliseconds / $st.Ms)
+                $st.SV.ScrollToVerticalOffset($st.From + ($st.To - $st.From) * $st.Sp.GetSplineProgress($p))
+                if ($p -ge 1) { $this.Stop() }
+            })
+        $Script:JumpTimer = $t
+        $t.Start()
+    }
+    # 标题闪一下：淡入选中底色，停一会儿再退回去 —— 告诉人「就是这一组」
+    Start-ColorFade $h.Border 'AccentTint' $Script:Dur.Base
+    $bt = New-Object System.Windows.Threading.DispatcherTimer
+    $bt.Interval = [TimeSpan]::FromMilliseconds($Script:Dur.Done)
+    $bt.Tag = $h.Border
+    $bt.Add_Tick({ $this.Stop(); Start-ColorFade $this.Tag 'Transparent' $Script:Dur.Base })
+    $bt.Start()
+}
+
 function Build-TweakUI {
     $panel = $Script:UI.TweakPanel
     $panel.Children.Clear()
@@ -3993,6 +4045,11 @@ function Build-TweakUI {
         }
     }
     Show-TweakDetail $null
+    $na = @($Script:Tweaks | Where-Object { $_.Category -eq '激进优化' }).Count
+    if ($Script:UI.JumpAggressive) {
+        $Script:UI.JumpAggressive.Visibility = if ($na -gt 0) { 'Visible' } else { 'Collapsed' }
+        $Script:UI.JumpAggressiveText.Text = "激进优化 $na 项（默认不勾）"
+    }
 }
 
 function Update-TweakStates {
@@ -6193,6 +6250,7 @@ $Script:UI.BtnPickNone.Add_Click({
     })
 $Script:UI.BtnRescan.Add_Click({ Update-TweakStates })
 $Script:UI.TweakSearch.Add_TextChanged({ Update-TweakFilter })
+$Script:UI.JumpAggressive.Add_MouseLeftButtonUp({ Invoke-JumpToCategory '激进优化' })
 $Script:UI.CleanSearch.Add_TextChanged({ Update-CleanFilter })
 $Script:UI.BtnApplySelected.Add_Click({ Invoke-WithDone $this { Invoke-ApplyTweaks (Get-CheckedTweaks) } })
 $Script:UI.BtnRevertSelected.Add_Click({ Invoke-RevertTweaks (Get-CheckedTweaks) })
@@ -6803,6 +6861,8 @@ if ($Shot) {
                     $hd = "$($tabs.Items[$i].Header)"
                     if ($hd -eq '弹窗排查' -and @($Script:Findings).Count -eq 0) { Invoke-Inspect }
                 }
+                # 开发用：出图前在这一页上跑一段脚本（比如点某个按钮），验证交互后的样子
+                if ($env:PCTUNER_SHOT_EVAL) { Sync-UI; try { Invoke-Expression $env:PCTUNER_SHOT_EVAL } catch { Write-Host "SHOT_EVAL 出错：$($_.Exception.Message)" } }
                 # 让这一页把自己排完、数据填完再拍。
                 # Sync-UI 把队列里排到 Background 的活全跑一遍，页面淡入也跑完。
                 Sync-UI
