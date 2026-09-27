@@ -17,7 +17,7 @@
         2. 它运行在你的登录会话里（不是系统后台会话）
         3. 它没有加隐藏窗口参数（-WindowStyle Hidden 之类）
     三个条件缺一个就不会弹。工具会逐条判断并直接标出
-    「⚡ 会弹黑框」，让你一眼看到该抓谁。
+    「会弹黑框」，让你一眼看到该抓谁。
 
     顺带说明一个反直觉的点：命令行里写着 Hidden 的那些
     **恰恰是不会弹框的**（人家已经规规矩矩把窗口藏起来了）。
@@ -312,7 +312,7 @@ function Get-TaskFindings {
 
         # ---------- 特征五：会弹黑框 ----------
         if ($flash) {
-            $reasons = @('⚡ 这个任务运行时【会弹出黑框】：它调用了控制台程序、跑在你的登录会话里、而且没有隐藏窗口 —— 三个条件都满足。') + $reasons
+            $reasons = @('这个任务运行时【会弹出黑框】：它调用了控制台程序、跑在你的登录会话里、而且没有隐藏窗口 —— 三个条件都满足。') + $reasons
             if (-not $level) { $level = '可疑' }
         }
 
@@ -475,7 +475,7 @@ function Get-AutorunFindings {
                 $level = '无用'
             }
             if ($flash) {
-                $reasons = @('⚡ 这一项开机时【会弹出黑框】：它启动的是控制台程序，而且没有加隐藏窗口参数。') + $reasons
+                $reasons = @('这一项开机时【会弹出黑框】：它启动的是控制台程序，而且没有加隐藏窗口参数。') + $reasons
                 if (-not $level) { $level = '可疑' }
             }
             if (-not $level) { continue }
@@ -532,7 +532,7 @@ function Get-AutorunFindings {
                 $level = '无用'
             }
             if ($flash) {
-                $reasons = @('⚡ 这一项开机时【会弹出黑框】：放在启动文件夹里的批处理/脚本，或者控制台程序，启动时一定会闪一下窗口。') + $reasons
+                $reasons = @('这一项开机时【会弹出黑框】：放在启动文件夹里的批处理/脚本，或者控制台程序，启动时一定会闪一下窗口。') + $reasons
                 if (-not $level) { $level = '可疑' }
             }
             if (-not $level) { continue }

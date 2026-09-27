@@ -40,7 +40,10 @@ param(
     [int]$ShotH = 0,
 
     # 出图前把页面里的滚动区往下滚这么多像素，用来拍长页面的下半截。
-    [int]$ShotScroll = 0
+    [int]$ShotScroll = 0,
+
+    # 出图前先把需要扫描才有内容的页扫一遍（弹窗排查）。
+    [switch]$ShotScan
 )
 
 $ErrorActionPreference = 'Continue'
@@ -148,6 +151,7 @@ if (-not $SelfTest -and -not $AutoClean -and -not $principal.IsInRole([Security.
         if ($ShotTab -ge 0) { $argv += @('-ShotTab', "$ShotTab") }
         if ($ShotH -gt 0) { $argv += @('-ShotH', "$ShotH") }
         if ($ShotScroll -gt 0) { $argv += @('-ShotScroll', "$ShotScroll") }
+        if ($ShotScan) { $argv += '-ShotScan' }
         Start-Process -FilePath $exe -Verb RunAs -ArgumentList $argv
     } catch {
         [System.Windows.Forms.MessageBox]::Show(
@@ -2103,12 +2107,12 @@ $xamlText = @'
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
             <StackPanel Grid.Row="0" Margin="0,0,0,10">
-              <TextBlock TextWrapping="Wrap" FontSize="12.5" Foreground="{DynamicResource TextMid}"
+              <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextMid}"
                          Text="黑框一闪而过、一次弹好几个 —— 那是有程序在后台调用命令行但没把窗口藏好。这里会把所有「会在后台执行命令」的地方扫一遍，按可疑程度排序。"/>
               <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                 <Button x:Name="BtnInspect" Content="开始扫描" Style="{DynamicResource ButtonPrimary}"/>
                 <Button x:Name="BtnInspectFilter" Content="只看会弹黑框的"/>
-                <TextBlock x:Name="InspectSummary" Text="还没扫描" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12"/>
+                <TextBlock x:Name="InspectSummary" Text="还没扫描" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="13"/>
               </StackPanel>
             </StackPanel>
             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -2121,35 +2125,35 @@ $xamlText = @'
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
               </Grid.RowDefinitions>
+              <!-- ★ 这里以前是两张带底色的圆角盒，标题写「① 实时监控」「② 持续记录」 ★
+                     圆圈数字和 ▶ ■ 是拿 Unicode 符号当图标系统 —— 不同字体里长相不一，
+                     而且它们并没有比「第一步」三个字多说任何东西。
+                     改成分区 + 细线，和全app一套语汇。 -->
               <StackPanel Grid.Row="0">
-                <TextBlock Text="抓现行" FontSize="15" FontWeight="SemiBold"/>
-                <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextDim}" Margin="0,6,0,0"
-                           Text="左边扫的是「开机会自动跑什么」。但弹窗也可能来自某个已经在运行的程序定期开的子进程——那种情况扫任何自启位置都找不到。这里直接盯「新建进程」，不管它藏在哪都跑不掉。"/>
-                <Border Background="{DynamicResource PanelBg}" CornerRadius="6" Padding="11,9" Margin="0,10,0,0">
-                  <StackPanel>
-                    <TextBlock Text="① 实时监控（最快，立等可取）" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource Accent}"/>
-                    <TextBlock TextWrapping="Wrap" FontSize="11.5" Foreground="{DynamicResource TextDim}" Margin="0,4,0,0"
-                               Text="点「开始」后正常用电脑，等黑框出现。出现的瞬间就会记下来是谁开的、它的父进程是谁。"/>
-                    <WrapPanel Margin="0,8,0,0">
-                      <Button x:Name="BtnWatchStart" Content="▶ 开始监控" Style="{DynamicResource ButtonPrimary}"/>
-                      <Button x:Name="BtnWatchStop" Content="■ 停止" IsEnabled="False"/>
-                    </WrapPanel>
-                  </StackPanel>
-                </Border>
-                <Border Background="{DynamicResource PanelBg}" CornerRadius="6" Padding="11,9" Margin="0,8,0,0">
-                  <StackPanel>
-                    <TextBlock Text="② 持续记录（关掉工具也在记）" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource Accent}"/>
-                    <TextBlock TextWrapping="Wrap" FontSize="11.5" Foreground="{DynamicResource TextDim}" Margin="0,4,0,0"
-                               Text="打开系统自带的进程创建审核，之后随时回来查，带完整命令行。适合「弹窗不定时、蹲不到」的情况。"/>
-                    <WrapPanel Margin="0,8,0,0">
-                      <Button x:Name="BtnProcAudit" Content="开启持续记录"/>
-                      <Button x:Name="BtnProcLog" Content="查看进程记录"/>
-                      <Button x:Name="BtnRecentRuns" Content="查看任务记录"/>
-                      <Button x:Name="BtnEnableTaskLog" Content="开启任务记录"/>
-                    </WrapPanel>
-                  </StackPanel>
-                </Border>
-                <TextBlock x:Name="WatchStatus" Text="" FontSize="12" Foreground="#7A6B45" Margin="0,9,0,0" TextWrapping="Wrap"/>
+                <TextBlock Text="抓现行" FontSize="17" FontWeight="SemiBold"/>
+                <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextDim}" Margin="0,6,0,0"
+                           Text="左边扫的是「开机会自动跑什么」。但弹窗也可能来自某个已经在运行的程序定期开的子进程 —— 那种情况扫任何自启位置都找不到。这里直接盯「新建进程」，不管它藏在哪都跑不掉。"/>
+
+                <TextBlock Text="实时监控" FontSize="14" FontWeight="SemiBold" Margin="0,18,0,0"/>
+                <Rectangle Height="1" Fill="{DynamicResource BorderSoft}" Margin="0,6,0,0"/>
+                <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextDim}" Margin="0,8,0,0"
+                           Text="最快，立等可取。点「开始监控」后正常用电脑，等黑框出现 —— 出现的瞬间就会记下是谁开的、它的父进程是谁。"/>
+                <WrapPanel Margin="0,9,0,0">
+                  <Button x:Name="BtnWatchStart" Content="开始监控" Style="{DynamicResource ButtonPrimary}"/>
+                  <Button x:Name="BtnWatchStop" Content="停止" IsEnabled="False"/>
+                </WrapPanel>
+
+                <TextBlock Text="持续记录" FontSize="14" FontWeight="SemiBold" Margin="0,18,0,0"/>
+                <Rectangle Height="1" Fill="{DynamicResource BorderSoft}" Margin="0,6,0,0"/>
+                <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextDim}" Margin="0,8,0,0"
+                           Text="打开系统自带的进程创建审核，关掉本工具也在记，之后随时回来查，带完整命令行。适合「弹窗不定时、蹲不到」的情况。"/>
+                <WrapPanel Margin="0,9,0,0">
+                  <Button x:Name="BtnProcAudit" Content="开启持续记录"/>
+                  <Button x:Name="BtnProcLog" Content="查看进程记录"/>
+                  <Button x:Name="BtnEnableTaskLog" Content="开启任务记录"/>
+                  <Button x:Name="BtnRecentRuns" Content="查看任务记录"/>
+                </WrapPanel>
+                <TextBlock x:Name="WatchStatus" Text="" FontSize="13" Foreground="{DynamicResource TextMid}" Margin="0,12,0,0" TextWrapping="Wrap"/>
               </StackPanel>
               <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,6,0,0">
                 <StackPanel x:Name="RecentRunPanel"/>
@@ -3891,6 +3895,18 @@ function Redraw-AllPages {
     try { if ($Script:UI.AppxPanel.Children.Count -gt 0) { Build-AppxUI } } catch { }
     try { if ($Script:UI.MaintainPanel.Children.Count -gt 0) { Build-MaintainUI } } catch { }
     try { if ($Script:UI.AdvicePanel.Children.Count -gt 0) { Build-HealthUI } } catch { }
+    # 弹窗排查页：扫过就重画结果，没扫过就重画空状态（空状态里也有颜色）
+    try {
+        if ($Script:Findings -and $Script:Findings.Count -gt 0) { Show-Findings }
+        else { $Script:UI.InspectPanel.Children.Clear(); Set-InspectEmpty }
+    } catch { }
+    # 大文件查找：只重画空状态。已经扫出来的结果不动 ——
+    # 重扫要一两分钟，为了换个皮肤把用户等来的结果清掉，那是本末倒置。
+    try {
+        if ($Script:UI.BigFilePanel.Children.Count -le 1) {
+            $Script:UI.BigFilePanel.Children.Clear(); Set-BigFileEmpty
+        }
+    } catch { }
 }
 
 # ---------------------------------------------------------------------
@@ -4683,9 +4699,29 @@ function Get-LevelColor {
     }
 }
 
+function Set-InspectEmpty {
+    <# 扫描前的左栏。空着一大片白什么也不说，是在浪费用户的一次注视。 #>
+    $p = $Script:UI.InspectPanel
+    if ($null -eq $p -or $p.Children.Count -gt 0) { return }
+    $sp = New-Object System.Windows.Controls.StackPanel
+    $sp.Margin = New-Thick 0 30 0 0
+    $t1 = New-TextBlock -Text '还没扫描' -Size 15 -Color '#4A4842'
+    $sp.Children.Add($t1) | Out-Null
+    foreach ($line in @(
+            '点上面的「开始扫描」。全程只读不改，扫完你再决定关谁。',
+            '会扫这些地方：计划任务、注册表 Run、启动文件夹、服务、WMI 事件订阅 —— 也就是所有「能让一个程序自己跑起来」的位置。',
+            '扫完按可疑程度排序：会弹黑框的排最前，然后是高危、可疑，最后是「无用」和「已知打扰」（不危险，只是没必要留着）。',
+            '扫不出来也别慌 —— 定期弹的黑框多半来自某个已经在跑的程序，那种要用右边的「抓现行」。')) {
+        $t = New-TextBlock -Wrap $true -Size 13 -Color '#66635B' -Text $line
+        $t.Margin = New-Thick 0 12 0 0
+        $sp.Children.Add($t) | Out-Null
+    }
+    $p.Children.Add($sp) | Out-Null
+}
+
 function Invoke-Inspect {
     $Script:UI.InspectPanel.Children.Clear()
-    $Script:UI.InspectPanel.Children.Add((New-TextBlock -Text '正在扫描，请稍候…' -Size 12.5 -Color '#7A6B45')) | Out-Null
+    $Script:UI.InspectPanel.Children.Add((New-TextBlock -Text '正在扫描，请稍候…' -Size 13.5 -Color '#66635B')) | Out-Null
     Sync-UI
     Set-Busy $true
     $Script:Findings = @(Get-SuspiciousFindings -OnProgress { param($m) Set-Status $m; Sync-UI })
@@ -4694,6 +4730,15 @@ function Invoke-Inspect {
 }
 
 function Show-Findings {
+    <#
+      结果列表。★ 一条 = 一行，不是一张卡 ★
+        上一版每条是「圆角卡 + 3px 彩色左边条 + 三个彩色药丸标签」。
+        四个危险档各一种颜色，满页都是彩色 —— 真正的高危反而不显眼了。
+        改成和全app一样的判读语法：左边一个标记，只有该上墨的才上墨。
+          ↑↑  会弹黑框，或高危
+          ↑   可疑
+          （空）无用 / 已知打扰 —— 不危险，只是没必要留着
+    #>
     $p = $Script:UI.InspectPanel
     $p.Children.Clear()
 
@@ -4705,74 +4750,94 @@ function Show-Findings {
     $n可疑 = @($Script:Findings | Where-Object Level -eq '可疑').Count
     $n无用 = @($Script:Findings | Where-Object Level -eq '无用').Count
     $n打扰 = @($Script:Findings | Where-Object Level -eq '已知打扰').Count
-    $Script:UI.InspectSummary.Text = ("⚡会弹黑框 {0} · 高危 {1} · 可疑 {2} · 无用 {3} · 已知打扰 {4}" -f $n弹框, $n高危, $n可疑, $n无用, $n打扰)
+    $Script:UI.InspectSummary.Text = ("会弹黑框 {0} · 高危 {1} · 可疑 {2} · 无用 {3} · 已知打扰 {4}" -f $n弹框, $n高危, $n可疑, $n无用, $n打扰)
 
     if ($Script:Findings.Count -eq 0) {
-        $p.Children.Add((New-TextBlock -Wrap $true -Size 12.5 -Color '#556B54' -Text "扫描完成，没有发现可疑项。`r`n`r`n如果还是会弹黑框，用右边的「抓现行」：先点「开启运行记录」，等下次黑框出现之后马上点「刷新记录」，就能看到那一刻到底是哪个任务在跑。")) | Out-Null
+        $p.Children.Add((New-TextBlock -Wrap $true -Size 13.5 -Color '#4A4842' -Text "扫描完成，没有发现可疑项。`r`n`r`n如果还是会弹黑框，用右边的「抓现行」：先点「开启持续记录」，等下次黑框出现之后马上回来点「查看进程记录」，就能看到那一刻到底是谁在跑。")) | Out-Null
         Set-Status '扫描完成，没有发现可疑项'
         return
     }
     if ($list.Count -eq 0) {
-        $p.Children.Add((New-TextBlock -Wrap $true -Size 12.5 -Color '#556B54' -Text '按当前筛选条件没有内容 —— 也就是说没有「高危」和「无用」项，这是好事。点「显示全部」可以看其余条目。')) | Out-Null
+        $p.Children.Add((New-TextBlock -Wrap $true -Size 13.5 -Color '#4A4842' -Text '按当前筛选条件没有内容 —— 也就是说没有「高危」和「会弹黑框」的项，这是好事。点「显示全部」可以看其余条目。')) | Out-Null
         return
     }
 
+    # 列名 + 表头线
+    Add-ColHeader -Panel $p -First '可疑项' -Cols @(@{ T = '判定'; W = 96 }) -Indent 34
+
     foreach ($f in $list) {
-        $col = Get-LevelColor $f.Level
-        $card = New-Object System.Windows.Controls.Border
-        $card.Background = Get-Brush '#F6F5F2'
-        # 会弹黑框的那条用暖橙光原色描边（纯装饰，不承载文字，可以用最亮的一档）
-        $card.BorderBrush = Get-Brush $(if ($f.Flash) { '#89694F' } else { $col })
-        $card.BorderThickness = New-Thick 3 0 0 0
-        $card.CornerRadius = New-Object System.Windows.CornerRadius 6
-        $card.Padding = New-Thick 14 11 14 12
-        $card.Margin = New-Thick 0 0 0 8
+        # 只有两档会上墨：会弹黑框 / 高危 -> ↑↑，可疑 -> ↑
+        $mark = ''
+        if ($f.Flash -or $f.Level -eq '高危') { $mark = '↑↑' }
+        elseif ($f.Level -eq '可疑') { $mark = '↑' }
+        $abn = [bool]$mark
 
-        $sp = New-Object System.Windows.Controls.StackPanel
+        $row = New-Object System.Windows.Controls.Border
+        $row.Background = [System.Windows.Media.Brushes]::Transparent
+        $row.BorderBrush = Get-Brush $Script:CARD_BORDER
+        $row.BorderThickness = New-Thick 0 0 0 1
+        # 右边留 14px：竖滚动条要占位，不留的话「判定」那一列会被裁掉
+        $row.Padding = New-Thick 0 12 14 13
 
-        $hdr = New-Object System.Windows.Controls.WrapPanel
-        if ($f.Flash) { $hdr.Children.Add((New-Badge -Text '⚡ 会弹黑框' -Fg '#89694F' -Bg '#EDE7D9')) | Out-Null }
-        $hdr.Children.Add((New-Badge -Text $f.Level -Fg $col -Bg (Get-TintBg $col))) | Out-Null
-        $hdr.Children.Add((New-Badge -Text $f.Kind -Fg '#66635B' -Bg '#E8E7E2')) | Out-Null
-        $sp.Children.Add($hdr) | Out-Null
-
-        $nm = New-TextBlock -Text $f.Name -Size 13.5 -Bold $true -Wrap $true
-        $nm.Margin = New-Thick 0 5 0 0
-        $sp.Children.Add($nm) | Out-Null
-
-        if ($f.Extra) {
-            $ex = New-TextBlock -Text $f.Extra -Size 11.5 -Color '#66635B' -Wrap $true
-            $ex.Margin = New-Thick 0 3 0 0
-            $sp.Children.Add($ex) | Out-Null
+        $g = New-Object System.Windows.Controls.Grid
+        foreach ($w in @(34.0, 0.0, 96.0)) {
+            $cd = New-Object System.Windows.Controls.ColumnDefinition
+            $cd.Width = if ($w -eq 0) {
+                New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+            } else {
+                New-Object System.Windows.GridLength $w
+            }
+            $g.ColumnDefinitions.Add($cd)
         }
 
+        # --- 标记 ---
+        $mk = New-TextBlock -Text $mark -Size 15 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+        if ($abn) { $mk.FontWeight = 'SemiBold' }
+        $mk.VerticalAlignment = 'Top'
+        $mk.Margin = New-Thick 0 1 0 0
+        $g.Children.Add($mk) | Out-Null
+
+        $sp = New-Object System.Windows.Controls.StackPanel
+        [System.Windows.Controls.Grid]::SetColumn($sp, 1)
+
+        $nm = New-TextBlock -Text $f.Name -Size 15 -Color '#2B2A26' -Wrap $true
+        if ($abn) { $nm.FontWeight = 'SemiBold' }
+        $sp.Children.Add($nm) | Out-Null
+
+        # 来源 + 会不会弹黑框，一行小字说清，不用药丸
+        $kindBits = @($f.Kind)
+        if ($f.Extra) { $kindBits += $f.Extra }
+        $kd = New-TextBlock -Text ($kindBits -join '   ·   ') -Size 13 -Color '#66635B' -Wrap $true
+        $kd.Margin = New-Thick 0 3 0 0
+        $sp.Children.Add($kd) | Out-Null
+
         if ($f.Command) {
+            # 原始命令行。底色是「下沉面」—— 报告单上引用原始值就是这么做的，
+            # 不换字体：随包字体的意义就在于不依赖系统装了什么，
+            # 而且 craft-floor 拒绝「拿等宽当技术感的戏服」。
             $cb = New-Object System.Windows.Controls.Border
-            $cb.Background = Get-Brush '#E8E7E2'
-            $cb.CornerRadius = New-Object System.Windows.CornerRadius 4
-            $cb.Padding = New-Thick 9 6 9 6
-            $cb.Margin = New-Thick 0 7 0 0
-            $ct = New-TextBlock -Text $f.Command -Size 11 -Color '#565349' -Wrap $true
-            # ★ 不用等宽体 ★
-            #   一是 Consolas 是系统字体（随包字体的意义就在于不依赖系统装了什么）；
-            #   二是 craft-floor 拒绝「拿等宽当『技术感』的戏服」。
-            #   报告单上原始值和别的字段是同一个字族，靠对齐和字重区分，不靠换字体。
+            $cb.Background = Get-Brush '#E5E3DC'
+            $cb.Padding = New-Thick 10 7 10 7
+            $cb.Margin = New-Thick 0 8 0 0
+            $ct = New-TextBlock -Text $f.Command -Size 12.5 -Color '#565349' -Wrap $true
             [System.Windows.Documents.Typography]::SetNumeralAlignment($ct, 'Tabular')
             $cb.Child = $ct
             $sp.Children.Add($cb) | Out-Null
         }
 
         foreach ($r in $f.Reasons) {
-            $rt = New-TextBlock -Text ('· ' + $r) -Size 12 -Color '#565349' -Wrap $true
+            $rt = New-TextBlock -Text ('· ' + $r) -Size 13 -Color '#565349' -Wrap $true
             $rt.Margin = New-Thick 0 6 0 0
             $sp.Children.Add($rt) | Out-Null
         }
 
-        $ad = New-TextBlock -Text $f.Advice -Size 12 -Color $col -Wrap $true
+        # 建议。★ 只有真该警觉的那两档上墨 ★
+        # 建议只在最高档上墨。「可疑」也上墨的话一页下来红字太多，真高危就不跳了。
+        $ad = New-TextBlock -Text $f.Advice -Size 13 -Color $(if ($mark -eq '↑↑') { '#8A5750' } else { '#565349' }) -Wrap $true
         $ad.Margin = New-Thick 0 8 0 0
         $sp.Children.Add($ad) | Out-Null
 
-        # ---- 操作 ----
+        # ---- 处置 ----
         if ($f.Target.Type -eq 'WmiConsumer') {
             $b = New-ToolButton -Text '删除这个 WMI 订阅' -Tag $f -OnClick {
                 $ff = $this.Tag
@@ -4785,7 +4850,7 @@ function Show-Findings {
         } elseif ($f.Target.Type -ne 'None') {
             $cbx = New-Object System.Windows.Controls.CheckBox
             $cbx.Content = '保持启用（取消勾选 = 禁用它，随时可以再勾回来）'
-            $cbx.FontSize = 12
+            $cbx.FontSize = 13
             $cbx.Margin = New-Thick 0 10 0 0
             $cbx.IsChecked = [bool]$f.Enabled
             $cbx.Tag = $f
@@ -4800,13 +4865,26 @@ function Show-Findings {
                 })
             $sp.Children.Add($cbx) | Out-Null
         } else {
-            $t = New-TextBlock -Text '这一项工具不会自动改动 —— 涉及系统核心设置，误改会开不了机。请先杀毒，确认之后手动处理。' -Size 11.5 -Color '#66635B' -Wrap $true
+            $t = New-TextBlock -Text '这一项工具不会自动改动 —— 涉及系统核心设置，误改会开不了机。请先杀毒，确认之后手动处理。' -Size 13 -Color '#66635B' -Wrap $true
             $t.Margin = New-Thick 0 10 0 0
             $sp.Children.Add($t) | Out-Null
         }
 
-        $card.Child = $sp
-        $p.Children.Add($card) | Out-Null
+        $g.Children.Add($sp) | Out-Null
+
+        # --- 判定（右列，和列名对齐）---
+        # 会弹黑框的那条就把「会弹黑框」写在判定里 ——
+        # 标记是 ↑↑ 而判定写「可疑」，两处对不上，读者会先以为自己看错了。
+        $lvText = if ($f.Flash) { '会弹黑框' } else { $f.Level }
+        $lv = New-TextBlock -Text $lvText -Size 13.5 -Color $(if ($abn) { '#8A5750' } else { '#66635B' })
+        if ($abn) { $lv.FontWeight = 'SemiBold' }
+        $lv.TextAlignment = 'Right'
+        $lv.VerticalAlignment = 'Top'
+        [System.Windows.Controls.Grid]::SetColumn($lv, 2)
+        $g.Children.Add($lv) | Out-Null
+
+        $row.Child = $g
+        $p.Children.Add($row) | Out-Null
     }
     Set-Status ("扫描完成：" + $Script:UI.InspectSummary.Text)
 }
@@ -5433,6 +5511,7 @@ $Script:Window.Add_ContentRendered({
         Build-MaintainUI
         Build-BigFileDrives
         Build-RecentRuns
+        Set-InspectEmpty        # 弹窗排查页扫描前的空状态
         Build-ThemeUI
         # 概览页：先建壳子再开硬件监控。
         # Initialize-Dash 要枚举全部硬件，实测约 3 秒，所以放在
@@ -5541,6 +5620,11 @@ if ($Shot) {
             foreach ($i in $idx) {
                 if ($i -lt 0 -or $i -ge $tabs.Items.Count) { continue }
                 $tabs.SelectedIndex = $i
+                # 有些页得先扫一遍才有东西可拍 —— 空着的页面当 README 截图没意义
+                if ($ShotScan) {
+                    $hd = "$($tabs.Items[$i].Header)"
+                    if ($hd -eq '弹窗排查' -and @($Script:Findings).Count -eq 0) { Invoke-Inspect }
+                }
                 # 让这一页把自己排完、数据填完再拍。
                 # Sync-UI 把队列里排到 Background 的活全跑一遍，页面淡入也跑完。
                 Sync-UI
