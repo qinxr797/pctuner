@@ -32,14 +32,49 @@ $ErrorActionPreference = 'Continue'
 
 # ===== 版本号 =====
 # 改版本号只改这一处，标题栏 / 副标题 / 诊断报告都从这里取。
-$Script:AppVersion     = '3.0'
-$Script:AppVersionDate = '2026-09-24'
-$Script:AppVersionName = '全人群版'
+$Script:AppVersion     = '4.0'
+$Script:AppVersionDate = '2026-09-27'
+$Script:AppVersionName = '全新界面版'
 
 # ---------------------------------------------------------------------
 #  0. 加载 .NET 界面库
 # ---------------------------------------------------------------------
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
+
+# ---------------------------------------------------------------------
+#  0.5 加载 HandyControl（界面控件库，MIT 协议，随包分发）
+# ---------------------------------------------------------------------
+#  v4.0 起界面构建在 HandyControl 上。DLL 放在 Lib\ 目录里，
+#  不用安装、不进 GAC、不写注册表，就是个跟着跑的文件。
+#
+#  ★★ 这里有个大坑，踩过一次，务必别改回去 ★★
+#    HandyControl 官方文档教你在 App.xaml 里合并这两个资源字典：
+#        pack://application:,,,/HandyControl;component/Themes/SkinDefault.xaml
+#        pack://application:,,,/HandyControl;component/Themes/Theme.xaml
+#    在 PowerShell 里照着做，会「加载成功」但**样式一个都不生效** ——
+#    按钮还是 Windows 原生样子，CircleProgressBar 直接渲染成一片空白，
+#    而且不报任何错，极难排查。
+#
+#    正确入口是 HandyControl.Themes.Theme 这个类：它是 ResourceDictionary
+#    的子类，会自己把该填的东西填进去。实测 5/5 具名样式可用。
+#
+#  另外必须先 new 一个 Application 实例 —— pack:// 这个 URI 协议
+#  是 Application 初始化时注册的，没有它连 DLL 里的资源都找不到。
+$Script:HcTheme = $null
+try {
+    $hcDll = Join-Path (Split-Path -Parent $PSCommandPath) 'Lib\HandyControl.dll'
+    if (Test-Path -LiteralPath $hcDll) {
+        Add-Type -Path $hcDll -ErrorAction Stop
+        if (-not [System.Windows.Application]::Current) {
+            $null = New-Object System.Windows.Application
+        }
+        $Script:HcTheme = New-Object HandyControl.Themes.Theme
+        [System.Windows.Application]::Current.Resources.MergedDictionaries.Add($Script:HcTheme)
+    }
+} catch {
+    # 加载失败不直接崩，下面的文件检查会给出人话提示
+    $Script:HcLoadError = "$($_.Exception.Message)"
+}
 
 # ---------------------------------------------------------------------
 #  1. 检查管理员权限，没有就重新以管理员身份启动自己
@@ -77,6 +112,11 @@ $Script:ModuleNames = @('Engine', 'Tweaks', 'Games', 'Cleaner', 'Maintain', 'Ins
 $missing = @()
 foreach ($m in $Script:ModuleNames) {
     if (-not (Test-Path -LiteralPath (Join-Path $Script:AppRoot "Modules\$m.ps1"))) { $missing += "$m.ps1" }
+}
+# 界面库也要查 —— 少了它整个界面会退化成 Windows 原生控件，
+# 而且不会报错，只是「突然变丑」，用户根本不知道发生了什么
+if (-not (Test-Path -LiteralPath (Join-Path $Script:AppRoot 'Lib\HandyControl.dll'))) {
+    $missing += 'Lib\HandyControl.dll'
 }
 if ($missing.Count -gt 0) {
     if ($SelfTest) { Write-Host ("自检失败：缺少模块 " + ($missing -join ', ')); exit 2 }
@@ -447,6 +487,82 @@ function Get-ThemedHex {
     return $Hex
 }
 
+# =====================================================================
+#  弹窗与提示
+# ---------------------------------------------------------------------
+#  以前直接用 [System.Windows.MessageBox]，那是 Win32 原生灰底方框 ——
+#  界面做得再精致，一弹窗就露馅，是质感上最扎眼的一处。
+#  换成 HandyControl 的：跟着皮肤走，深色模式下弹窗也是深色的。
+#
+#  ★ 保留原生作为兜底 ★
+#    模块没载入、DLL 有问题的时候也得能弹窗报错 ——
+#    那种时刻恰恰最需要告诉用户到底出了什么事。
+# =====================================================================
+function Show-Msg {
+    <# Kind: Info / Success / Warning / Error / Ask。Ask 返回 'Yes'/'No'，其余返回 'OK' #>
+    param([string]$Text, [string]$Title = '电脑调优助手', [string]$Kind = 'Info')
+    try {
+        if ($Script:HcTheme) {
+            if ($Kind -eq 'Ask') {
+                $r = [HandyControl.Controls.MessageBox]::Ask($Text, $Title)
+                return $(if ("$r" -eq 'OK' -or "$r" -eq 'Yes') { 'Yes' } else { 'No' })
+            }
+            switch ($Kind) {
+                'Success' { [HandyControl.Controls.MessageBox]::Success($Text, $Title) | Out-Null }
+                'Warning' { [HandyControl.Controls.MessageBox]::Warning($Text, $Title) | Out-Null }
+                'Error' { [HandyControl.Controls.MessageBox]::Error($Text, $Title) | Out-Null }
+                default { [HandyControl.Controls.MessageBox]::Info($Text, $Title) | Out-Null }
+            }
+            return 'OK'
+        }
+    } catch { }
+    if ($Kind -eq 'Ask') {
+        return "$([System.Windows.MessageBox]::Show($Text, $Title, 'YesNo', 'Question'))"
+    }
+    $icon = switch ($Kind) { 'Warning' { 'Warning' } 'Error' { 'Error' } default { 'Information' } }
+    [System.Windows.MessageBox]::Show($Text, $Title, 'OK', $icon) | Out-Null
+    return 'OK'
+}
+
+function Show-Toast {
+    <#
+      右上角飘一条气泡，几秒后自己消失。
+      用在「做完了」这种不需要点确定的场合 ——
+      以前每做完一件事都弹个模态框逼人点一下，很烦。
+    #>
+    param([string]$Text, [string]$Kind = 'Success')
+    try {
+        if ($Script:HcTheme) {
+            switch ($Kind) {
+                'Info' { [HandyControl.Controls.Growl]::InfoGlobal($Text) }
+                'Warning' { [HandyControl.Controls.Growl]::WarningGlobal($Text) }
+                'Error' { [HandyControl.Controls.Growl]::ErrorGlobal($Text) }
+                default { [HandyControl.Controls.Growl]::SuccessGlobal($Text) }
+            }
+            return
+        }
+    } catch { }
+    try { Set-Status $Text } catch { }   # 兜底：至少写到状态栏
+}
+
+function Add-CardShadow {
+    <#
+      给卡片加一层很淡的投影，让它从背景上「浮」起来一点 ——
+      质感差距最明显的一处，而且改动极小。
+
+      ★ 为什么挂在效果开关下面 ★
+        投影是 GPU 每帧都要算的（DropShadowEffect 走像素着色器）。
+        一页几十张卡片同时投影，在集显老机器上是实打实的负担，
+        而这工具恰恰有一大票老机器用户。关掉效果时就不加。
+    #>
+    param($Element, [string]$Level = 'EffectShadow1')
+    if (-not $Script:AnimEnabled) { return }
+    try {
+        $fx = $Script:Window.TryFindResource($Level)
+        if ($fx) { $Element.Effect = $fx }
+    } catch { }
+}
+
 function New-ListCard {
     <# 统一生成左侧列表用的卡片，自带悬停反馈（带颜色过渡动画） #>
     $c = New-Object System.Windows.Controls.Border
@@ -457,6 +573,7 @@ function New-ListCard {
     $c.Padding = New-Thick 13 11 13 11
     $c.Margin = New-Thick 0 0 0 7
     $c.Cursor = 'Hand'
+    Add-CardShadow $c
     $c.Add_MouseEnter({ if ($Script:SelectedCard -ne $this) { Start-ColorFade $this $Script:CARD_HOVER } })
     $c.Add_MouseLeave({ if ($Script:SelectedCard -ne $this) { Start-ColorFade $this $Script:CARD_BG } })
     return $c
@@ -623,248 +740,22 @@ $xamlText = @'
       <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
     </Style>
 
-    <!-- 滚动条：Windows 默认那套浅色滚动条在深色界面上非常跳，这里整个重做 -->
-    <Style x:Key="ScrollPageButton" TargetType="RepeatButton">
-      <Setter Property="Focusable" Value="False"/>
-      <Setter Property="IsTabStop" Value="False"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="RepeatButton">
-            <Border Background="Transparent"/>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-    <Style x:Key="ScrollThumb" TargetType="Thumb">
-      <Setter Property="MinHeight" Value="28"/>
-      <Setter Property="MinWidth" Value="28"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Thumb">
-            <Border x:Name="Th" Background="{DynamicResource ScrollThumbBg}" CornerRadius="4" Margin="3,2,3,2"/>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Th" Property="Background" Value="{DynamicResource ScrollThumbHover}"/>
-              </Trigger>
-              <Trigger Property="IsDragging" Value="True">
-                <Setter TargetName="Th" Property="Background" Value="{DynamicResource ScrollThumbDrag}"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-    <Style TargetType="ScrollBar">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Width" Value="12"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ScrollBar">
-            <Grid Background="Transparent">
-              <Track x:Name="PART_Track" IsDirectionReversed="True">
-                <Track.DecreaseRepeatButton>
-                  <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollPageButton}"/>
-                </Track.DecreaseRepeatButton>
-                <Track.Thumb>
-                  <Thumb Style="{StaticResource ScrollThumb}"/>
-                </Track.Thumb>
-                <Track.IncreaseRepeatButton>
-                  <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollPageButton}"/>
-                </Track.IncreaseRepeatButton>
-              </Track>
-            </Grid>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-      <Style.Triggers>
-        <Trigger Property="Orientation" Value="Horizontal">
-          <Setter Property="Width" Value="Auto"/>
-          <Setter Property="Height" Value="12"/>
-          <Setter Property="Template">
-            <Setter.Value>
-              <ControlTemplate TargetType="ScrollBar">
-                <Grid Background="Transparent">
-                  <Track x:Name="PART_Track" IsDirectionReversed="False">
-                    <Track.DecreaseRepeatButton>
-                      <RepeatButton Command="ScrollBar.PageLeftCommand" Style="{StaticResource ScrollPageButton}"/>
-                    </Track.DecreaseRepeatButton>
-                    <Track.Thumb>
-                      <Thumb Style="{StaticResource ScrollThumb}"/>
-                    </Track.Thumb>
-                    <Track.IncreaseRepeatButton>
-                      <RepeatButton Command="ScrollBar.PageRightCommand" Style="{StaticResource ScrollPageButton}"/>
-                    </Track.IncreaseRepeatButton>
-                  </Track>
-                </Grid>
-              </ControlTemplate>
-            </Setter.Value>
-          </Setter>
-        </Trigger>
-      </Style.Triggers>
-    </Style>
+    <!-- ================================================================
+         v4.0 起，控件样式全部交给 HandyControl。
 
-    <!-- 复选框：默认样式是白底小方块，深色界面上很突兀。改成描边 + 选中填蓝 + 打勾 -->
-    <Style TargetType="CheckBox">
-      <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
-      <Setter Property="VerticalAlignment" Value="Center"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="FontSize" Value="13"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="CheckBox">
-            <StackPanel Orientation="Horizontal" Background="Transparent">
-              <Border x:Name="Box" Width="17" Height="17" CornerRadius="4" VerticalAlignment="Center"
-                      Background="{DynamicResource CardBg}" BorderBrush="{DynamicResource BorderStrong}" BorderThickness="1.4">
-                <Path x:Name="Tick" Data="M 3,7.5 L 6.4,11 L 12.2,3.8" Stroke="{DynamicResource OnAccent}" StrokeThickness="1.9"
-                      StrokeEndLineCap="Round" StrokeStartLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
-              </Border>
-              <ContentPresenter x:Name="CP" Margin="8,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True"/>
-            </StackPanel>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="Box" Property="Background" Value="{DynamicResource AccentLight}"/>
-                <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource AccentLight}"/>
-                <Setter TargetName="Tick" Property="Visibility" Value="Visible"/>
-              </Trigger>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource AccentLight}"/>
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.4"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
+         这里以前有 11 个手写样式（滚动条 / 复选框 / 输入框 / 进度条 /
+         按钮 / 页签 / TabControl），共两百多行，现在一条不留。
 
-    <!-- 搜索框 -->
-    <Style TargetType="TextBox">
-      <Setter Property="Background" Value="{DynamicResource PanelBg}"/>
-      <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource BorderMed}"/>
-      <Setter Property="Padding" Value="10,8"/>
-      <Setter Property="CaretBrush" Value="{DynamicResource Accent}"/>
-      <Setter Property="VerticalContentAlignment" Value="Center"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="TextBox">
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="7">
-              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentLight}"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
+         能这么干，是因为 HandyControl 的控件模板内部引用的是
+         RegionBrush / PrimaryTextBrush / BorderBrush 这些键，
+         而上面那批画笔在换肤时会把这些键一起覆盖掉
+         （见 Modules\Theme.ps1 的 $Script:HcBrushMap）。
+         所以「库出模板、我们出颜色」，两边都不用将就。
 
-    <!-- 进度条：长时间扫描时给个动起来的反馈，免得以为卡死了 -->
-    <Style TargetType="ProgressBar">
-      <Setter Property="Background" Value="{DynamicResource SurfaceSunken}"/>
-      <Setter Property="Foreground" Value="{DynamicResource AccentLight}"/>
-      <Setter Property="BorderThickness" Value="0"/>
-    </Style>
-    <Style TargetType="Button">
-      <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
-      <Setter Property="Background" Value="{DynamicResource PanelBg}"/>
-      <Setter Property="Padding" Value="14,8"/>
-      <Setter Property="Margin" Value="0,0,8,0"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="FontSize" Value="13"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{DynamicResource BorderMed}"
-                    BorderThickness="1" CornerRadius="7" Padding="{TemplateBinding Padding}"
-                    SnapsToDevicePixels="True">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentTint}"/>
-                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentLight}"/>
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceSunken}"/>
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.4"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-    <Style x:Key="AccentButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="Background" Value="{DynamicResource Accent}"/>
-      <!-- 压在松岭绿上的字要纯白（对比度 5.9）；卡片底色那个米白在这里会发灰 -->
-      <Setter Property="Foreground" Value="{DynamicResource OnAccent}"/>
-      <Setter Property="FontWeight" Value="SemiBold"/>
-    </Style>
-    <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="Background" Value="#EDE0DD"/>
-    </Style>
-    <Style TargetType="TabItem">
-      <Setter Property="Foreground" Value="{DynamicResource TextDim}"/>
-      <Setter Property="FontSize" Value="13.5"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="TabItem">
-            <Grid>
-              <Border x:Name="Bd" Background="Transparent" Padding="19,11" Margin="0,0,3,0" CornerRadius="9,9,0,0">
-                <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
-              <!-- 选中时底部那条绿色指示条 -->
-              <Border x:Name="Ind" Height="2.5" VerticalAlignment="Bottom" Margin="19,0,22,0"
-                      Background="{DynamicResource AccentLight}" CornerRadius="2" Visibility="Collapsed"/>
-            </Grid>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceAlt}"/>
-                <Setter Property="Foreground" Value="{DynamicResource TextMid}"/>
-              </Trigger>
-              <Trigger Property="IsSelected" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceAlt}"/>
-                <Setter TargetName="Ind" Property="Visibility" Value="Visible"/>
-                <!-- 换浅色主题时这里差点翻车：原来是白字（深色主题下的写法），
-                     改成浅底之后就成了「白字压白底」，选中的标签整个看不见。 -->
-                <Setter Property="Foreground" Value="{DynamicResource AccentDark}"/>
-                <Setter Property="FontWeight" Value="SemiBold"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
+         要强调色按钮用 {DynamicResource ButtonPrimary}，
+         危险按钮用 {DynamicResource ButtonDanger}，都是库里现成的。
+         ================================================================ -->
 
-    <!-- TabControl 自己也要重做，否则内容区会留着默认的灰边框和方角 -->
-    <Style TargetType="TabControl">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="BorderThickness" Value="0"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="TabControl">
-            <Grid>
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-              </Grid.RowDefinitions>
-              <TabPanel Grid.Row="0" IsItemsHost="True" Panel.ZIndex="1" Background="Transparent"/>
-              <Border Grid.Row="1" Background="{DynamicResource SurfaceAlt}" CornerRadius="0,10,10,10">
-                <ContentPresenter ContentSource="SelectedContent"/>
-              </Border>
-            </Grid>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
   </Window.Resources>
 
   <Grid>
@@ -940,9 +831,9 @@ $xamlText = @'
             </ScrollViewer>
             <Border Grid.Row="3" BorderBrush="{DynamicResource BorderMed}" BorderThickness="0,1,0,0" Padding="0,12,0,0" Margin="0,10,0,0">
               <StackPanel Orientation="Horizontal">
-                <Button x:Name="BtnApplySelected" Content="应用选中的优化" Style="{StaticResource AccentButton}" Padding="20,9"/>
+                <Button x:Name="BtnApplySelected" Content="应用选中的优化" Style="{DynamicResource ButtonPrimary}"/>
                 <Button x:Name="BtnRevertSelected" Content="还原选中的优化"/>
-                <Button x:Name="BtnRevertAll" Content="全部还原为系统默认" Style="{StaticResource DangerButton}"/>
+                <Button x:Name="BtnRevertAll" Content="全部还原为系统默认" Style="{DynamicResource ButtonDanger}"/>
                 <TextBlock x:Name="TweakSelCount" Text="" Foreground="{DynamicResource TextDim}" FontSize="12.5"
                            VerticalAlignment="Center" Margin="6,0,0,0"/>
               </StackPanel>
@@ -975,7 +866,7 @@ $xamlText = @'
                 <TextBlock x:Name="CleanSearchHint" Text="搜索清理项…" Foreground="{DynamicResource TextDim}" FontSize="12.5"
                            Margin="11,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
               </Grid>
-              <Button x:Name="BtnScanJunk" Content="扫描可清理的垃圾" Style="{StaticResource AccentButton}"/>
+              <Button x:Name="BtnScanJunk" Content="扫描可清理的垃圾" Style="{DynamicResource ButtonPrimary}"/>
               <Button x:Name="BtnPickCleanRec" Content="勾选推荐项"/>
               <Button x:Name="BtnPickCleanNone" Content="全部不选"/>
               <TextBlock x:Name="TotalJunkText" Text="还没扫描" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="10,0,0,0"/>
@@ -984,7 +875,7 @@ $xamlText = @'
               <StackPanel x:Name="CleanPanel" Margin="0,0,10,0"/>
             </ScrollViewer>
             <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,12,0,0">
-              <Button x:Name="BtnClean" Content="开始清理选中项" Style="{StaticResource AccentButton}" Padding="20,9"/>
+              <Button x:Name="BtnClean" Content="开始清理选中项" Style="{DynamicResource ButtonPrimary}"/>
               <TextBlock x:Name="CleanSelCount" Text="" Foreground="{DynamicResource TextDim}" FontSize="12.5"
                          VerticalAlignment="Center" Margin="6,0,0,0"/>
             </StackPanel>
@@ -1043,7 +934,7 @@ $xamlText = @'
               <TextBlock TextWrapping="Wrap" FontSize="12.5" Foreground="{DynamicResource TextMid}"
                          Text="黑框一闪而过、一次弹好几个 —— 那是有程序在后台调用命令行但没把窗口藏好。这里会把所有「会在后台执行命令」的地方扫一遍，按可疑程度排序。"/>
               <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                <Button x:Name="BtnInspect" Content="开始扫描" Style="{StaticResource AccentButton}" Padding="20,9"/>
+                <Button x:Name="BtnInspect" Content="开始扫描" Style="{DynamicResource ButtonPrimary}"/>
                 <Button x:Name="BtnInspectFilter" Content="只看会弹黑框的"/>
                 <TextBlock x:Name="InspectSummary" Text="还没扫描" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12"/>
               </StackPanel>
@@ -1068,7 +959,7 @@ $xamlText = @'
                     <TextBlock TextWrapping="Wrap" FontSize="11.5" Foreground="{DynamicResource TextDim}" Margin="0,4,0,0"
                                Text="点「开始」后正常用电脑，等黑框出现。出现的瞬间就会记下来是谁开的、它的父进程是谁。"/>
                     <WrapPanel Margin="0,8,0,0">
-                      <Button x:Name="BtnWatchStart" Content="▶ 开始监控" Style="{StaticResource AccentButton}"/>
+                      <Button x:Name="BtnWatchStart" Content="▶ 开始监控" Style="{DynamicResource ButtonPrimary}"/>
                       <Button x:Name="BtnWatchStop" Content="■ 停止" IsEnabled="False"/>
                     </WrapPanel>
                   </StackPanel>
@@ -1125,7 +1016,7 @@ $xamlText = @'
           <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
             <Button x:Name="BtnRefreshAppx" Content="刷新列表"/>
             <Button x:Name="BtnCheckAppxSafe" Content="勾选「可以删」的"/>
-            <Button x:Name="BtnUninstallAppx" Content="卸载勾选的应用" Style="{StaticResource AccentButton}"/>
+            <Button x:Name="BtnUninstallAppx" Content="卸载勾选的应用" Style="{DynamicResource ButtonPrimary}"/>
             <TextBlock x:Name="AppxCounter" Foreground="{DynamicResource TextDim}" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12"/>
           </StackPanel>
           <Border Grid.Row="1" Background="{DynamicResource AccentTint}" CornerRadius="6" Padding="12,9" Margin="0,0,0,10">
@@ -1163,8 +1054,8 @@ $xamlText = @'
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
           <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
-            <Button x:Name="BtnHealthScan" Content="重新体检" Style="{StaticResource AccentButton}"/>
-            <Button x:Name="BtnFpsDiag" Content="★ 为什么我帧数没变？" Style="{StaticResource AccentButton}"/>
+            <Button x:Name="BtnHealthScan" Content="重新体检" Style="{DynamicResource ButtonPrimary}"/>
+            <Button x:Name="BtnFpsDiag" Content="★ 为什么我帧数没变？" Style="{DynamicResource ButtonPrimary}"/>
             <Button x:Name="BtnAddExclusion" Content="把游戏文件夹加入杀毒白名单"/>
             <Button x:Name="BtnSfc" Content="检查系统文件完整性"/>
             <Button x:Name="BtnCopyReport" Content="复制体检报告"/>
@@ -1227,6 +1118,15 @@ $xamlText = @'
 [xml]$xaml = $xamlText
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $Script:Window = [Windows.Markup.XamlReader]::Load($reader)
+
+# ★ 必须再往窗口上挂一份 HandyControl 主题 ★
+#   XamlReader.Load 构建出来的树，资源查找链接不到 Application.Resources，
+#   只挂在 Application 上的话窗口里的控件照样找不到样式。
+#   这里 new 一个新实例而不是复用 Application 那个 ——
+#   同一个 ResourceDictionary 实例挂到两个父级上会出怪问题。
+if ($Script:HcTheme) {
+    try { $Script:Window.Resources.MergedDictionaries.Add((New-Object HandyControl.Themes.Theme)) } catch { }
+}
 
 # 把所有命名控件收集到 $Script:UI
 $Script:UI = @{}
@@ -1315,7 +1215,7 @@ function Build-PresetUI {
             #   而那正是这一版要改掉的事。
             #   浏览器那组保留强调，因为它确实有一个推荐默认档。
             if ($ps.Id -eq 'BROW2') {
-                try { $b.Style = $Script:Window.FindResource('AccentButton') } catch { }
+                try { $b.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
             }
             $b.Add_Click({ Select-Preset $this.Tag })
             $wrap.Children.Add($b) | Out-Null
@@ -1723,7 +1623,7 @@ function Invoke-ApplyTweaks {
     param($List)
     $List = @($List)
     if ($List.Count -eq 0) {
-        [System.Windows.MessageBox]::Show('还没有勾选任何项目。左边勾上想开的优化，或者点「勾选推荐项」。', '电脑调优助手') | Out-Null
+        Show-Msg -Text '还没有勾选任何项目。左边勾上想开的优化，或者点「勾选推荐项」。' | Out-Null
         return
     }
     # 项目太多时只列前 12 个，免得弹窗长到看不完
@@ -1763,14 +1663,15 @@ function Invoke-ApplyTweaks {
     $msg = "完成：成功应用 $ok / $($List.Count) 项。"
     if ($needReboot) { $msg += "`r`n`r`n其中有些项目需要重启电脑才会生效。" }
     Set-Status $msg
-    [System.Windows.MessageBox]::Show($msg, '电脑调优助手') | Out-Null
+    # 需要重启这种要紧事还是弹模态框，确保看见；其余飘个气泡就够了
+    if ($needReboot) { Show-Msg -Text $msg -Kind 'Success' | Out-Null } else { Show-Toast "成功应用 $ok / $($List.Count) 项优化" }
 }
 
 function Invoke-RevertTweaks {
     param($List)
     $List = @($List)
     if ($List.Count -eq 0) {
-        [System.Windows.MessageBox]::Show('还没有勾选任何项目。', '电脑调优助手') | Out-Null
+        Show-Msg -Text '还没有勾选任何项目。' | Out-Null
         return
     }
     $names = ($List | ForEach-Object { '· ' + $_.Name }) -join "`r`n"
@@ -1787,7 +1688,7 @@ function Invoke-RevertTweaks {
     Update-TweakStates
     $msg = "完成：成功还原 $ok / $($List.Count) 项。部分项目需要重启才会恢复。"
     Set-Status $msg
-    [System.Windows.MessageBox]::Show($msg, '电脑调优助手') | Out-Null
+    Show-Toast $msg
 }
 
 # ---------------------------------------------------------------------
@@ -1915,7 +1816,7 @@ function Invoke-CleanSelected {
         if ($row -and $row.Check.IsChecked) { $sel += $it }
     }
     if ($sel.Count -eq 0) {
-        [System.Windows.MessageBox]::Show('还没有勾选任何清理项。', '电脑调优助手') | Out-Null
+        Show-Msg -Text '还没有勾选任何清理项。' | Out-Null
         return
     }
     $names = ($sel | ForEach-Object { '· ' + $_.Name }) -join "`r`n"
@@ -1944,7 +1845,7 @@ function Invoke-CleanSelected {
     $msg = "清理完成，共释放 $(Format-Size $freed) 硬盘空间。"
     Set-Status $msg
     Write-Log $msg '成功'
-    [System.Windows.MessageBox]::Show($msg, '电脑调优助手') | Out-Null
+    Show-Toast $msg
 }
 
 # ---------------------------------------------------------------------
@@ -2306,7 +2207,7 @@ function Invoke-AppxUninstall {
         if ($cb.IsChecked -and $cb.IsEnabled -and -not (Test-AppxProtected $k)) { $names += $k }
     }
     if ($names.Count -eq 0) {
-        [System.Windows.MessageBox]::Show('还没有勾选要卸载的应用。', '电脑调优助手') | Out-Null
+        Show-Msg -Text '还没有勾选要卸载的应用。' | Out-Null
         return
     }
 
@@ -2481,7 +2382,7 @@ function Invoke-DailyMaintenance {
     $msg = "日常维护完成。`r`n`r`n· 清理释放：$(Format-Size $freed)`r`n· DNS 缓存已刷新`r`n· 系统盘已优化"
     Set-Status ("日常维护完成，释放 {0}" -f (Format-Size $freed))
     Write-Log $msg '成功'
-    [System.Windows.MessageBox]::Show($msg, '电脑调优助手') | Out-Null
+    Show-Msg -Text $msg | Out-Null
 }
 
 function Invoke-SetRefresh {
@@ -2496,7 +2397,7 @@ function Invoke-SetRefresh {
     $before = Get-CurrentDisplayMode
     if (-not $before) { return }
     if (-not (Set-DisplayRefreshRate -Hz $Hz)) {
-        [System.Windows.MessageBox]::Show("切换到 $Hz Hz 失败 —— 显卡驱动拒绝了这个模式。`r`n`r`n常见原因是线材带宽不够（HDMI 2.0 带不动 1080p 240Hz 这种），换根 DP 线试试。`r`n`r`n设置没有被改动。", '电脑调优助手') | Out-Null
+        Show-Msg -Text "切换到 $Hz Hz 失败 —— 显卡驱动拒绝了这个模式。`r`n`r`n常见原因是线材带宽不够（HDMI 2.0 带不动 1080p 240Hz 这种），换根 DP 线试试。`r`n`r`n设置没有被改动。" | Out-Null
         return
     }
 
@@ -2518,7 +2419,7 @@ function Invoke-SetRefresh {
     $row.Orientation = 'Horizontal'
     $keep = New-Object System.Windows.Controls.Button
     $keep.Content = '保持这个设置'
-    try { $keep.Style = $Script:Window.FindResource('AccentButton') } catch { }
+    try { $keep.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
     $undo = New-Object System.Windows.Controls.Button
     $undo.Content = ("立即切回 {0} Hz" -f $before.Hz)
     $row.Children.Add($keep) | Out-Null
@@ -2606,7 +2507,7 @@ function Export-DiagnosticReport {
         if ($r -eq 'Yes') { Start-Process notepad.exe -ArgumentList "`"$path`"" }
     } catch {
         Set-Busy $false
-        [System.Windows.MessageBox]::Show("保存失败：$($_.Exception.Message)", '电脑调优助手') | Out-Null
+        Show-Msg -Text "保存失败：$($_.Exception.Message)" | Out-Null
     }
 }
 
@@ -2617,7 +2518,7 @@ function Build-MaintainUI {
     # ---------- 一键日常维护 ----------
     $c1 = New-MaintainCard -Title '一键日常维护' -Desc '平时每个月点一次就行：清垃圾 + 刷新 DNS + 优化系统盘，一条龙。不会改任何性能设置。'
     $bAll = New-ToolButton -Text '开始一键维护' -OnClick { Invoke-DailyMaintenance }
-    try { $bAll.Style = $Script:Window.FindResource('AccentButton') } catch { }
+    try { $bAll.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
     $bAll.Padding = New-Thick 22 10 22 10
     $bAll.HorizontalAlignment = 'Left'
     $c1.Body.Children.Add($bAll) | Out-Null
@@ -2643,7 +2544,7 @@ function Build-MaintainUI {
                 $b.IsEnabled = $false
                 $b.Content = "{0} Hz（当前）" -f $hz
             } elseif ($hz -eq $maxHz) {
-                try { $b.Style = $Script:Window.FindResource('AccentButton') } catch { }
+                try { $b.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
                 $b.Content = "{0} Hz（最高）" -f $hz
             }
             $wrap15.Children.Add($b) | Out-Null
@@ -2660,7 +2561,7 @@ function Build-MaintainUI {
     $wrap2 = New-Object System.Windows.Controls.WrapPanel
     $wrap2.Children.Add((New-ToolButton -Text '刷新 DNS 缓存' -OnClick {
                 Clear-DnsCacheNow | Out-Null
-                [System.Windows.MessageBox]::Show("DNS 缓存已刷新。`r`n`r`n什么时候用它：某个网站突然打不开但别的正常、刚换过 DNS、游戏登录服务器连不上但网页能开。", '电脑调优助手') | Out-Null
+                Show-Msg -Text "DNS 缓存已刷新。`r`n`r`n什么时候用它：某个网站突然打不开但别的正常、刚换过 DNS、游戏登录服务器连不上但网页能开。" | Out-Null
             })) | Out-Null
     $wrap2.Children.Add((New-ToolButton -Text '重启资源管理器' -OnClick {
                 Restart-ExplorerShell
@@ -2767,7 +2668,7 @@ function Build-MaintainUI {
             if ($this.IsChecked) {
                 $ok = Enable-AutoClean -ScriptPath $PSCommandPath
                 if ($ok) { Set-Status '已开启每周自动清理（每周日 12:00）' }
-                else { $this.IsChecked = $false; [System.Windows.MessageBox]::Show('创建计划任务失败，详见日志页。', '电脑调优助手') | Out-Null }
+                else { $this.IsChecked = $false; Show-Msg -Text '创建计划任务失败，详见日志页。' | Out-Null }
             } else {
                 Disable-AutoClean | Out-Null
                 Set-Status '已关闭每周自动清理'
@@ -3011,7 +2912,7 @@ function New-ProcRow {
 
 function Start-LiveWatch {
     if (-not (Start-ProcWatch)) {
-        [System.Windows.MessageBox]::Show("实时监控启动失败。`r`n`r`n这个功能需要管理员权限（正常双击「一键启动.bat」并在 UAC 弹窗点「是」即可）。`r`n`r`n如果还是不行，改用下面的「持续记录」，效果一样，而且关掉工具也在记。", '电脑调优助手') | Out-Null
+        Show-Msg -Text "实时监控启动失败。`r`n`r`n这个功能需要管理员权限（正常双击「一键启动.bat」并在 UAC 弹窗点「是」即可）。`r`n`r`n如果还是不行，改用下面的「持续记录」，效果一样，而且关掉工具也在记。" | Out-Null
         return
     }
     $Script:UI.RecentRunPanel.Children.Clear()
@@ -3292,7 +3193,7 @@ $Script:UI.BtnRevertSelected.Add_Click({ Invoke-RevertTweaks (Get-CheckedTweaks)
 $Script:UI.BtnRevertAll.Add_Click({
         $applied = @($Script:Tweaks | Where-Object { (Test-TweakAvailable $_) -and (Test-TweakApplied $_) })
         if ($applied.Count -eq 0) {
-            [System.Windows.MessageBox]::Show('当前没有任何已应用的优化项需要还原。', '电脑调优助手') | Out-Null
+            Show-Msg -Text '当前没有任何已应用的优化项需要还原。' | Out-Null
             return
         }
         Invoke-RevertTweaks $applied
@@ -3302,9 +3203,9 @@ $Script:UI.BtnRestorePoint.Add_Click({
         Set-Status '正在创建系统还原点，可能需要 10~60 秒…'
         $ok = New-SystemRestorePoint -Description 'PC调优助手-手动创建'
         if ($ok) {
-            [System.Windows.MessageBox]::Show('系统还原点创建成功。万一出问题，可以在「设置 → 系统 → 恢复」里回滚到这个时间点。', '电脑调优助手') | Out-Null
+            Show-Msg -Text '系统还原点创建成功。万一出问题，可以在「设置 → 系统 → 恢复」里回滚到这个时间点。' | Out-Null
         } else {
-            [System.Windows.MessageBox]::Show("创建还原点失败。`r`n`r`n最常见的原因是系统保护被关闭了。打开方法：`r`n控制面板 → 系统 → 系统保护 → 选中 C 盘 → 配置 → 启用系统保护。`r`n`r`n不影响本工具的使用（工具自己有完整的备份/还原机制）。", '电脑调优助手') | Out-Null
+            Show-Msg -Text "创建还原点失败。`r`n`r`n最常见的原因是系统保护被关闭了。打开方法：`r`n控制面板 → 系统 → 系统保护 → 选中 C 盘 → 配置 → 启用系统保护。`r`n`r`n不影响本工具的使用（工具自己有完整的备份/还原机制）。" | Out-Null
         }
         Set-Status '就绪'
     })
@@ -3357,22 +3258,22 @@ $Script:UI.BtnProcAudit.Add_Click({
         if ($r -ne 'Yes') { return }
         if (Enable-ProcAudit) {
             $this.Content = '关闭持续记录'
-            [System.Windows.MessageBox]::Show("已开启。`r`n`r`n接下来正常用电脑，等黑框出现过几次之后，回到这一页点「查看进程记录」。`r`n`r`n排查完记得回来把它关掉。", '电脑调优助手') | Out-Null
+            Show-Msg -Text "已开启。`r`n`r`n接下来正常用电脑，等黑框出现过几次之后，回到这一页点「查看进程记录」。`r`n`r`n排查完记得回来把它关掉。" | Out-Null
             Set-Status '持续记录已开启'
         } else {
-            [System.Windows.MessageBox]::Show('开启失败，详见日志页。', '电脑调优助手') | Out-Null
+            Show-Msg -Text '开启失败，详见日志页。' | Out-Null
         }
     })
 $Script:UI.BtnEnableTaskLog.Add_Click({
         if (Test-TaskLogEnabled) {
-            [System.Windows.MessageBox]::Show('运行记录本来就是开着的，直接点「刷新记录」即可。', '电脑调优助手') | Out-Null
+            Show-Msg -Text '运行记录本来就是开着的，直接点「刷新记录」即可。' | Out-Null
             return
         }
         if (Enable-TaskLog) {
-            [System.Windows.MessageBox]::Show("已开启任务运行记录。`r`n`r`n接下来这样抓现行：`r`n1. 正常用电脑，等下次黑框弹出来`r`n2. 看到之后马上回到这一页点「刷新记录」`r`n3. 时间对得上的那一条就是元凶`r`n`r`n这个记录只占几 MB，不影响性能。", '电脑调优助手') | Out-Null
+            Show-Msg -Text "已开启任务运行记录。`r`n`r`n接下来这样抓现行：`r`n1. 正常用电脑，等下次黑框弹出来`r`n2. 看到之后马上回到这一页点「刷新记录」`r`n3. 时间对得上的那一条就是元凶`r`n`r`n这个记录只占几 MB，不影响性能。" | Out-Null
             Build-RecentRuns
         } else {
-            [System.Windows.MessageBox]::Show('开启失败，详见日志页。', '电脑调优助手') | Out-Null
+            Show-Msg -Text '开启失败，详见日志页。' | Out-Null
         }
     })
 $Script:UI.BtnHealthScan.Add_Click({ Build-HealthUI })
@@ -3402,7 +3303,7 @@ $Script:UI.BtnAddExclusion.Add_Click({
             [System.Windows.MessageBox]::Show(
                 "已添加白名单：`r`n$path`r`n`r`n作用：Windows Defender 以后不再实时扫描这个文件夹里的文件。游戏读取大量资源文件时不用每个都过一遍杀毒，加载速度和帧数稳定性都会改善。`r`n`r`n注意：白名单里的文件不再被保护，所以只加你信任的游戏目录，不要加下载文件夹。", '电脑调优助手') | Out-Null
         } catch {
-            [System.Windows.MessageBox]::Show("添加失败：$($_.Exception.Message)`r`n`r`n如果你装了第三方杀毒软件（360/火绒/腾讯管家），Windows Defender 会被自动关闭，这个功能就用不了了 —— 请去那个杀毒软件里手动添加信任目录。", '电脑调优助手') | Out-Null
+            Show-Msg -Text "添加失败：$($_.Exception.Message)`r`n`r`n如果你装了第三方杀毒软件（360/火绒/腾讯管家），Windows Defender 会被自动关闭，这个功能就用不了了 —— 请去那个杀毒软件里手动添加信任目录。" | Out-Null
         }
     })
 
@@ -3418,9 +3319,9 @@ $Script:UI.BtnCopyReport.Add_Click({
         if ([string]::IsNullOrWhiteSpace($Script:LastReportText)) { Build-HealthUI }
         try {
             Set-Clipboard -Value $Script:LastReportText
-            [System.Windows.MessageBox]::Show('体检报告已复制到剪贴板，可以直接粘贴发给别人看。', '电脑调优助手') | Out-Null
+            Show-Msg -Text '体检报告已复制到剪贴板，可以直接粘贴发给别人看。' | Out-Null
         } catch {
-            [System.Windows.MessageBox]::Show("复制失败：$($_.Exception.Message)", '电脑调优助手') | Out-Null
+            Show-Msg -Text "复制失败：$($_.Exception.Message)" | Out-Null
         }
     })
 

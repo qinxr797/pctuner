@@ -8,6 +8,38 @@
 
 ---
 
+## v4.0：全新界面
+
+界面整个重做，建在 [HandyControl](https://github.com/HandyOrg/HandyControl)（MIT）上 ——
+控件、动画、阴影、弹窗全部换成库里打磨过的那一套，删掉了两百多行手写样式。
+
+**但换肤没有丢。** 走的是「**库出模板、我们出颜色**」：
+
+HandyControl 的控件模板内部引用 `RegionBrush` / `PrimaryTextBrush` 这些键，
+我们在换肤时把这些键用自己的颜色覆盖掉，于是六套皮肤原样保留，
+控件却是库里那套精致的。
+
+> **踩过的坑，留给后来人**：HandyControl 官方文档教你合并
+> `SkinDefault.xaml` + `Theme.xaml` 两个 `pack://` 资源字典。
+> 在 PowerShell + `XamlReader` 环境下，这么做会「**加载成功但样式一个都不生效**」——
+> 按钮还是 Windows 原生样子，`CircleProgressBar` 直接渲染成空白，而且不报任何错。
+> 正确入口是 `HandyControl.Themes.Theme` 这个类。
+>
+> 另外它自带的 `SkinType.Dark` 在这个环境下**切不动**（四种官方写法全试过，
+> 拿到的 `RegionBrush` 始终是白色），这也是我们坚持自己管颜色的原因。
+
+其他变化：
+- **弹窗**换成 HandyControl 的，跟着皮肤走，深色模式下弹窗也是深色的
+- **「做完了」不再弹模态框**，右上角飘个气泡，几秒自己消失
+- **卡片加了淡投影**，从背景上浮起来一点
+- 体积 219 KB → **约 1.7 MB**（其中 1.4 MB 是控件库本身）
+
+> 投影和动画都挂在「个性化」页的效果开关下。投影是 GPU 每帧都要算的，
+> 一页几十张卡片同时投影在集显老机器上是实打实的负担 ——
+> 而这工具恰恰有一大票老机器用户。关掉之后功能完全一样。
+
+---
+
 ## v3.0：不再只服务 FPS 玩家
 
 前两版整个工具是围着竞技射击转的 —— 每个优化项下面写的都是「对 CS2 的影响」，
@@ -167,7 +199,7 @@ v3.0 把「三个 FPS 游戏」抽象成**八种使用场景**：
 |---|---|
 | 语言 | PowerShell 5.1（Windows 自带，不用装任何东西） |
 | 界面 | WPF，通过 `XamlReader::Load` 运行时构建 |
-| 依赖 | 无 |
+| 依赖 | HandyControl（MIT，DLL 随包分发，不用安装） |
 | 支持 | Windows 10 / 11 |
 
 ### 文件结构
@@ -178,6 +210,9 @@ PCTuner/
 ├── 诊断启动.bat          出问题时用，能看见报错
 ├── PCTuner.ps1           主程序（界面 + 各页面逻辑）
 ├── 使用说明.md
+├── Lib/
+│   ├── HandyControl.dll          界面控件库（MIT，随包分发）
+│   └── HandyControl-LICENSE.txt
 └── Modules/
     ├── Engine.ps1        备份/还原引擎（最核心的安全机制）
     ├── Tweaks.ps1        所有优化项的定义和详细说明

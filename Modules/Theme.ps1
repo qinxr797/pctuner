@@ -89,6 +89,46 @@ $Script:ExtraColorSlots = @{
     # 悬停底色还是浅的、标题字却是白的 → 整行看不见
 }
 
+# =====================================================================
+#  我们的色槽 -> HandyControl 的画笔键
+# ---------------------------------------------------------------------
+#  v4.0 界面建在 HandyControl 上。它的控件模板内部全是
+#  {DynamicResource RegionBrush} 这种引用，所以只要我们把这些键
+#  用自己的颜色覆盖掉，**整套控件就跟着我们的皮肤走**。
+#
+#  ★ 为什么不用 HandyControl 自带的深浅皮肤 ★
+#    它的 SkinType.Dark 在 PowerShell 环境下切不动 ——
+#    四种官方写法（构造后设 Skin / 构造前设 Skin /
+#    直接挂 SkinDark.xaml / Theme 打底再覆盖）全试过，
+#    拿到的 RegionBrush 始终是 #FFFFFFFF。
+#    原因是那些 pack:// 资源字典在 XamlReader 环境里填充不起来。
+#
+#    所以走「库出模板、我们出颜色」这条路：既绕开了这个 bug，
+#    又保住了我们自己那 6 套验过对比度的皮肤。
+#
+#  左边是我们的色槽名，右边是要覆盖的 HandyControl 键（可多个）。
+# =====================================================================
+$Script:HcBrushMap = @{
+    WindowBg     = @('BackgroundBrush', 'SecondaryRegionBrush')
+    PanelBg      = @('RegionBrush', 'DefaultBrush', 'ThirdlyRegionBrush')
+    TextMain     = @('PrimaryTextBrush', 'ReverseTextBrush')
+    TextMid      = @('SecondaryTextBrush')
+    TextDim      = @('ThirdlyTextBrush')
+    BorderSoft   = @('BorderBrush')
+    Accent       = @('PrimaryBrush', 'DarkPrimaryBrush')
+    OnAccent     = @('TextIconBrush')
+}
+
+# 语义色 -> HandyControl 的语义画笔。
+# 这几个键控制库里「成功/警告/危险/信息」类控件的配色，
+# 不覆盖的话会冒出一批跟我们整体不搭的鲜艳红绿。
+$Script:HcSemanticMap = @{
+    '#556B54' = @('SuccessBrush', 'DarkSuccessBrush')   # 灰绿：良好 / 必做
+    '#7A6B45' = @('WarningBrush', 'DarkWarningBrush')   # 灰卡其：需实测 / 中风险
+    '#8A5750' = @('DangerBrush', 'DarkDangerBrush')     # 灰玫瑰：高危
+    '#55606F' = @('InfoBrush', 'DarkInfoBrush')         # 灰蓝：推荐 / 主色
+}
+
 function Get-BuiltinThemes {
     <#
       内置皮肤。每套都是自己配的低饱和度组合，
@@ -274,6 +314,43 @@ function Set-AppTheme {
         }
     }
     $Script:ColorRemap = $remap
+
+    # ---- 2.5 把颜色喂给 HandyControl ----
+    # 库的控件模板内部引用的是 RegionBrush / PrimaryTextBrush 这些键，
+    # 覆盖掉它们，整套控件就跟着我们的皮肤走。
+    #
+    # 注意：必须写进 Window.Resources 而不是 Application.Resources ——
+    # 资源查找是从控件往上走到 Window 再到 Application，
+    # 写在 Window 上才能盖住 Application 里 HandyControl 自己那份。
+    if ($Script:Window) {
+        foreach ($slot in $Script:HcBrushMap.Keys) {
+            if (-not $colors.ContainsKey($slot)) { continue }
+            try {
+                $br = New-Object System.Windows.Media.SolidColorBrush (
+                    [System.Windows.Media.ColorConverter]::ConvertFromString($colors[$slot]))
+                $br.Freeze()
+                foreach ($hcKey in $Script:HcBrushMap[$slot]) {
+                    $Script:Window.Resources[$hcKey] = [System.Windows.Media.Brush]$br
+                }
+            } catch { }
+        }
+        # 语义色：深色皮肤下用提亮版，浅色皮肤用原色
+        $isDark = Test-ThemeIsDark $Name
+        foreach ($baseHex in $Script:HcSemanticMap.Keys) {
+            $useHex = $baseHex
+            if ($isDark -and $Script:SemanticDark.ContainsKey($baseHex)) {
+                $useHex = $Script:SemanticDark[$baseHex]
+            }
+            try {
+                $br = New-Object System.Windows.Media.SolidColorBrush (
+                    [System.Windows.Media.ColorConverter]::ConvertFromString($useHex))
+                $br.Freeze()
+                foreach ($hcKey in $Script:HcSemanticMap[$baseHex]) {
+                    $Script:Window.Resources[$hcKey] = [System.Windows.Media.Brush]$br
+                }
+            } catch { }
+        }
+    }
 
     # ---- 3. 背景图 ----
     $Script:ThemeImage = $Image
