@@ -55,8 +55,8 @@ $ErrorActionPreference = 'Continue'
 
 # ===== 版本号 =====
 # 改版本号只改这一处，标题栏 / 副标题 / 诊断报告都从这里取。
-$Script:AppVersion     = '6.0'
-$Script:AppVersionDate = '2026-09-27'
+$Script:AppVersion     = '6.1'
+$Script:AppVersionDate = '2026-09-28'
 
 # ---------------------------------------------------------------------
 #  0. 加载 .NET 界面库
@@ -1162,7 +1162,7 @@ function Set-Gauge {
     if ($old -and [double]::TryParse($old, [ref]$null)) {
         $changed = ([math]::Round([double]$old, $Decimals) -ne [math]::Round([double]$Value, $Decimals))
     }
-    Start-CountUp -Target $G.Value -To ([double]$Value) -Decimals $Decimals -Ms 240
+    Start-CountUp -Target $G.Value -To ([double]$Value) -Decimals $Decimals -Ms $Script:Dur.Draw
     if ($changed) { Start-ValueFlash $G.Value }
 }
 
@@ -3114,7 +3114,7 @@ function Set-RptReading {
     }
 
     $mark = Get-RptMarkFor ([double]$Value) $rg
-    Start-CountUp -Target $row.Result -To ([double]$Value) -Decimals $Decimals -Ms 220
+    Start-CountUp -Target $row.Result -To ([double]$Value) -Decimals $Decimals -Ms $Script:Dur.Draw
     Set-RptMark $row $mark
 
     # 区间条跟着走。超出范围时刻记上法定墨并且画高一点 ——
@@ -3164,7 +3164,7 @@ function Update-DashUI {
         if ($null -eq $t) { continue }
         Set-Meter $Script:DashLoadMeters[$p.K] $p.V 100 $null
         if ($null -eq $p.V) { $t.Text = [string][char]0x2014; continue }
-        Start-CountUp -Target $t -To ([double]$p.V) -Decimals 0 -Ms 240
+        Start-CountUp -Target $t -To ([double]$p.V) -Decimals 0 -Ms $Script:Dur.Draw
     }
 }
 

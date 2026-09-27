@@ -79,6 +79,8 @@ foreach ($name in $Script:Palettes.Keys) {
     }
     # 危险按钮：白字压高危红
     Test-Pair $name 'ButtonDanger字' $(if ($dark) { $c.Canvas } else { '#FFFFFF' }) 'SemBad' (Get-ThemeHex '#8A5750')
+    # 「完成」按钮（v6.1 B3）：字压 ok 绿
+    Test-Pair $name '完成按钮字' $(if ($dark) { $c.Canvas } else { '#FFFFFF' }) 'SemOk' (Get-ThemeHex '#556B54')
 }
 
 if ($bad -eq 0) {
