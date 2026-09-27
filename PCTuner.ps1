@@ -3828,6 +3828,7 @@ function Invoke-ApplyTweaks {
 
     $r = Show-Msg -Text ("即将应用以下 $($List.Count) 项优化：`r`n`r`n$names$warn`r`n`r`n所有修改都会先备份原值，之后随时可以还原。确定继续吗？") -Title '确认应用' -Kind Ask
     if ($r -ne 'Yes') { return }
+    Enter-ActionBusy
 
     if ($Script:UI.ChkRestorePoint.IsChecked) {
         Set-Status '正在创建系统还原点（可能需要 10~60 秒）…'
@@ -3847,6 +3848,7 @@ function Invoke-ApplyTweaks {
     Set-Status $msg
     # 需要重启这种要紧事还是弹模态框，确保看见；其余飘个气泡就够了
     if ($needReboot) { Show-Msg -Text $msg -Kind 'Success' | Out-Null } else { Show-Toast "成功应用 $ok / $($List.Count) 项优化" }
+    $Script:LastActionDone = $true     # 按钮据此播「完成」（B3）
 }
 
 function Invoke-RevertTweaks {
@@ -4012,6 +4014,7 @@ function Invoke-CleanSelected {
     $names = ($sel | ForEach-Object { '· ' + $_.Name }) -join "`r`n"
     $r = Show-Msg -Text ("即将清理以下 $($sel.Count) 项：`r`n`r`n$names`r`n`r`n建议先关闭浏览器和游戏平台客户端，正在使用的文件删不掉。`r`n清理不可撤销，确定继续吗？") -Title '确认清理' -Kind AskWarn
     if ($r -ne 'Yes') { return }
+    Enter-ActionBusy
 
     Set-Busy $true
     $freed = 0
@@ -4034,6 +4037,7 @@ function Invoke-CleanSelected {
     Set-Status $msg
     Write-Log $msg '成功'
     Show-Toast $msg
+    $Script:LastActionDone = $true     # 按钮据此播「完成」（B3）
 }
 
 # ---------------------------------------------------------------------
@@ -4670,6 +4674,7 @@ function Invoke-DailyMaintenance {
     <# 「一键日常维护」：清理 + 刷新DNS + 系统盘 TRIM，一条龙 #>
     $r = Show-Msg -Text ("一键日常维护会依次做三件事：`r`n`r`n1. 清理「垃圾清理」页里所有推荐项（临时文件、缓存、日志…）`r`n2. 刷新 DNS 缓存`r`n3. 对系统盘执行 TRIM / 碎片整理`r`n`r`n全程不会改动任何性能设置，也不会碰你的文件。`r`n建议先关掉浏览器和游戏平台。`r`n`r`n现在开始吗？") -Title '一键日常维护' -Kind Ask
     if ($r -ne 'Yes') { return }
+    Enter-ActionBusy
 
     Set-Busy $true
     $freed = 0
@@ -4701,6 +4706,7 @@ function Invoke-DailyMaintenance {
     Set-Status ("日常维护完成，释放 {0}" -f (Format-Size $freed))
     Write-Log $msg '成功'
     Show-Msg -Text $msg | Out-Null
+    $Script:LastActionDone = $true     # 按钮据此播「完成」（B3）
 }
 
 function Invoke-SetRefresh {
@@ -4862,7 +4868,7 @@ function Build-MaintainUI {
 
     $r1 = New-ActRow -Name '一键日常维护' `
         -Note '清垃圾 + 刷新 DNS + 优化系统盘，一条龙。不会改任何性能设置，也不碰你的文件。'
-    $bAll = New-ToolButton -Text '开始维护' -OnClick { Invoke-DailyMaintenance }
+    $bAll = New-ToolButton -Text '开始维护' -OnClick { Invoke-WithDone $this { Invoke-DailyMaintenance } }
     try { $bAll.Style = $Script:Window.FindResource('ButtonPrimary') } catch { }
     # ★ 别给按钮加上下 Padding ★ 要改高度改 Height（design.md 4.3）
     $bAll.Margin = New-Thick 0
@@ -5819,7 +5825,7 @@ $Script:UI.BtnPickNone.Add_Click({
 $Script:UI.BtnRescan.Add_Click({ Update-TweakStates })
 $Script:UI.TweakSearch.Add_TextChanged({ Update-TweakFilter })
 $Script:UI.CleanSearch.Add_TextChanged({ Update-CleanFilter })
-$Script:UI.BtnApplySelected.Add_Click({ Invoke-ApplyTweaks (Get-CheckedTweaks) })
+$Script:UI.BtnApplySelected.Add_Click({ Invoke-WithDone $this { Invoke-ApplyTweaks (Get-CheckedTweaks) } })
 $Script:UI.BtnRevertSelected.Add_Click({ Invoke-RevertTweaks (Get-CheckedTweaks) })
 $Script:UI.BtnRevertAll.Add_Click({
         $applied = @($Script:Tweaks | Where-Object { (Test-TweakAvailable $_) -and (Test-TweakApplied $_) })
@@ -5842,7 +5848,7 @@ $Script:UI.BtnRestorePoint.Add_Click({
     })
 
 $Script:UI.BtnScanJunk.Add_Click({ Invoke-ScanJunk })
-$Script:UI.BtnClean.Add_Click({ Invoke-CleanSelected })
+$Script:UI.BtnClean.Add_Click({ Invoke-WithDone $this { Invoke-CleanSelected } })
 $Script:UI.BtnPickCleanRec.Add_Click({
         foreach ($it in $Script:CleanItems) { $Script:CleanRows[$it.Id].Check.IsChecked = [bool]$it.Recommended }
         Update-CleanSelCount

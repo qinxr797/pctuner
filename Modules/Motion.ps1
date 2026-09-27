@@ -45,6 +45,7 @@ $Script:Dur = @{
     Spring  = 620    # 弹簧从起步到停稳（体感在 150～250ms 就到位了，后面是余震）
     Count   = 900    # 健康度数字 + 圆环（全应用只此一处，属于「少见时刻」）
     Hold    = 2800   # 提示条停留
+    Done    = 1200   # 按钮「完成」状态停留（B3）
     Stagger = 40     # 依次进场的间隔
 }
 $Script:StaggerMax = 6    # 最多错开 6 个，第 7 个起和第 6 个一起到 —— 不然最后一个要等半天
@@ -610,4 +611,82 @@ function Set-RefreshButton {
     $Button.Content = $sp
     $Button.Resources['__icon'] = $ic
     $Button.Add_MouseEnter({ Start-IconNudge $this.Resources['__icon'] 'Refresh' })
+}
+
+# =====================================================================
+#  完成变绿勾（B3，改着做）
+# ---------------------------------------------------------------------
+#  只挂在三个要等的主按钮上：应用选中的优化 / 开始清理选中项 / 开始维护。
+#    确认之后  按钮写「处理中…」并禁用（顺带防止活还没干完又点一次）
+#    做完之后  底色换成 ok 绿、对勾从 0.6 弹到 1 +「完成」，停 Done（1200ms）后恢复
+#    取消 / 出错  直接恢复，不播
+#
+#  ★ 不转圈 ★ 这些活是在界面线程上一项一项做的（功能不动），每做一项界面才喘一口气，
+#    转圈会一顿一顿地跳 —— 比不转更廉价。所以试玩台 B3 的「转圈」那一半砍了，只留「变绿勾」。
+# =====================================================================
+function Enter-ActionBusy {
+    <# 在动作函数里、用户点了「确定」之后调：按钮进入「处理中…」。没有挂按钮（比如「只应用这一项」）就什么都不做 #>
+    $b = $Script:ActiveButton
+    if ($null -eq $b) { return }
+    $b.Resources['__busyContent'] = $b.Content
+    $b.Resources['__busyEnabled'] = $b.IsEnabled
+    $b.Content = '处理中…'
+    $b.IsEnabled = $false
+}
+
+function Invoke-WithDone {
+    param($Button, [scriptblock]$Action)
+    $Script:ActiveButton = $Button
+    $Script:LastActionDone = $false
+    try { & $Action }
+    finally {
+        $Script:ActiveButton = $null
+        if ($Button.Resources.Contains('__busyContent')) {
+            $Button.Content = $Button.Resources['__busyContent']
+            $Button.IsEnabled = [bool]$Button.Resources['__busyEnabled']
+            $Button.Resources.Remove('__busyContent')
+            $Button.Resources.Remove('__busyEnabled')
+        }
+    }
+    if ($Script:LastActionDone) { Start-DoneMorph $Button }
+}
+
+function Start-DoneMorph {
+    param($Button)
+    if ($null -eq $Button) { return }
+    $orig = $Button.Content
+    $sp = New-Object System.Windows.Controls.StackPanel
+    $sp.Orientation = 'Horizontal'
+    $ic = New-Object MaterialDesignThemes.Wpf.PackIcon
+    $ic.Kind = 'Check'
+    $ic.Width = 16; $ic.Height = 16
+    $ic.VerticalAlignment = 'Center'
+    $ic.Margin = New-Object System.Windows.Thickness 0, 0, 8, 0
+    $ic.RenderTransformOrigin = New-Object System.Windows.Point 0.5, 0.5
+    $sc = New-Object System.Windows.Media.ScaleTransform 0.6, 0.6
+    $ic.RenderTransform = $sc
+    $sp.Children.Add($ic) | Out-Null
+    $tb = New-Object System.Windows.Controls.TextBlock
+    $tb.Text = '完成'
+    $tb.VerticalAlignment = 'Center'
+    $sp.Children.Add($tb) | Out-Null
+    $Button.Content = $sp
+    $Button.IsHitTestVisible = $false
+    # 语义色：成功用 ok 绿（深色皮肤下自动提亮），字色跟着换，保证对比度
+    Start-ColorFade $Button '#556B54' $Script:Dur.Base
+    try { $Button.Foreground = [System.Windows.Media.Brush][System.Windows.Application]::Current.Resources['OnSemOk'] } catch { }
+    Start-Spring $sc ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 1.0
+    Start-Spring $sc ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 1.0
+    $t = New-Object System.Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds($Script:Dur.Done)
+    $t.Tag = @{ B = $Button; C = $orig }
+    $t.Add_Tick({
+            $this.Stop()
+            $st = $this.Tag
+            $st.B.ClearValue([System.Windows.Controls.Control]::BackgroundProperty)
+            $st.B.ClearValue([System.Windows.Controls.Control]::ForegroundProperty)
+            $st.B.Content = $st.C
+            $st.B.IsHitTestVisible = $true
+        })
+    $t.Start()
 }

@@ -245,6 +245,8 @@ function Set-AppTheme {
         }
         # 危险按钮上的字：浅色皮肤白字压深玫瑰；深色皮肤的玫瑰红是提亮版，白字压上去只有 2:1，换深字
         try { $res['OnSemBad'] = New-FrozenBrush $(if ($Script:ThemeIsDark) { $pal.Canvas } else { '#FFFFFF' }) } catch { }
+        # 「完成」按钮（B3）的字：同一个道理，深色皮肤的提亮绿上要用深字
+        try { $res['OnSemOk'] = New-FrozenBrush $(if ($Script:ThemeIsDark) { $pal.Canvas } else { '#FFFFFF' }) } catch { }
 
         # ---- 3. 把 MDIX 的关键画笔盖成我们的色 ----
         foreach ($slot in $Script:MdBrushMap.Keys) {
