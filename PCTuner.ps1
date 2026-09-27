@@ -2902,8 +2902,41 @@ function Build-DashHero {
     $Script:HeroArc = $arc
 
     $root.Children.Add($content) | Out-Null
+
+    # ---- 光斑（C2）：一团白色 14% 的径向光跟着鼠标 ----
+    #   全应用只放这一处（design.md 5.3）。铺满整张卡（负边距盖住内边距），不吃点击。
+    #   平时透明度 0；鼠标进来 200ms 淡入、出去 200ms 淡出。
+    #   ★ 没有计时器 ★ 只在鼠标动的时候改一下圆心 —— 鼠标不在卡上时零开销。
+    $spot = New-Object System.Windows.Controls.Border
+    $spot.Margin = New-Thick -24
+    $spot.CornerRadius = New-Corner 12
+    $spot.IsHitTestVisible = $false
+    $spot.Opacity = 0
+    $rb = New-Object System.Windows.Media.RadialGradientBrush
+    $rb.MappingMode = 'Absolute'
+    $rb.RadiusX = 180; $rb.RadiusY = 180
+    $rb.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromArgb(36, 255, 255, 255)), 0.0))
+    $rb.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromArgb(0, 255, 255, 255)), 1.0))
+    $spot.Background = $rb
+    $root.Children.Add($spot) | Out-Null
+    $Script:HeroSpot = @{ Layer = $spot; Brush = $rb }
+
     $h.Child = $root
     $Script:HeroRoot = $root
+    if (-not $Script:HeroSpotHooked) {
+        # 卡片本身（DashHero）是 XAML 里的常驻元素，事件只挂一次；光斑层随卡片内容重建，走 $Script:HeroSpot
+        $Script:HeroSpotHooked = $true
+        $h.Add_MouseEnter({ if ($Script:HeroSpot) { Start-Fade $Script:HeroSpot.Layer 1 $Script:Dur.Base } })
+        $h.Add_MouseLeave({ if ($Script:HeroSpot) { Start-Fade $Script:HeroSpot.Layer 0 $Script:Dur.Base } })
+        $h.Add_MouseMove({
+                param($sender, $e)
+                if ($null -eq $Script:HeroSpot) { return }
+                $pt = $e.GetPosition($Script:HeroSpot.Layer)
+                # 直接赋值不加缓动：指针本身就在动，再给圆心加缓动，光斑会拖在手后面
+                $Script:HeroSpot.Brush.Center = $pt
+                $Script:HeroSpot.Brush.GradientOrigin = $pt
+            })
+    }
     if ($S) { Start-HeroScore 0 }
 }
 
