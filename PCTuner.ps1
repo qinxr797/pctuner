@@ -1809,6 +1809,48 @@ $xamlText = @'
          危险按钮用 {DynamicResource ButtonDanger}，都是库里现成的。
          ================================================================ -->
 
+    <!-- ================================================================
+         页签样式 —— ★ 全app唯一一个手写回来的控件模板 ★
+
+         v4.0 起样式全交给 HandyControl，这里破一次例，理由：
+         库自带的页签会在选中项下面画一条自己的指示线，位置和颜色都归它管。
+         而我们要的是一条**在页签之间滑过去**的指示条 —— 两条线并存必然打架，
+         所以得先把库那条收掉，自己画。
+
+         模板本身刻意做得极简：没有底色、没有圆角、没有药丸。
+         一排页签在报告单上就是一排栏目名，选中的那个字重一些、墨深一些，
+         剩下交给下面那条会滑动的线。
+         ================================================================ -->
+    <Style TargetType="TabItem" x:Key="ReportTab">
+      <Setter Property="Foreground" Value="{DynamicResource TextDim}"/>
+      <Setter Property="FontSize" Value="14.5"/>
+      <Setter Property="Padding" Value="15,9,15,11"/>
+      <Setter Property="Margin" Value="0,0,4,0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TabItem">
+            <Border x:Name="Bd" Background="Transparent" Padding="{TemplateBinding Padding}"
+                    SnapsToDevicePixels="True">
+              <ContentPresenter x:Name="Cp" ContentSource="Header"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                TextElement.Foreground="{TemplateBinding Foreground}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Cp" Property="TextElement.Foreground" Value="{DynamicResource TextMid}"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Cp" Property="TextElement.Foreground" Value="{DynamicResource TextMain}"/>
+                <Setter TargetName="Cp" Property="TextElement.FontWeight" Value="SemiBold"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
   </Window.Resources>
 
   <Grid>
@@ -1862,7 +1904,14 @@ $xamlText = @'
     </Border>
 
     <!-- ========== 主体 ========== -->
-    <TabControl Grid.Row="1" x:Name="Tabs" Background="Transparent" BorderThickness="0" Padding="0" Margin="14,10,14,0">
+    <!-- ★ ItemContainerStyle 必须显式指，光写隐式 Style 没用 ★
+           HandyControl 的 TabControl 样式自己 set 了 ItemContainerStyle，
+           而显式设的容器样式优先级高于隐式样式 ——
+           所以我们写的那个 TabItem 样式压根儿没生效，
+           页签下面一直是库的默认蓝 #326CF3，换什么皮肤都不变。 -->
+    <TabControl Grid.Row="1" x:Name="Tabs" Background="Transparent" BorderThickness="0" Padding="0" Margin="14,10,14,0"
+                ItemContainerStyle="{StaticResource ReportTab}">
+      <!-- 指示条见根 Grid 最后那层 TabInkLayer -->
 
       <!-- ================================================================
            概览（v4.1 新增，排第一页）
@@ -2302,7 +2351,20 @@ $xamlText = @'
                      Visibility="Collapsed" VerticalAlignment="Center" Margin="14,0,0,0"/>
       </Grid>
     </Border>
-  </Grid>
+  
+    <!-- ================================================================
+         页签指示条
+
+         一条会滑动的线。切页时它从上一个页签滑到下一个，220ms，缓出。
+         为什么值得专门做：这排页签有十个，瞬间跳的线只告诉你「现在在哪」，
+         滑过去的线还告诉你「你刚从哪儿来」—— 后者是免费的方向感。
+
+         IsHitTestVisible="False"：它压在所有东西上面，绝不能吃掉点击。
+         ================================================================ -->
+    <Canvas Grid.Row="0" Grid.RowSpan="3" x:Name="TabInkLayer" IsHitTestVisible="False">
+      <Rectangle x:Name="TabInk" Height="2.5" Width="0" Fill="{DynamicResource TextMain}" Visibility="Collapsed"/>
+    </Canvas>
+</Grid>
 </Window>
 '@
 
@@ -2344,7 +2406,8 @@ foreach ($n in @(
         'RecentRunPanel', 'BtnRecentRuns', 'BtnEnableTaskLog',
         'BtnWatchStart', 'BtnWatchStop', 'BtnProcAudit', 'BtnProcLog', 'WatchStatus',
         'InfoPanel', 'AdvicePanel', 'BtnHealthScan', 'BtnFpsDiag', 'BtnOcCoach', 'BtnVendor', 'BtnAddExclusion', 'BtnSfc', 'BtnCopyReport', 'BtnExportReport',
-        'LogPanel', 'LogScroll', 'BtnOpenBackup', 'BtnCopyLog', 'StatusText', 'BusyBar')) {
+        'LogPanel', 'LogScroll', 'BtnOpenBackup', 'BtnCopyLog', 'StatusText', 'BusyBar',
+        'TabInkLayer', 'TabInk')) {
     $Script:UI[$n] = $Script:Window.FindName($n)
 }
 # ---------------------------------------------------------------------
@@ -5690,6 +5753,7 @@ $Script:Window.Add_ContentRendered({
         Build-RecentRuns
         Set-InspectEmpty        # 弹窗排查页扫描前的空状态
         Build-LogUI             # 把窗口出来之前记下的那几条日志补画出来
+        try { Update-TabInk $false } catch { }
         Build-ThemeUI
         # 概览页：先建壳子再开硬件监控。
         # Initialize-Dash 要枚举全部硬件，实测约 3 秒，所以放在
@@ -5715,12 +5779,89 @@ $Script:Window.Add_ContentRendered({
 #    页面里任何一个下拉框、列表变了选择都会触发到这里，
 #    所以必须判断事件源是不是 TabControl 本身，否则会反复重扫。
 # ---------------------------------------------------------------------
+# ---------------------------------------------------------------------
+#  页签指示条：滑过去，不是跳过去
+# ---------------------------------------------------------------------
+function Update-TabInk {
+    <#
+      把指示条挪到当前页签底下。
+        $Animate = $false 时直接落位（窗口刚出来、拉伸窗口时用），
+        $true 时用 220ms 缓出滑过去。
+
+      ★ 位置必须现算 ★
+        页签宽度随字数变，窗口一拉伸整排都会挪。
+        写死坐标的话换一套字体、改一个页签名就全歪了。
+    #>
+    param([bool]$Animate = $true)
+    $ink = $Script:UI.TabInk
+    $layer = $Script:UI.TabInkLayer
+    if ($null -eq $ink -or $null -eq $layer) { return }
+    $item = $Script:UI.Tabs.SelectedItem -as [System.Windows.Controls.TabItem]
+    if ($null -eq $item -or -not $item.IsVisible) { return }
+
+    # ★ 不能向 $layer 求变换 ★
+    #   TransformToAncestor 要求对方真是祖先，而这层 Canvas 是页签的**兄弟**。
+    #   向它求会抛异常，而且被 catch 吞掉 —— 表现是指示条永远不出现，不报错。
+    #   改向根 Grid 求；Canvas 跨满整个根 Grid，两者原点重合，坐标直接用。
+    $root = $layer.Parent
+    if ($null -eq $root) { return }
+    try {
+        $pt = $item.TransformToAncestor($root).Transform((New-Object System.Windows.Point 0, 0))
+    } catch { return }
+    $w = $item.ActualWidth
+    $h = $item.ActualHeight
+    if ($w -le 0) { return }
+
+    # 线画在页签文字下面一点，不贴着底边 —— 贴着会和下面的内容挤在一起
+    $top = $pt.Y + $h - 3
+    [System.Windows.Controls.Canvas]::SetTop($ink, $top)
+    $ink.Visibility = 'Visible'
+
+    $fromX = [double][System.Windows.Controls.Canvas]::GetLeft($ink)
+    if ([double]::IsNaN($fromX)) { $fromX = $pt.X }
+
+    if (-not $Animate -or -not $Script:AnimEnabled) {
+        [System.Windows.Controls.Canvas]::SetLeft($ink, $pt.X)
+        $ink.Width = $w
+        return
+    }
+
+    # ★ 动 Canvas.Left 而不是 RenderTransform ★
+    #   Canvas 上的元素不参与布局，改 Left 不会触发任何重排；
+    #   而且 Left 是附加属性，动画目标要写成 (Canvas.Left)。
+    $ease = New-Object System.Windows.Media.Animation.CubicEase
+    $ease.EasingMode = 'EaseOut'
+    $dur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(220))
+
+    $aL = New-Object System.Windows.Media.Animation.DoubleAnimation
+    $aL.From = $fromX; $aL.To = $pt.X; $aL.Duration = $dur; $aL.EasingFunction = $ease
+    $aW = New-Object System.Windows.Media.Animation.DoubleAnimation
+    $aW.From = $ink.ActualWidth; $aW.To = $w; $aW.Duration = $dur; $aW.EasingFunction = $ease
+
+    $sb = New-Object System.Windows.Media.Animation.Storyboard
+    [System.Windows.Media.Animation.Storyboard]::SetTarget($aL, $ink)
+    [System.Windows.Media.Animation.Storyboard]::SetTargetProperty($aL,
+        (New-Object System.Windows.PropertyPath '(Canvas.Left)'))
+    [System.Windows.Media.Animation.Storyboard]::SetTarget($aW, $ink)
+    [System.Windows.Media.Animation.Storyboard]::SetTargetProperty($aW,
+        (New-Object System.Windows.PropertyPath 'Width'))
+    $sb.Children.Add($aL) | Out-Null
+    $sb.Children.Add($aW) | Out-Null
+    $sb.Begin()
+}
+
 $Script:AppxBuilt = $false
 $Script:UI.Tabs.Add_SelectionChanged({
         param($sender, $e)
         if ($e.OriginalSource -ne $Script:UI.Tabs) { return }
         # 切页签时让新页面淡入，比瞬间闪过去舒服
         try { Start-FadeSlideIn $Script:UI.Tabs.SelectedContent -Ms 160 -SlideY 6 } catch { }
+        # 指示条滑到新页签底下。要排到布局算完之后，不然拿到的是旧宽度。
+        try {
+            $Script:Window.Dispatcher.BeginInvoke(
+                [System.Windows.Threading.DispatcherPriority]::Loaded,
+                [action] { Update-TabInk $true }) | Out-Null
+        } catch { }
         $header = "$($Script:UI.Tabs.SelectedItem.Header)"
         # 只有停在概览页才轮询传感器，切走立刻停 ——
         # 全量刷新一次 100ms，一直跑等于工具自己变成最大的后台负担
@@ -5769,6 +5910,8 @@ try {
     if ($h -ne [IntPtr]::Zero) { [PCTuner.ConsoleWin]::ShowWindow($h, 0) | Out-Null }
 } catch { }
 
+# 窗口一拉伸，整排页签就挪位置了，指示条得跟着走（不动画，跟手才对）
+$Script:Window.Add_SizeChanged({ try { Update-TabInk $false } catch { } })
 $Script:Window.Add_Closed({ try { if ($Script:WatchTimer) { $Script:WatchTimer.Stop() }; Stop-ProcWatch } catch { } })
 $Script:Window.Add_Closed({ try { Stop-DashTimer; Close-Dash } catch { } })
 
