@@ -1,0 +1,697 @@
+<title>动效试玩台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/*
+  这页故意不理会 prefers-reduced-motion：老板的电脑关着 Windows「显示动画」，
+  浏览器会报 reduce —— 照规矩停掉动画的话，这个试玩台就什么都看不到了。
+*/
+@property --ang { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+
+:root {
+  --bg: #F3F4F9;
+  --card: #FFFFFF;
+  --sunken: #F7F8FC;
+  --line: #E4E6EF;
+  --line-strong: #CFD2E2;
+  --text: #1D1F45;
+  --mid: #4A4D6B;
+  --dim: #7A7E98;
+  --accent: #5B5FD6;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #ECEDFC;
+  --accent-glow: rgba(91, 95, 214, .18);
+  --ok: #17905D;
+  --ok-soft: #E2F4EB;
+  --have: #17905D;
+  --have-soft: #E2F4EB;
+  --mid-tag: #8A6212;
+  --mid-soft: #FBF1DC;
+  --hard: #B04A12;
+  --hard-soft: #FCEBDF;
+  --shadow-lift: 0 14px 30px -12px rgba(29, 31, 69, .28);
+  --shine: rgba(255, 255, 255, .55);
+
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --spring-soft: cubic-bezier(.34, 1.56, .64, 1);
+  --spring: linear(0, 0.009, 0.035 2.1%, 0.141, 0.281 6.7%, 0.723 12.9%, 0.938 16.7%, 1.017, 1.077, 1.121, 1.149 24.3%, 1.159, 1.163, 1.161, 1.154 29.9%, 1.129 32.8%, 1.051 39.6%, 1.017 43.1%, 0.991, 0.977 51%, 0.974 53.8%, 0.975 57.1%, 0.997 69.8%, 1.003 76.9%, 1);
+
+  /* 全局按压手感 —— 在「先定手感」里选了之后会被改写 */
+  --down-d: 90ms;
+  --down-e: var(--ease-out);
+  --rel-d: 220ms;
+  --rel-e: var(--ease-out);
+  --press-s: .95;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #11121A; --card: #1A1C27; --sunken: #15161F; --line: #2A2C3B; --line-strong: #3B3E53;
+    --text: #ECEDF7; --mid: #BABDD3; --dim: #9093AB;
+    --accent: #8C8FF3; --accent-ink: #14152A; --accent-soft: #25274A; --accent-glow: rgba(140, 143, 243, .24);
+    --ok: #45C68F; --ok-soft: #16332A; --have: #45C68F; --have-soft: #16332A;
+    --mid-tag: #E5B65A; --mid-soft: #362B15; --hard: #F0996A; --hard-soft: #3A2417;
+    --shadow-lift: 0 14px 30px -12px rgba(0, 0, 0, .7); --shine: rgba(255, 255, 255, .35);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #11121A; --card: #1A1C27; --sunken: #15161F; --line: #2A2C3B; --line-strong: #3B3E53;
+  --text: #ECEDF7; --mid: #BABDD3; --dim: #9093AB;
+  --accent: #8C8FF3; --accent-ink: #14152A; --accent-soft: #25274A; --accent-glow: rgba(140, 143, 243, .24);
+  --ok: #45C68F; --ok-soft: #16332A; --have: #45C68F; --have-soft: #16332A;
+  --mid-tag: #E5B65A; --mid-soft: #362B15; --hard: #F0996A; --hard-soft: #3A2417;
+  --shadow-lift: 0 14px 30px -12px rgba(0, 0, 0, .7); --shine: rgba(255, 255, 255, .35);
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "DM Sans", "Noto Sans SC", "MiSans", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 40px 20px 140px; display: grid; gap: 44px; }
+
+.top { display: grid; gap: 10px; max-width: 680px; }
+.eyebrow { margin: 0; font-size: 12px; letter-spacing: .08em; color: var(--accent); font-weight: 600; }
+h1 { margin: 0; font-size: 34px; line-height: 1.2; letter-spacing: -.01em; text-wrap: balance; }
+.lede { margin: 0; color: var(--mid); font-size: 15px; }
+.note { margin: 0; color: var(--dim); font-size: 13px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+
+section { display: grid; gap: 16px; }
+.sec-head { display: grid; gap: 4px; }
+h2 { margin: 0; font-size: 20px; line-height: 1.3; }
+.sec-sub { margin: 0; color: var(--dim); max-width: 680px; }
+
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); align-items: start; }
+
+.fx { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; display: grid; transition: border-color 200ms var(--ease-out), box-shadow 200ms var(--ease-out); }
+.fx.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.fx-stage { min-height: 184px; display: grid; place-items: center; padding: 24px 20px; background: var(--sunken); border-bottom: 1px solid var(--line); position: relative; overflow: hidden; }
+.fx-body { padding: 14px 16px 4px; display: grid; gap: 4px; }
+.fx-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fx-id { font-size: 12px; font-weight: 700; color: var(--dim); font-variant-numeric: tabular-nums; }
+h3 { margin: 0; font-size: 15px; }
+.tag { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; font-weight: 500; margin-left: auto; }
+.tag.have { color: var(--have); background: var(--have-soft); }
+.tag.easy { color: var(--accent); background: var(--accent-soft); }
+.tag.mid { color: var(--mid-tag); background: var(--mid-soft); }
+.tag.hard { color: var(--hard); background: var(--hard-soft); }
+.fx-desc { margin: 0; color: var(--mid); }
+.fx-use { margin: 0; color: var(--dim); font-size: 12.5px; }
+.pick { display: flex; align-items: center; gap: 8px; padding: 10px 16px 14px; cursor: pointer; color: var(--mid); font-weight: 500; user-select: none; }
+.pick input, .feel-pick input, .opt input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; cursor: pointer; }
+.fx.picked .pick { color: var(--accent); }
+
+/* ---------- 通用按钮 / 小卡 ---------- */
+.btn { height: 42px; padding: 0 20px; border-radius: 12px; border: 0; background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 600; cursor: pointer; position: relative; overflow: hidden; -webkit-tap-highlight-color: transparent; }
+.btn.ghost { background: var(--card); color: var(--text); border: 1px solid var(--line); }
+.btn:focus-visible, .mini:focus-visible, .sw:focus-visible, .ib:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.press { transition: transform var(--rel-d) var(--rel-e); }
+.press.down { transform: scale(var(--press-s)); transition: transform var(--down-d) var(--down-e); }
+
+.mini { width: min(100%, 260px); background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; display: flex; gap: 12px; align-items: center; position: relative; overflow: hidden; cursor: pointer; user-select: none; text-align: left; font: inherit; color: inherit; }
+.mini .ico { width: 38px; height: 38px; flex: none; border-radius: 10px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; position: relative; z-index: 1; }
+.mini .ico svg { width: 20px; height: 20px; }
+.mini .txt { display: grid; gap: 1px; position: relative; z-index: 1; min-width: 0; }
+.mini .t1 { font-weight: 600; font-size: 14px; }
+.mini .t2 { font-size: 12px; color: var(--dim); }
+svg.i { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- 手感 ---------- */
+.feel-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.feel-card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; transition: border-color 200ms var(--ease-out), box-shadow 200ms var(--ease-out); }
+.feel-card.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.feel-card .fx-stage { min-height: 140px; }
+.feel-card .btn { height: 48px; padding: 0 28px; }
+.feel-pick { display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px 14px; cursor: pointer; }
+.feel-pick input { margin-top: 4px; }
+.feel-pick b { display: block; font-size: 14.5px; }
+.feel-pick span span { color: var(--dim); font-size: 13px; }
+.f-linear { --down-d: 120ms; --down-e: linear; --rel-d: 160ms; --rel-e: linear; --press-s: .9; }
+.f-ease   { --down-d: 90ms; --down-e: var(--ease-out); --rel-d: 240ms; --rel-e: var(--ease-out); --press-s: .9; }
+.f-spring { --down-d: 90ms; --down-e: var(--ease-out); --rel-d: 620ms; --rel-e: var(--spring); --press-s: .9; }
+
+/* B1 水波纹 */
+.ripple { position: absolute; border-radius: 50%; background: currentColor; pointer-events: none; opacity: 0; }
+
+/* B2 磁吸 */
+.magnet-zone { width: 100%; height: 136px; display: grid; place-items: center; border: 1px dashed var(--line-strong); border-radius: 12px; }
+.magnet { transition: transform 160ms var(--ease-out); }
+.magnet.back { transition: transform 600ms var(--spring); }
+.magnet .lbl { display: inline-block; transition: transform 160ms var(--ease-out); }
+.magnet.back .lbl { transition: transform 600ms var(--spring); }
+
+/* B3 加载→成功 */
+.morph { width: 150px; height: 46px; border-radius: 23px; padding: 0; display: grid; place-items: center; transition: width 360ms var(--ease-out), background-color 260ms var(--ease-out); }
+.morph .lbl { transition: opacity 140ms linear; white-space: nowrap; }
+.morph.loading, .morph.done { width: 46px; }
+.morph.loading .lbl, .morph.done .lbl { opacity: 0; }
+.morph .spin, .morph .ok { position: absolute; inset: 0; margin: auto; width: 22px; height: 22px; opacity: 0; transition: opacity 160ms linear; }
+.morph.loading .spin { opacity: 1; animation: rot 800ms linear infinite; }
+.morph.done { background: var(--ok); }
+.morph.done .ok { opacity: 1; }
+.morph .ok path { stroke-dasharray: 24; stroke-dashoffset: 24; }
+.morph.done .ok path { stroke-dashoffset: 0; transition: stroke-dashoffset 320ms var(--ease-out) 120ms; }
+@keyframes rot { to { transform: rotate(360deg); } }
+
+/* B4 高光扫过 */
+.shine::after { content: ""; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 30%, var(--shine) 50%, transparent 70%); transform: translateX(-130%); pointer-events: none; }
+.shine:hover::after { transform: translateX(130%); transition: transform 800ms var(--ease-out); }
+
+/* C1 悬停上浮 */
+.lift { transition: transform 260ms var(--ease-out), box-shadow 260ms var(--ease-out), border-color 260ms var(--ease-out); }
+.lift:hover { transform: translateY(-5px); box-shadow: var(--shadow-lift); border-color: var(--line-strong); }
+.lift:active { transform: translateY(-2px) scale(.985); transition-duration: 90ms; }
+
+/* C2 光斑跟随 */
+.spot::before { content: ""; position: absolute; inset: 0; background: radial-gradient(180px circle at var(--x, 50%) var(--y, 50%), var(--accent-glow), transparent 70%); opacity: 0; transition: opacity 300ms var(--ease-out); pointer-events: none; }
+.spot:hover::before { opacity: 1; }
+
+/* C3 点击光圈 */
+.ring { position: absolute; border-radius: 50%; border: 2px solid var(--accent); background: var(--accent-glow); pointer-events: none; opacity: 0; }
+
+/* C4 选中描边 + 对勾 */
+.sel-card { transition: border-color 200ms var(--ease-out), box-shadow 200ms var(--ease-out), transform var(--rel-d) var(--rel-e); overflow: visible; }
+.sel-card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 0 6px var(--accent-glow); }
+.badge { position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; transform: scale(0); transition: transform 180ms var(--ease-out); z-index: 2; }
+.sel-card.sel .badge { transform: scale(1); transition: transform 520ms var(--spring); }
+.badge svg { width: 14px; height: 14px; stroke-width: 3; }
+.badge path { stroke-dasharray: 20; stroke-dashoffset: 20; transition: stroke-dashoffset 120ms linear; }
+.sel-card.sel .badge path { stroke-dashoffset: 0; transition: stroke-dashoffset 260ms var(--ease-out) 140ms; }
+
+/* C5 描边流光 */
+.flow { position: relative; border-radius: 15px; padding: 1.5px; background: var(--line); width: min(100%, 263px); }
+.flow::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background: conic-gradient(from var(--ang), transparent 0 62%, var(--accent) 82%, transparent 100%); opacity: 0; transition: opacity 400ms var(--ease-out); }
+.flow:hover::before { opacity: 1; animation: spin 2.6s linear infinite; }
+@keyframes spin { to { --ang: 360deg; } }
+.flow .mini { width: 100%; border: 0; border-radius: 14px; }
+
+/* C6 3D 倾斜 */
+.tilt { transition: transform 160ms var(--ease-out); transform: perspective(700px); will-change: transform; }
+.tilt.back { transition: transform 700ms var(--spring); }
+.tilt::after { content: ""; position: absolute; inset: 0; background: radial-gradient(220px circle at var(--x, 50%) var(--y, 0%), rgba(255, 255, 255, .45), transparent 60%); opacity: 0; transition: opacity 300ms; pointer-events: none; mix-blend-mode: soft-light; }
+.tilt:hover::after { opacity: 1; }
+
+/* C7 点开展开 */
+.exp { display: grid; grid-template-columns: auto 1fr auto; }
+.exp .chev { margin-left: auto; color: var(--dim); transition: transform 320ms var(--ease-out); position: relative; z-index: 1; }
+.exp.open .chev { transform: rotate(180deg); }
+.exp .more { grid-column: 1 / -1; display: grid; grid-template-rows: 0fr; transition: grid-template-rows 320ms var(--ease-out); }
+.exp.open .more { grid-template-rows: 1fr; }
+.exp .more > div { overflow: hidden; }
+.exp .more p { margin: 10px 0 0; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--mid); opacity: 0; transform: translateY(-4px); transition: opacity 200ms var(--ease-out), transform 260ms var(--ease-out); }
+.exp.open .more p { opacity: 1; transform: none; transition-delay: 90ms; }
+
+/* D1 弹簧开关 */
+.sw-list { display: grid; gap: 14px; width: min(100%, 260px); }
+.sw-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--mid); }
+.sw { width: 46px; height: 26px; border-radius: 13px; border: 0; padding: 0; background: var(--line-strong); position: relative; cursor: pointer; flex: none; transition: background-color 240ms var(--ease-out); }
+.sw.on { background: var(--accent); }
+.sw .knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 10px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transition: transform 520ms var(--spring), width 200ms var(--ease-out); }
+.sw.on .knob { transform: translateX(20px); }
+.sw.down .knob { width: 26px; }
+.sw.on.down .knob { transform: translateX(14px); }
+
+/* D2 画勾勾选框 */
+.ck-list { display: grid; gap: 12px; width: min(100%, 260px); }
+.ck { display: flex; gap: 10px; align-items: center; cursor: pointer; color: var(--mid); user-select: none; }
+.ck input { position: absolute; opacity: 0; pointer-events: none; }
+.ck .box { width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--line-strong); display: grid; place-items: center; flex: none; background: var(--card); transition: background-color 160ms var(--ease-out), border-color 160ms var(--ease-out); color: var(--accent-ink); }
+.ck .box svg { width: 14px; height: 14px; stroke-width: 3; }
+.ck .box path { stroke-dasharray: 20; stroke-dashoffset: 20; transition: stroke-dashoffset 120ms linear; }
+.ck input:checked + .box { background: var(--accent); border-color: var(--accent); animation: pop 460ms var(--spring); }
+.ck input:checked + .box path { stroke-dashoffset: 0; transition: stroke-dashoffset 260ms var(--ease-out) 60ms; }
+.ck input:focus-visible + .box { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ck .sz { margin-left: auto; color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+@keyframes pop { 0% { transform: scale(.8); } 100% { transform: scale(1); } }
+
+/* D3 点击火花 */
+.spark-zone { width: 100%; height: 136px; border: 1px dashed var(--line-strong); border-radius: 12px; display: grid; place-items: center; color: var(--dim); cursor: pointer; position: relative; user-select: none; }
+.spark { position: absolute; width: 0; height: 0; pointer-events: none; }
+.spark i { position: absolute; left: -1px; top: 0; width: 2.5px; height: 9px; border-radius: 2px; background: var(--accent); transform-origin: 50% 0; }
+
+/* D4 数字滚动 */
+.score { display: flex; align-items: center; gap: 18px; }
+.score svg { width: 96px; height: 96px; transform: rotate(-90deg); }
+.score .track { stroke: var(--line); }
+.score .arc { stroke: var(--accent); stroke-linecap: round; }
+.score .num { font-size: 40px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.score .unit { font-size: 13px; color: var(--dim); }
+.score .col { display: grid; gap: 10px; justify-items: start; }
+
+/* D5 列表依次进场 */
+.rows { width: min(100%, 270px); display: grid; gap: 6px; }
+.rowi { display: flex; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 7px 12px; font-size: 13px; }
+.rowi .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
+.rowi .dot.off { background: var(--line-strong); }
+.rowi .st { margin-left: auto; color: var(--dim); font-size: 12px; }
+
+/* D6 提示条 */
+.toast { position: absolute; right: 14px; bottom: 14px; left: 14px; max-width: 280px; margin-left: auto; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px 12px; display: grid; gap: 2px; box-shadow: var(--shadow-lift); overflow: hidden; transform: translateY(160%); }
+.toast b { font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+.toast b::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.toast span { font-size: 12px; color: var(--dim); }
+.toast .timer { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--accent); transform-origin: left; }
+
+/* D7 图标微动 */
+.ib-row { display: flex; gap: 14px; }
+.ib { width: 52px; height: 52px; border-radius: 14px; border: 1px solid var(--line); background: var(--card); color: var(--accent); display: grid; place-items: center; cursor: pointer; }
+.ib svg { width: 22px; height: 22px; }
+.ib.r svg { transition: transform 600ms var(--spring-soft); }
+.ib.r:hover svg { transform: rotate(180deg); }
+.ib.w:hover svg { animation: wig 520ms var(--ease-out); }
+.ib.z:hover svg { animation: zap 520ms var(--ease-out); }
+@keyframes wig { 0% { transform: rotate(0); } 20% { transform: rotate(-14deg); } 45% { transform: rotate(11deg); } 70% { transform: rotate(-6deg); } 100% { transform: rotate(0); } }
+@keyframes zap { 0% { transform: scale(1); } 35% { transform: scale(1.22) translateY(-2px); } 100% { transform: scale(1); } }
+.ib-cap { display: grid; gap: 10px; justify-items: center; }
+.ib-cap small { color: var(--dim); font-size: 12px; }
+
+/* D8 进度条 */
+.prog { width: min(100%, 270px); display: grid; gap: 10px; }
+.prog .bar { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
+.prog .fill { height: 100%; width: 0%; border-radius: 5px; background: var(--accent); transition: width 420ms var(--ease-out), background-color 300ms var(--ease-out); background-image: linear-gradient(115deg, rgba(255,255,255,.22) 25%, transparent 25% 50%, rgba(255,255,255,.22) 50% 75%, transparent 75%); background-size: 22px 22px; }
+.prog .fill.run { animation: stripe 700ms linear infinite; }
+.prog .fill.done { background-color: var(--ok); background-image: none; }
+.prog .meta { display: flex; justify-content: space-between; align-items: center; color: var(--mid); font-size: 13px; font-variant-numeric: tabular-nums; }
+@keyframes stripe { to { background-position: 22px 0; } }
+
+/* ---------- 最后两件事 ---------- */
+.last { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px; display: grid; gap: 18px; }
+.q { display: grid; gap: 8px; }
+.q > b { font-size: 15px; }
+.q > p { margin: 0; color: var(--dim); }
+.opts { display: grid; gap: 8px; }
+.opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.opt input { margin-top: 3px; }
+.opt span span { display: block; color: var(--dim); font-size: 13px; }
+.opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+textarea { width: 100%; min-height: 76px; resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; color: var(--text); background: var(--sunken); }
+textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- 底栏 ---------- */
+.dock { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); width: min(100% - 24px, 720px); margin-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 10px 10px 10px 18px; display: flex; align-items: center; gap: 14px; box-shadow: var(--shadow-lift); z-index: 10; flex-wrap: wrap; }
+.dock .sum { color: var(--mid); flex: 1; min-width: 180px; }
+.dock .sum b { color: var(--text); font-variant-numeric: tabular-nums; }
+.dock .msg { color: var(--ok); font-size: 13px; }
+#fallback { position: fixed; left: 12px; right: 12px; bottom: 90px; z-index: 11; min-height: 140px; background: var(--card); box-shadow: var(--shadow-lift); }
+
+@media (max-width: 520px) {
+  h1 { font-size: 28px; }
+  .wrap { padding-top: 28px; }
+  .dock { padding-left: 14px; }
+}
+</style>
+
+<main class="wrap">
+  <header class="top">
+    <p class="eyebrow">电脑调优助手 v6.0 · 交互动效选型</p>
+    <h1>动效试玩台</h1>
+    <p class="lede">每张卡片都能悬停、能点、能连点。喜欢的勾上「要这个」，最后点底栏的「复制给秘书」，粘贴发给我就行。</p>
+    <p class="note">这页故意无视 Windows 的「显示动画」开关。你电脑关着它，照规矩浏览器会把动画全停掉，那就什么都看不到了。右上角标签是我对「搬进 WPF 好不好做」的判断。</p>
+  </header>
+
+  <section id="feel">
+    <div class="sec-head">
+      <h2>先定手感</h2>
+      <p class="sec-sub">同一个按下动作，三种回弹曲线。按住再松开，快速连点也试试。选中之后，下面所有能按的东西都会换成这个手感。</p>
+    </div>
+    <div class="feel-grid">
+      <div class="feel-card" data-feel="A1">
+        <div class="fx-stage"><button class="btn press f-linear" type="button">按住我</button></div>
+        <label class="feel-pick"><input type="radio" name="feel" value="A1" id="feel-A1"><span><b>A1 线性</b><span>匀速缩、匀速回，硬邦邦的，像机械开关</span></span></label>
+      </div>
+      <div class="feel-card" data-feel="A2">
+        <div class="fx-stage"><button class="btn press f-ease" type="button">按住我</button></div>
+        <label class="feel-pick"><input type="radio" name="feel" value="A2" id="feel-A2"><span><b>A2 缓出</b><span>起步快、收尾轻，干脆利落，Win11 和 Linear 都是这个路子</span></span></label>
+      </div>
+      <div class="feel-card" data-feel="A3">
+        <div class="fx-stage"><button class="btn press f-spring" type="button">按住我</button></div>
+        <label class="feel-pick"><input type="radio" name="feel" value="A3" id="feel-A3"><span><b>A3 弹簧</b><span>松手时稍微弹过头再回来，有肉感，像 iPhone</span></span></label>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>按钮</h2><p class="sec-sub">点下去那一瞬间的反馈。</p></div>
+    <div class="grid" id="g-btn"></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>卡片</h2><p class="sec-sub">你软件里的优化项、清理项都是卡片，这组决定整个界面「摸起来」的感觉。</p></div>
+    <div class="grid" id="g-card"></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>小控件和反馈</h2><p class="sec-sub">开关、勾选、进度、完成提示这些零碎的地方，做好了最显精致。</p></div>
+    <div class="grid" id="g-ctl"></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>最后两件事</h2></div>
+    <div class="last">
+      <div class="q">
+        <b>你电脑关着 Windows 的「显示动画」，软件现在检测到就会自动砍掉位移动效。以后怎么处理？</b>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="sys" value="照播" id="sys-on"><span>照播，别管系统设置<span>和作品集站一样处理，你看到的就是完整效果</span></span></label>
+          <label class="opt"><input type="radio" name="sys" value="减弱" id="sys-off"><span>保持现在，关了就减弱<span>照顾晕动症用户，但你自己的电脑上会少一截动画</span></span></label>
+        </div>
+      </div>
+      <div class="q">
+        <b>还想补充的</b>
+        <p>比如「A3 再弹得轻一点」「C2 的光斑要更明显」，没有就空着。</p>
+        <textarea id="note" placeholder="随便写"></textarea>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="dock" role="region" aria-label="已选结果">
+  <div class="sum">已选 <b id="count">0</b> 项 · 手感 <b id="feelName">未选</b> <span class="msg" id="msg"></span></div>
+  <button class="btn press" type="button" id="copy">复制给秘书</button>
+</div>
+<textarea id="fallback" hidden readonly aria-label="选择结果"></textarea>
+
+<script>
+const IC = {
+  zap: '<svg class="i" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
+  trash: '<svg class="i" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  refresh: '<svg class="i" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
+  chip: '<svg class="i" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>',
+  rocket: '<svg class="i" viewBox="0 0 24 24"><path d="M5 19l3-1 8-8a4 4 0 0 0-6-6l-8 8-1 3z"/><path d="M14 6l4 4"/></svg>',
+  shield: '<svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>',
+  down: '<svg class="i" viewBox="0 0 24 24" width="18" height="18"><path d="M6 9l6 6 6-6"/></svg>',
+  check: '<svg class="i" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+};
+const mini = (ico, t1, t2, cls = '', extra = '') =>
+  `<button type="button" class="mini ${cls}"><span class="ico">${IC[ico]}</span><span class="txt"><span class="t1">${t1}</span><span class="t2">${t2}</span></span>${extra}</button>`;
+
+const FX = {
+  'g-btn': [
+    { id: 'B1', name: '水波纹', tag: 'have', desc: '从鼠标点的位置荡开一圈波纹。MDIX 自带，现在按钮上就有，只是很淡。', use: '适合：所有按钮，可以调浓一点',
+      stage: '<button class="btn press rip" type="button">一键优化</button>' },
+    { id: 'B2', name: '磁吸按钮', tag: 'mid', desc: '鼠标靠近时按钮被吸过去一点，离开时弹回原位。', use: '适合：只给最重要的那一个按钮，比如「一键优化」',
+      stage: '<div class="magnet-zone"><button class="btn magnet" type="button"><span class="lbl">把鼠标移过来</span></button></div>' },
+    { id: 'B3', name: '加载变成功', tag: 'mid', desc: '点了之后按钮缩成转圈，干完变成绿色对勾，再恢复原样。', use: '适合：一键清理、一键优化、还原设置这类要等几秒的操作',
+      stage: '<button class="btn morph" type="button"><span class="lbl">一键清理</span><svg class="spin i" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 1-9 9" /></svg><svg class="ok i" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>' },
+    { id: 'B4', name: '高光扫过', tag: 'easy', desc: '悬停时一道光从左扫到右，只扫一次。', use: '适合：主按钮，提示「这是该点的那个」',
+      stage: '<button class="btn press shine" type="button">开始体检</button>' },
+  ],
+  'g-card': [
+    { id: 'C1', name: '悬停上浮', tag: 'easy', desc: '鼠标放上去，卡片往上抬一点，阴影变深；按下时压回去一点。', use: '适合：所有可点的卡片',
+      stage: mini('zap', '关闭后台预读', '释放约 300 MB 内存', 'lift') },
+    { id: 'C2', name: '光斑跟随', tag: 'mid', desc: '卡片里有一团淡淡的光，跟着鼠标走。', use: '适合：概览页的大卡片，别每张都加',
+      stage: mini('chip', 'CPU 42°C', '负载 18% · 风扇 1200 转', 'press spot') },
+    { id: 'C3', name: '点击光圈', tag: 'easy', desc: '点哪里，就从哪里扩散出一圈强调色的光环，比水波纹更醒目。', use: '适合：点了会跳转或者会执行操作的卡片',
+      stage: mini('trash', '垃圾清理', '可清理 2.4 GB', 'press ringer') },
+    { id: 'C4', name: '选中描边 + 对勾', tag: 'easy', desc: '点一下，描边变成强调色，右上角弹出一个对勾；再点取消。', use: '适合：优化项、预设方案这类多选卡片',
+      stage: mini('rocket', '游戏模式预设', '6 项优化', 'press sel-card', `<span class="badge">${IC.check}</span>`) },
+    { id: 'C5', name: '描边流光', tag: 'mid', desc: '悬停时一道光沿着卡片边框绕圈跑。', use: '适合：推荐项、「当前方案」这种要特别强调的一张',
+      stage: `<div class="flow">${mini('shield', '推荐方案', '适合你这台电脑', 'press')}</div>` },
+    { id: 'C6', name: '3D 倾斜', tag: 'hard', desc: '卡片跟着鼠标位置往那一侧倾斜，带一点反光。', use: 'WPF 没有网页这种 3D 透视，要硬凑，工作量大，而且容易发虚',
+      stage: mini('chip', '显卡 RTX 4060', '占用 31% · 58°C', 'tilt') },
+    { id: 'C7', name: '点开展开', tag: 'easy', desc: '点卡片，下面平滑展开详情，箭头跟着转。', use: '适合：每个优化项的「改了什么、有什么代价」说明',
+      stage: mini('zap', '关闭 Windows 搜索索引', '点开看代价', 'press exp',
+        `<span class="chev">${IC.down}</span><span class="more"><div><p>代价：开始菜单里搜文件会慢 1～2 秒。机械硬盘提升明显，固态硬盘基本无感。</p></div></span>`) },
+  ],
+  'g-ctl': [
+    { id: 'D1', name: '弹簧开关', tag: 'easy', desc: '圆点滑过去时带一点回弹；按住时圆点会拉长，像 iPhone 的开关。', use: '适合：个性化页和所有开关项',
+      stage: '<div class="sw-list"><div class="sw-row">关闭游戏录制<button class="sw press-sw" type="button" role="switch" aria-checked="false" aria-label="关闭游戏录制"><span class="knob"></span></button></div><div class="sw-row">硬件加速 GPU 计划<button class="sw on press-sw" type="button" role="switch" aria-checked="true" aria-label="硬件加速 GPU 计划"><span class="knob"></span></button></div></div>' },
+    { id: 'D2', name: '画勾勾选框', tag: 'easy', desc: '勾选时方框先弹一下，对勾再一笔画出来。', use: '适合：垃圾清理、自带软件卸载的勾选列表',
+      stage: `<div class="ck-list">${[['临时文件', '1.2 GB', 1], ['浏览器缓存', '640 MB', 0], ['回收站', '310 MB', 0]].map(([a, b, c], i) =>
+        `<label class="ck"><input type="checkbox" id="ck-${i}" ${c ? 'checked' : ''}><span class="box">${IC.check}</span>${a}<span class="sz">${b}</span></label>`).join('')}</div>` },
+    { id: 'D3', name: '点击火花', tag: 'mid', desc: '点下去的位置迸出一圈小火花，很快消失。', use: '适合：完成类操作的那一下，比如清理完成、优化成功；到处都放会显得吵',
+      stage: '<div class="spark-zone">在这片区域里随便点</div>' },
+    { id: 'D4', name: '数字滚动', tag: 'have', desc: '数字从 0 滚到结果，圆环同步画满。代码里已经有滚数字的函数，圆环是新加的。', use: '适合：健康分、可清理空间、温度这类读数',
+      stage: '<div class="score"><svg viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="42" fill="none" stroke-width="8"/><circle class="arc" cx="50" cy="50" r="42" fill="none" stroke-width="8"/></svg><div class="col"><div><span class="num">87</span> <span class="unit">分</span></div><button class="btn ghost press replay-score" type="button">重新体检</button></div></div>' },
+    { id: 'D5', name: '列表依次进场', tag: 'easy', desc: '切到页面时，列表一行接一行地滑进来，不是一下子全冒出来。', use: '适合：启动项、自带软件、操作日志这类列表页',
+      stage: '<div style="display:grid;gap:12px;justify-items:center;width:100%"><div class="rows">' +
+        [['微信', '开机启动', 1], ['腾讯会议', '已禁用', 0], ['Steam', '开机启动', 1], ['OneDrive', '已禁用', 0]].map(([a, b, c]) =>
+        `<div class="rowi"><span class="dot ${c ? '' : 'off'}"></span>${a}<span class="st">${b}</span></div>`).join('') +
+        '</div><button class="btn ghost press replay-rows" type="button">重放</button></div>' },
+    { id: 'D6', name: '提示条滑入', tag: 'mid', desc: '操作完成后，右下角弹上来一条提示，底部有倒计时细线，时间到了自己滑走。', use: '适合：替代弹窗，告诉你「刚才做完了什么」',
+      stage: '<button class="btn press show-toast" type="button">模拟清理完成</button><div class="toast" aria-live="polite"><b>清理完成</b><span>释放了 2.4 GB，可在操作日志里查看</span><i class="timer"></i></div>' },
+    { id: 'D7', name: '图标微动', tag: 'easy', desc: '悬停时图标做一个和它意思有关的小动作：刷新转半圈、垃圾桶晃一下、闪电跳一下。', use: '适合：侧边栏导航和工具按钮',
+      stage: `<div class="ib-row"><div class="ib-cap"><button class="ib r press" type="button" aria-label="刷新">${IC.refresh}</button><small>刷新</small></div><div class="ib-cap"><button class="ib w press" type="button" aria-label="清理">${IC.trash}</button><small>清理</small></div><div class="ib-cap"><button class="ib z press" type="button" aria-label="优化">${IC.zap}</button><small>优化</small></div></div>` },
+    { id: 'D8', name: '进度条流动', tag: 'easy', desc: '进度条一段一段平滑往前走，走的时候有斜纹在流动，跑完变绿。', use: '适合：清理、扫描、体检的进度',
+      stage: '<div class="prog"><div class="meta"><span class="pl">扫描垃圾文件</span><span class="pv">0%</span></div><div class="bar"><div class="fill"></div></div><button class="btn ghost press run-prog" type="button" style="justify-self:start">开始扫描</button></div>' },
+  ],
+};
+
+const TAGTXT = { have: '现在就有', easy: 'WPF 好做', mid: 'WPF 要花点功夫', hard: 'WPF 很麻烦' };
+for (const [gid, list] of Object.entries(FX)) {
+  document.getElementById(gid).innerHTML = list.map(f => `
+    <article class="fx" data-id="${f.id}" data-name="${f.name}">
+      <div class="fx-stage">${f.stage}</div>
+      <div class="fx-body">
+        <div class="fx-head"><span class="fx-id">${f.id}</span><h3>${f.name}</h3><span class="tag ${f.tag}">${TAGTXT[f.tag]}</span></div>
+        <p class="fx-desc">${f.desc}</p>
+        <p class="fx-use">${f.use}</p>
+      </div>
+      <label class="pick"><input type="checkbox" id="pick-${f.id}" data-pick="${f.id}"> 要这个</label>
+    </article>`).join('');
+}
+
+/* ---------- 通用按压 ---------- */
+function pressable(el, cls = 'down') {
+  el.addEventListener('pointerdown', () => el.classList.add(cls));
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => el.addEventListener(t, () => el.classList.remove(cls)));
+}
+document.querySelectorAll('.press').forEach(el => pressable(el));
+document.querySelectorAll('.press-sw').forEach(el => pressable(el));
+
+/* B1 水波纹 */
+document.querySelectorAll('.rip').forEach(el => el.addEventListener('pointerdown', e => {
+  const r = el.getBoundingClientRect(), s = Math.hypot(r.width, r.height) * 2;
+  const d = document.createElement('span');
+  d.className = 'ripple';
+  d.style.cssText = `width:${s}px;height:${s}px;left:${e.clientX - r.left - s / 2}px;top:${e.clientY - r.top - s / 2}px`;
+  el.appendChild(d);
+  d.animate([{ transform: 'scale(0)', opacity: .35 }, { transform: 'scale(1)', opacity: 0 }], { duration: 650, easing: 'cubic-bezier(.2,.8,.2,1)' }).onfinish = () => d.remove();
+}));
+
+/* B2 磁吸 */
+document.querySelectorAll('.magnet-zone').forEach(zone => {
+  const b = zone.querySelector('.magnet'), l = b.querySelector('.lbl');
+  zone.addEventListener('pointermove', e => {
+    const r = b.getBoundingClientRect();
+    const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    b.classList.remove('back');
+    b.style.transform = `translate(${dx * .28}px, ${dy * .4}px)`;
+    l.style.transform = `translate(${dx * .1}px, ${dy * .12}px)`;
+  });
+  zone.addEventListener('pointerleave', () => {
+    b.classList.add('back');
+    b.style.transform = ''; l.style.transform = '';
+  });
+});
+
+/* B3 加载变成功 */
+document.querySelectorAll('.morph').forEach(b => b.addEventListener('click', () => {
+  if (b.dataset.busy) return;
+  b.dataset.busy = 1;
+  b.classList.add('loading');
+  setTimeout(() => { b.classList.remove('loading'); b.classList.add('done'); }, 1300);
+  setTimeout(() => { b.classList.remove('done'); delete b.dataset.busy; }, 2900);
+}));
+
+/* C2 光斑 / C6 倾斜：记鼠标位置 */
+document.querySelectorAll('.spot, .tilt').forEach(el => el.addEventListener('pointermove', e => {
+  const r = el.getBoundingClientRect();
+  el.style.setProperty('--x', `${e.clientX - r.left}px`);
+  el.style.setProperty('--y', `${e.clientY - r.top}px`);
+}));
+document.querySelectorAll('.tilt').forEach(el => {
+  el.addEventListener('pointermove', e => {
+    const r = el.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width - .5, py = (e.clientY - r.top) / r.height - .5;
+    el.classList.remove('back');
+    el.style.transform = `perspective(700px) rotateX(${-py * 14}deg) rotateY(${px * 16}deg) scale(1.03)`;
+  });
+  el.addEventListener('pointerleave', () => { el.classList.add('back'); el.style.transform = ''; });
+});
+
+/* C3 点击光圈 */
+document.querySelectorAll('.ringer').forEach(el => el.addEventListener('pointerdown', e => {
+  const r = el.getBoundingClientRect(), s = Math.hypot(r.width, r.height) * 2.2;
+  const d = document.createElement('span');
+  d.className = 'ring';
+  d.style.cssText = `width:${s}px;height:${s}px;left:${e.clientX - r.left - s / 2}px;top:${e.clientY - r.top - s / 2}px`;
+  el.appendChild(d);
+  d.animate([{ transform: 'scale(0)', opacity: .9 }, { transform: 'scale(1)', opacity: 0 }], { duration: 750, easing: 'cubic-bezier(.2,.8,.2,1)' }).onfinish = () => d.remove();
+}));
+
+/* C4 选中 / C7 展开 */
+document.querySelectorAll('.sel-card').forEach(el => el.addEventListener('click', () => el.classList.toggle('sel')));
+document.querySelectorAll('.exp').forEach(el => el.addEventListener('click', () => el.classList.toggle('open')));
+
+/* D1 开关 */
+document.querySelectorAll('.sw').forEach(s => s.addEventListener('click', () => {
+  const on = s.classList.toggle('on');
+  s.setAttribute('aria-checked', on);
+}));
+
+/* D3 火花 */
+document.querySelectorAll('.spark-zone').forEach(z => z.addEventListener('pointerdown', e => {
+  const r = z.getBoundingClientRect();
+  const g = document.createElement('span');
+  g.className = 'spark';
+  g.style.left = `${e.clientX - r.left}px`; g.style.top = `${e.clientY - r.top}px`;
+  const n = 8;
+  for (let k = 0; k < n; k++) {
+    const w = document.createElement('span');
+    w.style.cssText = `position:absolute;left:0;top:0;transform:rotate(${k * 360 / n}deg)`;
+    const i = document.createElement('i');
+    w.appendChild(i); g.appendChild(w);
+    i.animate([
+      { transform: 'translateY(6px) scaleY(1)', opacity: 1 },
+      { transform: 'translateY(28px) scaleY(0)', opacity: 0 },
+    ], { duration: 460, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+  }
+  z.appendChild(g);
+  setTimeout(() => g.remove(), 520);
+}));
+
+/* D4 数字滚动 */
+(() => {
+  const arc = document.querySelector('.score .arc'), num = document.querySelector('.score .num');
+  const C = 2 * Math.PI * 42, target = 87;
+  arc.style.strokeDasharray = C;
+  const set = v => { num.textContent = Math.round(v); arc.style.strokeDashoffset = C * (1 - v / 100); };
+  set(target);
+  let raf;
+  document.querySelector('.replay-score').addEventListener('click', () => {
+    cancelAnimationFrame(raf);
+    const t0 = performance.now(), dur = 1100;
+    const step = t => {
+      const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 4);
+      set(target * e);
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+  });
+})();
+
+/* D5 列表依次进场 */
+document.querySelector('.replay-rows').addEventListener('click', () => {
+  document.querySelectorAll('.rows .rowi').forEach((row, i) => row.animate(
+    [{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }],
+    { duration: 360, delay: i * 60, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' }));
+});
+
+/* D6 提示条 */
+(() => {
+  const btn = document.querySelector('.show-toast'), t = btn.parentElement.querySelector('.toast'), bar = t.querySelector('.timer');
+  let anims = [], timer;
+  btn.addEventListener('click', () => {
+    anims.forEach(a => a.cancel()); clearTimeout(timer);
+    anims = [
+      t.animate([{ transform: 'translateY(160%)' }, { transform: 'translateY(0)' }], { duration: 620, easing: getComputedStyle(document.documentElement).getPropertyValue('--spring').trim() || 'ease-out', fill: 'forwards' }),
+      bar.animate([{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }], { duration: 2800, easing: 'linear', fill: 'forwards' }),
+    ];
+    timer = setTimeout(() => {
+      anims.push(t.animate([{ transform: 'translateY(0)', opacity: 1 }, { transform: 'translateY(40%)', opacity: 0 }], { duration: 220, easing: 'cubic-bezier(.4,0,1,1)', fill: 'forwards' }));
+    }, 2800);
+  });
+})();
+
+/* D8 进度条 */
+(() => {
+  const btn = document.querySelector('.run-prog'), box = btn.parentElement;
+  const fill = box.querySelector('.fill'), pv = box.querySelector('.pv'), pl = box.querySelector('.pl');
+  let iv;
+  btn.addEventListener('click', () => {
+    clearInterval(iv);
+    let v = 0;
+    fill.classList.remove('done'); fill.classList.add('run');
+    fill.style.transition = 'none'; fill.style.width = '0%'; fill.offsetWidth; fill.style.transition = '';
+    pl.textContent = '扫描垃圾文件'; pv.textContent = '0%';
+    iv = setInterval(() => {
+      v = Math.min(100, v + 7 + Math.random() * 16);
+      fill.style.width = v + '%';
+      pv.textContent = Math.round(v) + '%';
+      if (v >= 100) {
+        clearInterval(iv);
+        setTimeout(() => { fill.classList.remove('run'); fill.classList.add('done'); pl.textContent = '扫描完成，可清理 2.4 GB'; }, 420);
+      }
+    }, 380);
+  });
+})();
+
+/* ---------- 选择状态 ---------- */
+const FEELS = {
+  A1: { name: 'A1 线性', down: ['120ms', 'linear'], rel: ['160ms', 'linear'] },
+  A2: { name: 'A2 缓出', down: ['90ms', 'var(--ease-out)'], rel: ['240ms', 'var(--ease-out)'] },
+  A3: { name: 'A3 弹簧', down: ['90ms', 'var(--ease-out)'], rel: ['620ms', 'var(--spring)'] },
+};
+const KEY = 'fx-playground-v1';
+const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } };
+const save = s => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {} };
+const state = Object.assign({ picks: [], feel: '', sys: '', note: '' }, load());
+
+function applyFeel() {
+  const f = FEELS[state.feel], root = document.documentElement.style;
+  document.querySelectorAll('.feel-card').forEach(c => c.classList.toggle('on', c.dataset.feel === state.feel));
+  if (!f) return;
+  root.setProperty('--down-d', f.down[0]); root.setProperty('--down-e', f.down[1]);
+  root.setProperty('--rel-d', f.rel[0]); root.setProperty('--rel-e', f.rel[1]);
+}
+function render() {
+  document.querySelectorAll('[data-pick]').forEach(cb => {
+    cb.checked = state.picks.includes(cb.dataset.pick);
+    cb.closest('.fx').classList.toggle('picked', cb.checked);
+  });
+  document.getElementById('count').textContent = state.picks.length;
+  document.getElementById('feelName').textContent = FEELS[state.feel]?.name || '未选';
+  document.querySelectorAll('input[name=feel]').forEach(r => r.checked = r.value === state.feel);
+  document.querySelectorAll('input[name=sys]').forEach(r => r.checked = r.value === state.sys);
+  applyFeel();
+}
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.pick) {
+    const id = t.dataset.pick;
+    state.picks = t.checked ? [...new Set([...state.picks, id])] : state.picks.filter(x => x !== id);
+  } else if (t.name === 'feel') state.feel = t.value;
+  else if (t.name === 'sys') state.sys = t.value;
+  else return;
+  save(state); render();
+});
+const note = document.getElementById('note');
+note.value = state.note;
+note.addEventListener('input', () => { state.note = note.value; save(state); });
+
+const ORDER = [...document.querySelectorAll('[data-pick]')].map(cb => cb.dataset.pick);
+function buildText() {
+  const names = Object.fromEntries([...document.querySelectorAll('.fx')].map(a => [a.dataset.id, a.dataset.name]));
+  const picks = ORDER.filter(id => state.picks.includes(id));
+  return [
+    '【动效试玩台 · 老板的选择】',
+    '手感：' + (FEELS[state.feel]?.name || '没选'),
+    '要的效果：' + (picks.length ? picks.map(id => `${id} ${names[id]}`).join('、') : '一个没勾'),
+    '系统关了动画时：' + (state.sys || '没选'),
+    '补充：' + (state.note.trim() || '无'),
+  ].join('\n');
+}
+const msg = document.getElementById('msg'), fb = document.getElementById('fallback');
+document.getElementById('copy').addEventListener('click', () => {
+  const text = buildText();
+  const fallback = () => {
+    fb.hidden = false; fb.value = text; fb.focus(); fb.select();
+    msg.textContent = '浏览器不让直接复制，下面那段已经选中了，按 Ctrl+C';
+  };
+  try {
+    navigator.clipboard.writeText(text).then(() => {
+      fb.hidden = true;
+      msg.textContent = '已复制，粘贴发给我就行';
+      setTimeout(() => msg.textContent = '', 3000);
+    }, fallback);
+  } catch { fallback(); }
+});
+render();
+</script>

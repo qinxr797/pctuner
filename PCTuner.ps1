@@ -539,41 +539,24 @@ $Script:SelectedCard = $null
 # =====================================================================
 #  动画开关
 # ---------------------------------------------------------------------
-#  补间函数都在 Modules\Motion.ps1；切页动画是 MDIX 的 TransitioningContent，
-#  写在窗口 XAML 里。这里只管「开不开」和右栏换内容时的淡入。
+#  补间和弹簧都在 Modules\Motion.ps1。这里只管「开不开」和右栏换内容时的进场。
+#
+#  ★ 只认本软件「个性化」页里的开关，不看 Windows 的「显示动画」★（老板拍板，2026-09-27）
+#    老板自己的电脑关着系统动画；v6.0 那套「系统关了就减弱」在他那边等于少一截动画。
 # =====================================================================
 $Script:AnimEnabled = $true          # 用户在「个性化」页的开关
-$Script:SystemAnimOff = $false       # 系统级「减弱动效」
-
-function Test-SystemReducedMotion {
-    <#
-      Windows 的「减弱动效」等价物：轻松使用 → 显示 → 「在 Windows 中显示动画」。
-      会关这个的人通常是晕动症，或者机器实在带不动。两种都不该被无视。
-    #>
-    try { return (-not [System.Windows.SystemParameters]::ClientAreaAnimation) } catch { return $false }
-}
 
 function Test-AnimOn { return (Test-MotionOn) }
 
 function Sync-TransitionSwitch {
-    <#
-      动画开关同步给 MDIX 的切页动画：
-        用户关了动画        → 切页瞬间完成（TransitionAssist.DisableTransitions）
-        系统关了「显示动画」→ 只留淡入，把「上移」那一段拿掉（减弱，不是归零）
-    #>
+    <# 动画开关同步给 MDIX：关掉时它自带的过渡（切页、水波纹之外的那些）瞬间完成 #>
     try {
         [MaterialDesignThemes.Wpf.TransitionAssist]::SetDisableTransitions($Script:Window, (-not (Test-AnimOn)))
     } catch { }
     try {
         $tabs = $Script:UI.Tabs
         [void]$tabs.ApplyTemplate()
-        $tc = $tabs.Template.FindName('PageTransition', $tabs)
-        $Script:PageTransition = $tc
-        if ($tc -and $Script:SystemAnimOff) {
-            foreach ($fx in @($tc.OpeningEffects)) {
-                if ("$($fx.Kind)" -like 'Slide*') { [void]$tc.OpeningEffects.Remove($fx) }
-            }
-        }
+        $Script:PageTransition = $tabs.Template.FindName('PageTransition', $tabs)
     } catch { }
 }
 
@@ -599,27 +582,12 @@ function Invoke-PageTransition {
 
 function Start-FadeSlideIn {
     <#
-      内容换新时的淡入 + 轻微上移（200ms）。用在右栏这种「点了左边、右边整块换内容」的地方 ——
-      它回答的是「右边刚换了」。
+      内容换新时的进场：淡入（ease-out）+ 从下方 8px 弹到位（弹簧）。
+      用在右栏这种「点了左边、右边整块换内容」的地方 —— 它回答的是「右边刚换了」。
+      连点左边几行：每次都从当前透明度 / 位置接着走，不会闪回 0 再来。
     #>
-    param($Element, [double]$Ms = 0, [double]$SlideY = 8)
-    if ($null -eq $Element) { return }
-    if ($Ms -le 0) { $Ms = $Script:Dur.Panel }
-    if (-not (Test-AnimOn)) {
-        $Element.Opacity = 1
-        $Element.RenderTransform = $null
-        return
-    }
-    # 系统关了「显示动画」：保留淡入（帮助理解内容换了），去掉位移
-    if ($Script:SystemAnimOff) { $SlideY = 0; $Element.RenderTransform = $null }
-    try {
-        Start-Prop $Element ([System.Windows.UIElement]::OpacityProperty) 0 1 $Ms $Script:Ease.Out
-        if ($SlideY -ne 0) {
-            $tt = New-Object System.Windows.Media.TranslateTransform 0, $SlideY
-            $Element.RenderTransform = $tt
-            Start-Prop $tt ([System.Windows.Media.TranslateTransform]::YProperty) $SlideY 0 $Ms $Script:Ease.Out
-        }
-    } catch { $Element.Opacity = 1 }
+    param($Element, [double]$SlideY = 8)
+    Start-EnterIn $Element 0 $SlideY
 }
 
 # =====================================================================
@@ -5734,9 +5702,6 @@ try {
     $savedTheme = Get-ThemeSetting
     # 动画开关和皮肤存在同一份配置里，启动时一起读回来
     $Script:AnimEnabled = [bool]$savedTheme.Anim
-    # 系统级「减弱动效」优先于用户开关 —— 会关这个的人多半有晕动症或机器太慢
-    $Script:SystemAnimOff = Test-SystemReducedMotion
-    if ($Script:SystemAnimOff) { Write-Log '检测到系统已关闭「显示动画」，界面动效自动减弱（保留淡入，去掉位移）' '信息' }
     Set-AppTheme -Name $savedTheme.Name -Image $savedTheme.Image -Opacity $savedTheme.Opacity -Frost $savedTheme.Frost
     Apply-PanelOpacity
 } catch { Write-Log "套用皮肤失败，用默认配色：$($_.Exception.Message)" '警告' }
