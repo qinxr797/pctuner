@@ -2018,7 +2018,7 @@ $xamlText = @'
                 </StackPanel>
               </Border>
               <WrapPanel Grid.Row="1" Margin="0,16,0,16">
-                <TextBox x:Name="TweakSearch" Style="{DynamicResource SearchBox}" Width="220" Margin="0,0,8,0"
+                <TextBox x:Name="TweakSearch" Style="{DynamicResource SearchBox}" Width="200" Margin="0,0,8,0"
                          md:HintAssist.Hint="搜索优化项…"/>
                 <Button x:Name="BtnPickRecommended" Content="勾选通用推荐项"/>
                 <Button x:Name="BtnPickNone" Content="全部不选"/>
@@ -2490,6 +2490,11 @@ function Build-NavUI {
             $b.Child = $sp
             Add-Interactive $b -BgNormal 'Transparent' -BgHover 'CardHover'
             $b.Add_MouseLeftButtonUp({ Select-TabByHeader "$($this.Tag)" })
+            # 图标微动（D7）：悬停播一次，动作跟页面含义有关
+            $nudge = switch ($it.T) { '垃圾清理' { 'Wiggle' } '日常维护' { 'Wiggle' } '系统体检' { 'Wiggle' } '性能优化' { 'Zap' } default { 'Pop' } }
+            $b.Resources['__nudgeIcon'] = $ic
+            $b.Resources['__nudgeStyle'] = $nudge
+            $b.Add_MouseEnter({ Start-IconNudge $this.Resources['__nudgeIcon'] $this.Resources['__nudgeStyle'] })
             $p.Children.Add($b) | Out-Null
             $Script:NavItems[$it.T] = @{ Box = $b; Icon = $ic; Text = $tx }
         }
@@ -6050,6 +6055,8 @@ if ($Script:FontLoaded) {
 
 Install-PressFeedback      # 所有按钮按下缩 0.97、松手弹簧回弹（类级注册，切到哪页都有）
 Install-ToggleMotion       # 勾选框画勾、开关弹簧滑动（同样类级注册）
+# 刷新类按钮前加刷新图标，悬停转半圈（D7）
+foreach ($rb in @($Script:UI.BtnRescan, $Script:UI.BtnRefreshStartup, $Script:UI.BtnRefreshAppx, $Script:UI.BtnHealthScan)) { Set-RefreshButton $rb }
 Build-NavUI
 Build-TweakUI
 Build-PresetUI

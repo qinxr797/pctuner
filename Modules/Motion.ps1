@@ -548,3 +548,66 @@ function Set-CheckBadge {
         Start-Prop $B.Tick $dashP $null 6 $Script:Dur.Quick $Script:Ease.Out
     }
 }
+
+# =====================================================================
+#  图标微动（D7）
+# ---------------------------------------------------------------------
+#  只放在侧边栏图标和刷新类按钮上（design.md 5.3），悬停时播一次，全部是弹簧：
+#    Wiggle   清理 / 维护 / 体检：从 -12° 弹回 0（弹簧自带的一次回摆就是「晃一下」）
+#    Zap      性能优化的火箭：从上方 3px、1.12 倍弹回原位（「跳一下」）
+#    Pop      其余：从 1.12 倍弹回 1
+#    Refresh  刷新按钮：在当前角度上再转半圈
+#  幅度都压在 12° / 1.12 倍以内 —— 侧边栏一天要扫过几十次，大了就吵。
+# =====================================================================
+function Get-NudgeTransforms {
+    param($Icon)
+    $n = $Icon.Resources['__nudge']
+    if ($n) { return $n }
+    $Icon.RenderTransformOrigin = New-Object System.Windows.Point 0.5, 0.5
+    $tg = New-Object System.Windows.Media.TransformGroup
+    $sc = New-Object System.Windows.Media.ScaleTransform 1, 1
+    $rt = New-Object System.Windows.Media.RotateTransform 0
+    $tt = New-Object System.Windows.Media.TranslateTransform 0, 0
+    $tg.Children.Add($sc); $tg.Children.Add($rt); $tg.Children.Add($tt)
+    $Icon.RenderTransform = $tg
+    $n = @{ S = $sc; R = $rt; T = $tt }
+    $Icon.Resources['__nudge'] = $n
+    return $n
+}
+
+function Start-IconNudge {
+    param($Icon, [string]$Style = 'Pop')
+    if ($null -eq $Icon -or -not (Test-MotionOn)) { return }
+    $n = Get-NudgeTransforms $Icon
+    $sx = [System.Windows.Media.ScaleTransform]::ScaleXProperty
+    $sy = [System.Windows.Media.ScaleTransform]::ScaleYProperty
+    $ang = [System.Windows.Media.RotateTransform]::AngleProperty
+    switch ($Style) {
+        'Wiggle'  { Start-Spring $n.R $ang 0 0 -12 }
+        'Zap'     { Start-Spring $n.T ([System.Windows.Media.TranslateTransform]::YProperty) 0 0 -3; Start-Spring $n.S $sx 1 0 1.12; Start-Spring $n.S $sy 1 0 1.12 }
+        'Refresh' { Start-Spring $n.R $ang ([double]$n.R.Angle + 180) }
+        default   { Start-Spring $n.S $sx 1 0 1.12; Start-Spring $n.S $sy 1 0 1.12 }
+    }
+}
+
+function Set-RefreshButton {
+    <# 给刷新类按钮前面加一个刷新图标，悬停时转半圈 #>
+    param($Button)
+    if ($null -eq $Button) { return }
+    $text = "$($Button.Content)"
+    $sp = New-Object System.Windows.Controls.StackPanel
+    $sp.Orientation = 'Horizontal'
+    $ic = New-Object MaterialDesignThemes.Wpf.PackIcon
+    $ic.Kind = 'Refresh'
+    $ic.Width = 16; $ic.Height = 16
+    $ic.VerticalAlignment = 'Center'
+    $ic.Margin = New-Object System.Windows.Thickness 0, 0, 8, 0
+    $sp.Children.Add($ic) | Out-Null
+    $tb = New-Object System.Windows.Controls.TextBlock
+    $tb.Text = $text
+    $tb.VerticalAlignment = 'Center'
+    $sp.Children.Add($tb) | Out-Null
+    $Button.Content = $sp
+    $Button.Resources['__icon'] = $ic
+    $Button.Add_MouseEnter({ Start-IconNudge $this.Resources['__icon'] 'Refresh' })
+}
