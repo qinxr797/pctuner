@@ -549,35 +549,74 @@ $Script:AnimEnabled = $true          # 用户在「个性化」页的开关
 function Test-AnimOn { return (Test-MotionOn) }
 
 function Sync-TransitionSwitch {
-    <# 动画开关同步给 MDIX：关掉时它自带的过渡（切页、水波纹之外的那些）瞬间完成 #>
+    <# 动画开关同步给 MDIX：关掉时它自带的过渡（输入框提示字上浮这类）瞬间完成 #>
     try {
         [MaterialDesignThemes.Wpf.TransitionAssist]::SetDisableTransitions($Script:Window, (-not (Test-AnimOn)))
     } catch { }
-    try {
-        $tabs = $Script:UI.Tabs
-        [void]$tabs.ApplyTemplate()
-        $Script:PageTransition = $tabs.Template.FindName('PageTransition', $tabs)
-    } catch { }
 }
 
-function Invoke-PageTransition {
+function Get-PageBlocks {
     <#
-      重播切页动画（MDIX TransitioningContent 的进场效果：淡入 + 上移 200ms）。
+      一个页面由哪些「区块」组成 —— 切页时依次进场的就是它们。
 
-      ★ 为什么要反射 ★
-        MDIX 5.3 重播进场效果的方法 RunOpeningEffects 是 protected 的，没有公开入口；
-        它的 RunHint 属性按文档该触发重播，实测不触发（逐帧读透明度一直是 1）。
-        反射调它是唯一能用上 MDIX 自己那套切页动画的办法。
-        将来 MDIX 改了方法名：这里 catch 住只是「没动画」不会崩，而自检会把它报出来。
+      规则：Grid 和 ScrollViewer 只是排版骨架，往里钻；其余东西（卡片 Border、工具栏
+      WrapPanel、说明文字、概览页的摘要行）各算一块，不再往里钻。
+      按 XAML 里的先后顺序排 —— 页面都是按「从上到下、从左到右」写的，正好是阅读顺序。
+
+      ★ 用逻辑树不用可视树 ★ 切页那一刻新页面还没排版，可视树可能还没建；
+        但 TabItem.Content 这棵逻辑树在窗口加载时就全建好了，拿得到、而且能立刻设初值，不闪。
     #>
-    if (-not (Test-AnimOn) -or $null -eq $Script:PageTransition) { return }
-    try {
-        if (-not $Script:RunFx) {
-            $Script:RunFx = [MaterialDesignThemes.Wpf.Transitions.TransitioningContentBase].GetMethod(
-                'RunOpeningEffects', [System.Reflection.BindingFlags]'NonPublic,Public,Instance')
+    param($Root)
+    $out = New-Object System.Collections.ArrayList
+    $walk = $null
+    $walk = {
+        param($el, $depth)
+        if ($null -eq $el -or $depth -gt 6) { return }
+        if ($el -is [System.Windows.UIElement] -and $el.Visibility -ne 'Visible') { return }
+        if ($el -is [System.Windows.Controls.ScrollViewer]) { & $walk $el.Content ($depth + 1); return }
+        if ($el -is [System.Windows.Controls.Grid] -and $null -eq $el.Background) {
+            foreach ($c in $el.Children) { & $walk $c ($depth + 1) }
+            return
         }
-        if ($Script:RunFx) { [void]$Script:RunFx.Invoke($Script:PageTransition, $null) }
-    } catch { }
+        [void]$out.Add($el)
+    }
+    & $walk $Root 0
+    return $out.ToArray()
+}
+
+function Start-PageEnter {
+    <#
+      切页过场（design.md 5.3）：新页面的区块依次进场 ——
+      淡入（ease-out, Base）+ 从下方 12px 弹到位（弹簧），每块晚 Stagger（40ms），最多错开 6 档。
+
+      ★ 过场就是依次进场本身 ★ 不再另叠一层整页淡入：两层一起动就是「一团在动」。
+      ★ 可打断 ★ 连点侧边栏：旧页面已经离开可视树，它身上的动画无所谓；
+        回到一个动画没播完的页面，每块从当前透明度 / 位置接着走（Start-EnterIn 从当前值起步）。
+      返回最后一块开始进场的时刻（毫秒），后面的接力动画（健康度计数）从这之后开始。
+    #>
+    param($Page)
+    if ($null -eq $Page) { return 0 }
+    $blocks = @(Get-PageBlocks $Page)
+    if (-not (Test-AnimOn)) {
+        foreach ($b in $blocks) { Start-EnterIn $b }
+        return 0
+    }
+    # 先把所有块压到起点（立刻，不然新页面会先整页露一帧）……
+    foreach ($b in $blocks) {
+        $b.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null)
+        $b.Opacity = 0
+    }
+    # ……等新页面排完版再开跑。
+    # ★ 为什么要等 ★ 「性能优化」这种页第一次进来要建 65 行，界面线程卡约 190ms（实测）。
+    #   立刻开跑的话动画时钟在卡的那段里空转，界面一恢复前几块直接蹦到终点 —— 等于没有过场。
+    #   排到 Loaded 优先级（排版之后）再开，时钟从页面真正能画的那一刻起算。
+    $Script:PendingEnter = $blocks
+    $null = $Script:Window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Loaded, [action] {
+            $bl = $Script:PendingEnter
+            $Script:PendingEnter = $null
+            if ($bl) { Start-StaggerIn $bl 12 }
+        })
+    return ([math]::Min($blocks.Count, $Script:StaggerMax) * $Script:Dur.Stagger)
 }
 
 function Start-FadeSlideIn {
@@ -1633,10 +1672,10 @@ $appStylesXaml = @'
        页签条的活交给左侧边栏；TabControl 留着是因为全程序几十处代码
        靠它的 SelectedIndex / SelectedItem 判断当前在哪一页，出图模式也靠它按页拍。
 
-       切页动画 = MDIX 的 TransitioningContent：淡入 + 上移，200ms。
-       ★ 它只在第一次加载时自己播 ★ 之后每次切页由 SelectionChanged 调 Invoke-PageTransition 重播
-         （MDIX 5.3 实测：RunHint 绑到 SelectedIndex 不会触发重播，透明度一直是 1）。
-       「个性化」里关掉动画时，窗口上的 TransitionAssist.DisableTransitions 会让它瞬间完成。
+       切页过场不在模板里：由 SelectionChanged 调 Start-PageEnter，
+       让新页面的区块依次进场（design.md 5.3 的编排）。
+       v6.0 用的 MDIX TransitioningContent 拆掉了 —— 它要反射调 protected 方法才能重播，
+       而且只能整页一起淡入，编排不了「依次进场」。
        ================================================================ -->
   <Style x:Key="PageHost" TargetType="TabControl">
     <Setter Property="Background" Value="Transparent"/>
@@ -1647,13 +1686,7 @@ $appStylesXaml = @'
         <ControlTemplate TargetType="TabControl">
           <Grid>
             <TabPanel x:Name="HeaderPanel" IsItemsHost="True" Visibility="Collapsed"/>
-            <md:TransitioningContent x:Name="PageTransition" OpeningEffectsOffset="0:0:0">
-              <md:TransitioningContent.OpeningEffects>
-                <md:TransitionEffect Kind="FadeIn" Duration="0:0:0.2"/>
-                <md:TransitionEffect Kind="SlideInFromBottom" Duration="0:0:0.2"/>
-              </md:TransitioningContent.OpeningEffects>
-              <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"/>
-            </md:TransitioningContent>
+            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"/>
           </Grid>
         </ControlTemplate>
       </Setter.Value>
@@ -5790,8 +5823,9 @@ $Script:AppxBuilt = $false
 $Script:UI.Tabs.Add_SelectionChanged({
         param($sender, $e)
         if ($e.OriginalSource -ne $Script:UI.Tabs) { return }
-        # 切页动画：重播 PageHost 模板里那个 TransitioningContent 的进场效果（淡入 + 上移）
-        Invoke-PageTransition
+        # 切页过场：新页面的区块依次进场（design.md 5.3）
+        # ★ 用 SelectedItem.Content，不用 SelectedContent ★ 这个事件触发时 SelectedContent 还是旧页面
+        $Script:LastEnterMs = Start-PageEnter $Script:UI.Tabs.SelectedItem.Content
         Update-NavSelection
         $header = "$($Script:UI.Tabs.SelectedItem.Header)"
         # 只有停在概览页才轮询传感器，切走立刻停 ——
@@ -5832,11 +5866,23 @@ if ($SelfTest) {
     } catch { $styleBad += "ButtonPrimary 查不了：$($_.Exception.Message)" }
     try {
         [void]$Script:UI.Tabs.ApplyTemplate()
-        $tc = $Script:UI.Tabs.Template.FindName('PageTransition', $Script:UI.Tabs)
-        if ($null -eq $tc) { $styleBad += '页面容器没用 PageHost 模板，页签条会露出来、切页没有动画' }
-        $fx = [MaterialDesignThemes.Wpf.Transitions.TransitioningContentBase].GetMethod('RunOpeningEffects', [System.Reflection.BindingFlags]'NonPublic,Public,Instance')
-        if ($null -eq $fx) { $styleBad += 'MDIX 里找不到 RunOpeningEffects（升级改名了？）—— 切页动画会静默失效，见 Invoke-PageTransition' }
-    } catch { $styleBad += "切页动画检查报错：$($_.Exception.Message)" }
+        if ($null -eq $Script:UI.Tabs.Template.FindName('HeaderPanel', $Script:UI.Tabs)) { $styleBad += '页面容器没用 PageHost 模板，页签条会露出来' }
+    } catch { $styleBad += "页面容器检查报错：$($_.Exception.Message)" }
+    # ---- 动效硬检查：弹簧和过场真的挂上了 ----
+    #   这两样坏了不会报错，只会「界面突然变死」—— 必须有人盯
+    try {
+        $curve = Get-SpringCurve
+        $peak = ($curve | ForEach-Object { $_[1] } | Measure-Object -Maximum).Maximum
+        if ($peak -lt 1.12 -or $peak -gt 1.20) { $styleBad += ("弹簧曲线不对：超调 {0:P1}，A3 应该在 16% 左右" -f ($peak - 1)) }
+        if ([math]::Abs($curve[$curve.Count - 1][1] - 1.0) -gt 0.0001) { $styleBad += '弹簧曲线最后没落到 1' }
+        $sa = New-SpringAnim -From 0 -To 10
+        if ($sa.KeyFrames.Count -lt 30) { $styleBad += "弹簧关键帧太少（$($sa.KeyFrames.Count) 个）" }
+    } catch { $styleBad += "弹簧检查报错：$($_.Exception.Message)" }
+    if (-not $Script:PressInstalled) { $styleBad += "按钮按下的弹簧没挂上：$Script:PressError" }
+    foreach ($ti in $Script:UI.Tabs.Items) {
+        $nb = @(Get-PageBlocks $ti.Content).Count
+        if ($nb -lt 2) { $styleBad += "「$($ti.Header)」页只找到 $nb 个区块，切页过场会退化成整页一起出现" }
+    }
     # 色槽：每个槽都得在资源里，且是真正的 Brush（存成 PSObject 会在 ShowDialog 时崩）
     foreach ($k in $Script:Palettes['浅色'].Keys) {
         $v = [System.Windows.Application]::Current.Resources[$k]
