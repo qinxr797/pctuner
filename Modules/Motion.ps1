@@ -46,7 +46,14 @@ $Script:Ease = @{
     InOut  = @(0.77, 0.0, 0.175, 1.0)
     # cubic-bezier(.34,1.56,.64,1) —— 末尾冲过头一点再回来，用于「弹起来」
     Spring = @(0.34, 1.56, 0.64, 1.0)
-    # cubic-bezier(.4,0,1,1) —— 起步慢、越来越快，用于「消失」
+    # cubic-bezier(.4,0,1,1) —— 起步慢、越来越快。**只用于「消失」**
+    #
+    # ★ 别拿 In 做按下反馈 ★
+    #   直觉上「按下要立刻到位 -> 用 In」是**反的**：
+    #   ease-in 是起步最慢的那条，实测 70ms 的动画跑到 60ms 时
+    #   才走了不到两成（ScaleX 1 -> 0.987，目标是 0.93）。
+    #   用户已经按下去了，界面却还在慢慢启动 —— 看起来就是「没反应」。
+    #   要「立刻到位」用 Out：它前 30% 的时间走完 70% 的距离。
     In     = @(0.4, 0.0, 1.0, 1.0)
 }
 
@@ -311,16 +318,40 @@ function Add-Interactive {
                 Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 0.985 1 $Script:Dur.Press $Script:Ease.Out
             }
         })
+    # ================================================================
+    #  按下反馈
+    # ----------------------------------------------------------------
+    #  ★ 行不缩放 ★
+    #    上一版这里是缩到 0.985，实测在一行 322px 上只有 4.8px 变化，
+    #    而且 ease-out 前段太快（50% 进度就走完 98%）——
+    #    小到肉眼和像素测量都看不出来，等于没做。
+    #    老板的原话就是「点击动画还没做出来」。
+    #
+    #    而且缩放本来就是**卡片**的语汇：一整行横着缩，
+    #    会让旁边那一列看起来在抖。
+    #
+    #  正确的做法是回答「我点上了吗」这个问题，用两样能立刻看见的东西：
+    #    · 背景瞬时压到比悬停更深一档
+    #    · 整行下沉 1px（像被按进去）
+    #
+    #  ★ 按下用 Out，松开用 Spring ★
+    #    按下要「立刻到位」，而 Out 才是起步最快的那条
+    #    （前 30% 的时间走完 70% 的距离）。
+    #    直觉上想用 In 是反的 —— 见曲线表里那条注释。
+    # ================================================================
     $Border.Add_PreviewMouseLeftButtonDown({
+            $m = $this.Resources['__motion']
+            try { $this.Background = Get-Brush $m.BdN } catch { }   # 压到比悬停更深
             if (-not (Test-MotionOn)) { return }
-            Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 1 0.985 $Script:Dur.Press $Script:Ease.Out
-            Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 1 0.985 $Script:Dur.Press $Script:Ease.Out
+            Start-Prop $this.RenderTransform.Children[1] ([System.Windows.Media.TranslateTransform]::YProperty) `
+                0 1 60 $Script:Ease.Out
         })
     $Border.Add_PreviewMouseLeftButtonUp({
+            $m = $this.Resources['__motion']
+            try { $this.Background = Get-Brush $m.BgH } catch { }   # 松开回到悬停色
             if (-not (Test-MotionOn)) { return }
-            # Spring 曲线：弹回时稍微过冲一点，手感比线性回弹「实」
-            Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 0.985 1 200 $Script:Ease.Spring
-            Start-Prop $this.RenderTransform.Children[0] ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 0.985 1 200 $Script:Ease.Spring
+            Start-Prop $this.RenderTransform.Children[1] ([System.Windows.Media.TranslateTransform]::YProperty) `
+                1 0 180 $Script:Ease.Spring
         })
 }
 
@@ -336,27 +367,107 @@ function Add-PressFeedback {
         $Button.RenderTransformOrigin = New-Object System.Windows.Point 0.5, 0.5
         $Button.RenderTransform = New-Object System.Windows.Media.ScaleTransform 1, 1
     } catch { return }
+    # ★ 幅度要够被看见 ★
+    #   0.96 在一个 110px 宽的按钮上只有 4.4px，配上 ease-out
+    #   （50% 进度走完 98%）几乎是瞬间闪一下，感知不到。
+    #   0.93 是 7.7px，按下去有实感，又不会夸张到像在弹跳。
+    #   按下用 Out（起步快，30% 时间走完 70% 距离）＝ 立刻到位，
+    #   松开用 Spring 回弹。
     $Button.Add_PreviewMouseLeftButtonDown({
             if (-not (Test-MotionOn)) { return }
-            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 1 0.96 $Script:Dur.Press $Script:Ease.Out
-            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 1 0.96 $Script:Dur.Press $Script:Ease.Out
+            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 1 0.93 70 $Script:Ease.Out
+            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 1 0.93 70 $Script:Ease.Out
         })
     $Button.Add_PreviewMouseLeftButtonUp({
             if (-not (Test-MotionOn)) { return }
-            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 0.96 1 220 $Script:Ease.Spring
-            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 0.96 1 220 $Script:Ease.Spring
+            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 0.93 1 210 $Script:Ease.Spring
+            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 0.93 1 210 $Script:Ease.Spring
+        })
+    # 鼠标按着移出去：也要回弹，不然按钮会一直卡在缩小状态
+    $Button.Add_MouseLeave({
+            if (-not (Test-MotionOn)) { return }
+            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleXProperty) $this.RenderTransform.ScaleX 1 160 $Script:Ease.Out
+            Start-Prop $this.RenderTransform ([System.Windows.Media.ScaleTransform]::ScaleYProperty) $this.RenderTransform.ScaleY 1 160 $Script:Ease.Out
         })
 }
 
 function Add-PressFeedbackAll {
-    <# 把窗口里所有 Button 一次性挂上按下反馈 #>
+    <#
+      给**所有** Button 挂上按下反馈，包括现在还不存在的那些。
+
+      ★ 不能靠遍历可视树 ★
+        WPF 的 TabControl 只为**当前选中的那一页**建可视树，
+        其余九页在启动时根本不存在。启动时遍历一遍的话，
+        只有概览页的按钮挂上了，切过去的九页全是死的 ——
+        而且因为概览页有效果，很容易误以为整个功能都好了。
+        （实测就是这么漏的：按「全部不选」毫无反应。）
+
+      正确做法是**类级注册**：给 Button 这个类型注册一次处理器，
+      之后创建的每一个实例都自动带上，不用管它什么时候生成。
+
+      幂等：只注册一次，重复调用直接返回。
+    #>
     param($Root)
-    if ($null -eq $Root) { return }
+    if ($Script:PressHandlerInstalled) { return }
     try {
-        foreach ($b in (Find-Descendants $Root ([System.Windows.Controls.Button]))) {
-            Add-PressFeedback $b
+        $down = [System.Windows.Input.MouseButtonEventHandler] {
+            param($s, $e)
+            if (-not (Test-MotionOn)) { return }
+            $sc = Get-PressTransform $s
+            if ($sc) {
+                Start-Prop $sc ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 1 0.93 70 $Script:Ease.Out
+                Start-Prop $sc ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 1 0.93 70 $Script:Ease.Out
+            }
         }
-    } catch { }
+        $up = [System.Windows.Input.MouseButtonEventHandler] {
+            param($s, $e)
+            if (-not (Test-MotionOn)) { return }
+            $sc = Get-PressTransform $s
+            if ($sc) {
+                Start-Prop $sc ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 0.93 1 210 $Script:Ease.Spring
+                Start-Prop $sc ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 0.93 1 210 $Script:Ease.Spring
+            }
+        }
+        # 鼠标按着移出去也要回弹，否则按钮会卡在缩小状态
+        $leave = [System.Windows.Input.MouseEventHandler] {
+            param($s, $e)
+            if (-not (Test-MotionOn)) { return }
+            $sc = Get-PressTransform $s
+            if ($sc -and $sc.ScaleX -lt 0.999) {
+                Start-Prop $sc ([System.Windows.Media.ScaleTransform]::ScaleXProperty) $sc.ScaleX 1 160 $Script:Ease.Out
+                Start-Prop $sc ([System.Windows.Media.ScaleTransform]::ScaleYProperty) $sc.ScaleY 1 160 $Script:Ease.Out
+            }
+        }
+        foreach ($t in @([System.Windows.Controls.Button], [System.Windows.Controls.Primitives.ToggleButton])) {
+            [System.Windows.EventManager]::RegisterClassHandler($t,
+                [System.Windows.UIElement]::PreviewMouseLeftButtonDownEvent, $down, $true)
+            [System.Windows.EventManager]::RegisterClassHandler($t,
+                [System.Windows.UIElement]::PreviewMouseLeftButtonUpEvent, $up, $true)
+            [System.Windows.EventManager]::RegisterClassHandler($t,
+                [System.Windows.UIElement]::MouseLeaveEvent, $leave, $true)
+        }
+        $Script:PressHandlerInstalled = $true
+    } catch { $Script:PressHandlerError = "$($_.Exception.Message)" }
+}
+
+function Get-PressTransform {
+    <#
+      拿到（必要时建立）某个控件用于按下缩放的 ScaleTransform。
+
+      ★ 缩放中心必须在正中 ★
+        默认中心在左上角，缩放时控件会往左上角跑，看起来像在抖。
+    #>
+    param($Ctrl)
+    if ($null -eq $Ctrl) { return $null }
+    try {
+        if ($Ctrl.RenderTransform -is [System.Windows.Media.ScaleTransform]) {
+            return $Ctrl.RenderTransform
+        }
+        $Ctrl.RenderTransformOrigin = New-Object System.Windows.Point 0.5, 0.5
+        $sc = New-Object System.Windows.Media.ScaleTransform 1, 1
+        $Ctrl.RenderTransform = $sc
+        return $sc
+    } catch { return $null }
 }
 
 function Find-Descendants {

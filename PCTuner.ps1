@@ -2176,6 +2176,19 @@ function New-PresetCard {
     $row.Resources['__preset'] = @{ Ring = $ring; Dot = $dot; Title = $title }
 
     Add-Interactive $row -BgNormal 'Transparent' -BgHover $Script:CARD_HOVER -NoLift
+
+    # ★ 按下的瞬间就把记号打上，不等松手 ★
+    #   背景变深和下沉 1px 这两样加起来只有两三个灰阶的变化，太微妙 ——
+    #   而「回答用户『我点上了吗』」是按下反馈唯一的职责。
+    #   在报告单的语汇里，这个回答就是**勾上**：像在纸上打勾，
+    #   笔还没抬起来，记号已经在那儿了。
+    $row.Add_PreviewMouseLeftButtonDown({
+            try {
+                $m = $this.Resources['__preset']
+                $m.Dot.Visibility = 'Visible'
+                $m.Ring.Stroke = Get-Brush '#2B2A26'
+            } catch { }
+        })
     $row.Add_MouseLeftButtonUp({
             Select-PresetCard $this
             Select-Preset $this.Tag
