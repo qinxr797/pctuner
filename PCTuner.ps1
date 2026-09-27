@@ -99,7 +99,12 @@ try {
     if (Test-Path -LiteralPath (Join-Path $fontDir 'MiSans-Regular.ttf')) {
         # ★ 基准 URI 必须以 / 结尾 ★ 少了斜杠，WPF 会把最后一段当文件名，
         #   拼出来的路径指向 Fonts 的上级目录，**静默**拿不到字体。
-        $fontBase = 'file:///' + (($fontDir -replace '\', '/') -replace ' ', '%20') + '/'
+        # ★ 必须用 .Replace 不能用 -replace ★
+        #   -replace 是**正则**替换，模式里单独一个反斜杠是非法转义，
+        #   直接抛异常 —— 而这个 try 把异常吞了，结果就是「静默退回系统字体」，
+        #   界面看起来一切正常，只是字不对，极难发现。
+        #   .Replace 是普通字符串替换，没有转义这回事。
+        $fontBase = 'file:///' + $fontDir.Replace('\', '/').Replace(' ', '%20') + '/'
         $probe = New-Object System.Windows.Media.FontFamily ([Uri]$fontBase), './#MiSans'
         if (@($probe.GetTypefaces()).Count -gt 0) {
             $Script:FontLoaded = $true
@@ -107,6 +112,11 @@ try {
         }
     }
 } catch { $Script:FontLoadError = "$($_.Exception.Message)" }
+# 没加载上就是没加载上，记下来。自检会检查这个 ——
+# 「静默退回系统字体」这种失败必须有人管，不然谁都发现不了。
+if (-not $Script:FontLoaded -and -not $Script:FontLoadError) {
+    $Script:FontLoadError = "Fonts\MiSans-Regular.ttf 不在，或 WPF 没能从它里面读出字族"
+}
 
 # ---------------------------------------------------------------------
 #  1. 检查管理员权限，没有就重新以管理员身份启动自己
@@ -377,6 +387,20 @@ if ($SelfTest) {
     if ($noBom.Count -gt 0) {
         Write-Host ("自检失败：下面这些 .ps1 没有 UTF-8 BOM，PowerShell 5.1 会读成乱码" + [Environment]::NewLine + '  ' + ($noBom -join ([Environment]::NewLine + '  '))) -ForegroundColor Red
         exit 3
+    }
+
+    # ---------- 随包字体必须真的加载上 ----------
+    #
+    # ★ 这是一种「静默失败」，必须有人管 ★
+    #   字体加载被 try/catch 包着，失败了就悄悄退回系统字体 ——
+    #   程序照常运行、功能一切正常，只有字不对。
+    #   实测踩过一次：$fontDir -replace '\' 在 PowerShell 里是非法正则转义，
+    #   异常被吞掉，界面看着没毛病，其实整个界面都是微软雅黑。
+    #   靠眼睛是发现不了的（谁记得 MiSans 的「验」字长什么样），只能靠自检。
+    if (-not $Script:FontLoaded) {
+        Write-Host ("自检失败：随包字体没有加载上，界面会退回系统默认字。" +
+            [Environment]::NewLine + '  原因：' + $Script:FontLoadError) -ForegroundColor Red
+        exit 4
     }
 }
 
@@ -777,18 +801,27 @@ function Add-CardShadow {
 }
 
 function New-ListCard {
-    <# 统一生成左侧列表用的卡片，自带悬停反馈（带颜色过渡动画） #>
+    <#
+      列表里的一条。
+
+      ★ 这不再是「卡片」★
+        报告单上的一行就是一行：上下留白 + 一条行间细线。
+        没有圆角、没有边框盒子、没有阴影 ——
+        craft-floor 拒绝「同尺寸卡片当页面结构」，
+        而深色界面上的投影本来也看不见，只是白烧 GPU。
+
+      悬停 / 按下 / 回弹统一走 Modules\Motion.ps1 的交互引擎，
+      别在这儿各写各的。
+    #>
     $c = New-Object System.Windows.Controls.Border
-    $c.Background = Get-Brush $Script:CARD_BG
+    $c.Background = [System.Windows.Media.Brushes]::Transparent
     $c.BorderBrush = Get-Brush $Script:CARD_BORDER
-    $c.BorderThickness = New-Thick 1
-    $c.CornerRadius = New-Object System.Windows.CornerRadius 8
-    $c.Padding = New-Thick 13 11 13 11
-    $c.Margin = New-Thick 0 0 0 7
+    $c.BorderThickness = New-Thick 0 0 0 1     # 只有行间线
+    $c.Padding = New-Thick 4 10 4 10
+    $c.Margin = New-Thick 0 0 0 0
     $c.Cursor = 'Hand'
-    Add-CardShadow $c
-    $c.Add_MouseEnter({ if ($Script:SelectedCard -ne $this) { Start-ColorFade $this $Script:CARD_HOVER } })
-    $c.Add_MouseLeave({ if ($Script:SelectedCard -ne $this) { Start-ColorFade $this $Script:CARD_BG } })
+    # 行不做上移（上移是卡片的语汇，表格行上移会让整列看起来在抖）
+    Add-Interactive $c -BgNormal 'Transparent' -BgHover $Script:CARD_HOVER -NoLift
     return $c
 }
 
@@ -1155,6 +1188,45 @@ $xamlText = @'
 
     <Style TargetType="TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+    </Style>
+
+    <!-- ================================================================
+         你没画的那些地方，一样在承载设计
+
+         文本选中的高亮、输入光标、键盘焦点框 —— 这三样 WPF 都给了
+         **系统默认值**，不属于任何设计系统：
+           · 选中高亮是系统蓝 #3399FF，压在这套完全消色的界面上
+             像别人的东西掉进来了
+           · 焦点框是**黑色点线**，在近黑背景上等于没有 ——
+             而键盘操作的人全靠它，这是无障碍问题不是美观问题
+         把它们接到调色板上，是区分「做出来的」和「拼出来的」最便宜的一步。
+         ================================================================ -->
+
+    <!-- 键盘焦点：1px 实线框，用边框强调色，不是系统的黑点线 -->
+    <Style x:Key="AppFocusVisual">
+      <Setter Property="Control.Template">
+        <Setter.Value>
+          <ControlTemplate>
+            <Rectangle Margin="-2" StrokeThickness="1" SnapsToDevicePixels="True"
+                       Stroke="{DynamicResource BorderStrong}"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
+    </Style>
+    <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+      <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
+    </Style>
+
+    <!-- 输入框：选中高亮和光标都走调色板 -->
+    <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+      <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}"/>
+      <Setter Property="SelectionBrush" Value="{DynamicResource BorderStrong}"/>
+      <Setter Property="SelectionOpacity" Value="0.45"/>
+      <Setter Property="CaretBrush" Value="{DynamicResource TextMain}"/>
     </Style>
 
     <!-- ================================================================
@@ -1612,7 +1684,7 @@ $xamlText = @'
           </StackPanel>
           <TextBox Grid.Row="1" x:Name="LogBox" IsReadOnly="True" AcceptsReturn="True"
                    Background="{DynamicResource NeutralTint}" Foreground="{DynamicResource TextMid}" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1"
-                   FontFamily="Consolas, Microsoft YaHei UI" FontSize="12" Padding="12"
+                   FontSize="12" Padding="12"
                    VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
         </Grid>
       </TabItem>
@@ -2103,12 +2175,7 @@ function New-PresetCard {
     # 记号和标题存起来，选中时要改
     $row.Resources['__preset'] = @{ Ring = $ring; Dot = $dot; Title = $title }
 
-    $row.Add_MouseEnter({
-            if ($Script:SelectedPresetCard -ne $this) { $this.Background = Get-Brush $Script:CARD_HOVER }
-        })
-    $row.Add_MouseLeave({
-            if ($Script:SelectedPresetCard -ne $this) { $this.Background = [System.Windows.Media.Brushes]::Transparent }
-        })
+    Add-Interactive $row -BgNormal 'Transparent' -BgHover $Script:CARD_HOVER -NoLift
     $row.Add_MouseLeftButtonUp({
             Select-PresetCard $this
             Select-Preset $this.Tag
@@ -3422,7 +3489,11 @@ function Invoke-SetRefresh {
     $win.WindowStartupLocation = 'CenterScreen'
     $win.ResizeMode = 'NoResize'
     $win.Background = Get-Brush '#F6F5F2'
-    $win.FontFamily = New-Object System.Windows.Media.FontFamily 'Microsoft YaHei UI, Segoe UI'
+    # ★ 子窗口不继承主窗口的 FontFamily ★
+    #   WPF 的属性继承走的是可视树，而新建的 Window 是另一棵树的根。
+    #   不显式设的话，弹窗会退回系统默认字 —— 主界面是随包字体、
+    #   弹窗是微软雅黑，一眼就看出是两套东西拼的。
+    $win.FontFamily = New-Object System.Windows.Media.FontFamily $Script:FontStack
     $sp = New-Object System.Windows.Controls.StackPanel
     $sp.Margin = New-Thick 22 20 22 18
     $sp.Children.Add((New-TextBlock -Text ("已切换到 {0} Hz" -f $Hz) -Size 16 -Bold $true)) | Out-Null
@@ -3844,7 +3915,11 @@ function Show-Findings {
             $cb.Padding = New-Thick 9 6 9 6
             $cb.Margin = New-Thick 0 7 0 0
             $ct = New-TextBlock -Text $f.Command -Size 11 -Color '#565349' -Wrap $true
-            $ct.FontFamily = New-Object System.Windows.Media.FontFamily 'Consolas, Microsoft YaHei UI'
+            # ★ 不用等宽体 ★
+            #   一是 Consolas 是系统字体（随包字体的意义就在于不依赖系统装了什么）；
+            #   二是 craft-floor 拒绝「拿等宽当『技术感』的戏服」。
+            #   报告单上原始值和别的字段是同一个字族，靠对齐和字重区分，不靠换字体。
+            [System.Windows.Documents.Typography]::SetNumeralAlignment($ct, 'Tabular')
             $cb.Child = $ct
             $sp.Children.Add($cb) | Out-Null
         }
@@ -4495,6 +4570,11 @@ $Script:UI.RptNo.Text    = "编号  PCT-$Script:AppVersion-$((Get-Date).ToString
 $Script:UI.RptDate.Text  = "报告日期  $((Get-Date).ToString('yyyy-MM-dd'))"
 
 Write-Log '=== 电脑调优助手已启动（管理员模式）===' '信息'
+if ($Script:FontLoaded) {
+    Write-Log "随包字体 MiSans 已加载（不装进系统）：$Script:FontStack" '信息'
+} else {
+    Write-Log "随包字体没加载上，退回系统字体。$Script:FontLoadError" '警告'
+}
 
 Build-TweakUI
 Build-PresetUI
@@ -4507,6 +4587,10 @@ Update-TweakStates -PreselectRecommended $true
 
 # 启动项和体检比较慢，等窗口显示出来之后再在后台补上
 $Script:Window.Add_ContentRendered({
+        # 所有按钮挂上按下反馈。
+        # HandyControl 自带的是颜色变化，在这套完全消色的界面上几乎看不出来；
+        # 缩放是尺寸变化，任何配色下都能感知，而且走 RenderTransform 不触发重排。
+        try { Add-PressFeedbackAll $Script:Window } catch { }
         Build-StartupUI
         Build-MaintainUI
         Build-BigFileDrives
