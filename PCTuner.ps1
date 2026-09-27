@@ -1127,6 +1127,55 @@ function New-RptSection {
     return $sp
 }
 
+function Add-ColHeader {
+    <#
+      在列表容器顶部插一行列名 + 一条表头粗线。
+
+      直接作为 panel 的第一个子元素插进去，不动 XAML ——
+      一个函数覆盖多页，而且表头跟着列表一起重建，换肤时不会留旧配色。
+
+      ★ 宽度必须和行里的列轨完全一致 ★ 否则列名对不上下面的数。
+    #>
+    param($Panel, [string]$First = '检验项目', $Cols = @(), [double]$Indent = 26)
+    if ($null -eq $Panel) { return }
+
+    $wrap = New-Object System.Windows.Controls.StackPanel
+
+    $g = New-Object System.Windows.Controls.Grid
+    $cd0 = New-Object System.Windows.Controls.ColumnDefinition
+    $cd0.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+    $g.ColumnDefinitions.Add($cd0)
+    foreach ($c in $Cols) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = New-Object System.Windows.GridLength ([double]$c.W)
+        $g.ColumnDefinitions.Add($cd)
+    }
+
+    $t0 = New-TextBlock -Text $First -Size 12 -Color '#66635B'
+    $t0.FontWeight = 'SemiBold'
+    $t0.Margin = New-Thick $Indent 0 0 0
+    $g.Children.Add($t0) | Out-Null
+
+    $i = 1
+    foreach ($c in $Cols) {
+        $t = New-TextBlock -Text $c.T -Size 12 -Color '#66635B'
+        $t.FontWeight = 'SemiBold'
+        $t.TextAlignment = 'Right'
+        [System.Windows.Controls.Grid]::SetColumn($t, $i)
+        $g.Children.Add($t) | Out-Null
+        $i++
+    }
+    $wrap.Children.Add($g) | Out-Null
+
+    $rule = New-Object System.Windows.Shapes.Rectangle
+    $rule.Height = 1.5
+    $rule.Fill = Get-Brush '#D2D0C9'
+    $rule.Margin = New-Thick 0 6 0 0
+    $wrap.Children.Add($rule) | Out-Null
+
+    $Panel.Children.Add($wrap) | Out-Null
+}
+
 function New-Badge {
     <#
       报告单上的「标注」，不是徽章。
@@ -2908,6 +2957,7 @@ function Build-CleanUI {
     $panel = $Script:UI.CleanPanel
     $panel.Children.Clear()
     $Script:CleanRows = @{}
+    Add-ColHeader $panel -First '清理项目' -Cols @(@{ T = '可清理'; W = 92 })
 
     foreach ($it in $Script:CleanItems) {
         $card = New-ListCard
@@ -3313,19 +3363,26 @@ function Build-AppxUI {
             default { @{ Fg = '#7A6B45'; Bg = '#EDE7D9' } }
         }
 
+        # 行式表，和别的页一个语汇：没有圆角、没有底色、没有边框盒子，
+        # 只有一条行间细线。
         $card = New-Object System.Windows.Controls.Border
-        $card.Background = Get-Brush '#F6F5F2'
-        $card.BorderBrush = Get-Brush '#E0DED8'
-        $card.BorderThickness = New-Thick 1
-        $card.CornerRadius = New-Object System.Windows.CornerRadius 8
-        $card.Padding = New-Thick 12 10 12 10
-        $card.Margin = New-Thick 0 0 0 7
+        $card.Background = [System.Windows.Media.Brushes]::Transparent
+        $card.BorderBrush = Get-Brush $Script:CARD_BORDER
+        $card.BorderThickness = New-Thick 0 0 0 1
+        $card.Padding = New-Thick 4 10 4 10
+        $card.Margin = New-Thick 0 0 0 0
 
+        # 列轨：勾选框 / 项目 / 结果 / 参考范围
         $g = New-Object System.Windows.Controls.Grid
-        foreach ($w in @('Auto', '*')) {
+        foreach ($w in @(0, -1, 76, 88)) {
             $cd = New-Object System.Windows.Controls.ColumnDefinition
-            $cd.Width = [System.Windows.GridLength]::Auto
-            if ($w -eq '*') { $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star) }
+            $cd.Width = if ($w -eq -1) {
+                New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+            } elseif ($w -eq 0) {
+                [System.Windows.GridLength]::Auto
+            } else {
+                New-Object System.Windows.GridLength ([double]$w)
+            }
             $g.ColumnDefinitions.Add($cd)
         }
 
@@ -3421,20 +3478,28 @@ function Build-StartupUI {
         return
     }
 
+    Add-ColHeader $panel -First '开机启动项' -Cols @(@{ T = '结果'; W = 76 }, @{ T = '参考范围'; W = 88 })
     foreach ($it in $items) {
+        # 行式表，和别的页一个语汇：没有圆角、没有底色、没有边框盒子，
+        # 只有一条行间细线。深度靠表面阶梯，不靠盒子。
         $card = New-Object System.Windows.Controls.Border
-        $card.Background = Get-Brush '#F6F5F2'
-        $card.BorderBrush = Get-Brush '#E0DED8'
-        $card.BorderThickness = New-Thick 1
-        $card.CornerRadius = New-Object System.Windows.CornerRadius 8
-        $card.Padding = New-Thick 12 10 12 10
-        $card.Margin = New-Thick 0 0 0 7
+        $card.Background = [System.Windows.Media.Brushes]::Transparent
+        $card.BorderBrush = Get-Brush $Script:CARD_BORDER
+        $card.BorderThickness = New-Thick 0 0 0 1
+        $card.Padding = New-Thick 4 10 4 10
+        $card.Margin = New-Thick 0 0 0 0
 
+        # 列轨：勾选框 / 项目 / 结果 / 参考范围
         $g = New-Object System.Windows.Controls.Grid
-        foreach ($w in @('Auto', '*')) {
+        foreach ($w in @(0, -1, 76, 88)) {
             $cd = New-Object System.Windows.Controls.ColumnDefinition
-            $cd.Width = [System.Windows.GridLength]::Auto
-            if ($w -eq '*') { $cd.Width = New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star) }
+            $cd.Width = if ($w -eq -1) {
+                New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star)
+            } elseif ($w -eq 0) {
+                [System.Windows.GridLength]::Auto
+            } else {
+                New-Object System.Windows.GridLength ([double]$w)
+            }
             $g.ColumnDefinitions.Add($cd)
         }
 
@@ -3454,18 +3519,10 @@ function Build-StartupUI {
         $sp = New-Object System.Windows.Controls.StackPanel
         $head = New-Object System.Windows.Controls.StackPanel
         $head.Orientation = 'Horizontal'
-        $nm = New-TextBlock -Text $it.Name -Size 13.5 -Bold $true
+        $nm = New-TextBlock -Text $it.Name -Size 13.5
         $head.Children.Add($nm) | Out-Null
-        $lvColor = switch ($it.AdviceLevel) {
-            '可关' { @{ Fg = '#556B54'; Bg = '#E2E7E0' } }
-            '建议保留' { @{ Fg = '#8A5750'; Bg = '#EDE0DD' } }
-            default { @{ Fg = '#7A6B45'; Bg = '#EDE7D9' } }
-        }
-        $bd = New-Badge -Text $it.AdviceLevel -Fg $lvColor.Fg -Bg $lvColor.Bg
-        $bd.Margin = New-Thick 8 0 0 0
-        $head.Children.Add($bd) | Out-Null
-        $sc = New-Badge -Text $it.Scope -Fg '#66635B' -Bg '#E8E7E2'
-        $sc.Margin = New-Thick 4 0 0 0
+        $sc = New-TextBlock -Text $it.Scope -Size 11.5 -Color '#66635B'
+        $sc.Margin = New-Thick 10 2 0 0
         $head.Children.Add($sc) | Out-Null
         $sp.Children.Add($head) | Out-Null
 
@@ -3479,7 +3536,35 @@ function Build-StartupUI {
 
         [System.Windows.Controls.Grid]::SetColumn($sp, 1)
         $g.Children.Add($sp) | Out-Null
-        $card.Child = $g
+                # ================================================================
+        #  结果 / 参考范围
+        #
+        #  ★ 法定墨只表示「超出参考范围」★
+        #    这一页的「超出」是：**建议关掉，但它还开着**。
+        #    「建议保留」是好事，绝不能上墨 —— 原来它用的是高危玫瑰色，
+        #    在检验单皮肤里被映射成法定墨，等于把好事标成了问题。
+        #    颜色一旦用错，整套「扫过去只有真问题在发光」的机制就废了。
+        # ================================================================
+        $res = New-TextBlock -Size 13 -Color '#2B2A26' -Text $(if ($it.Enabled) { '已开启' } else { '已关闭' })
+        $res.TextAlignment = 'Right'
+        $res.VerticalAlignment = 'Center'
+        [System.Windows.Controls.Grid]::SetColumn($res, 2)
+
+        # AdviceLevel 本身就是「建议保留」这种说法，前面再拼一个「建议」就重了
+        $rf = New-TextBlock -Text $(if ($it.AdviceLevel -like '建议*') { $it.AdviceLevel } else { '建议 ' + $it.AdviceLevel }) -Size 12 -Color '#66635B'
+        $rf.TextAlignment = 'Right'
+        $rf.VerticalAlignment = 'Center'
+        [System.Windows.Controls.Grid]::SetColumn($rf, 3)
+
+        if ($it.AdviceLevel -eq '可关' -and $it.Enabled) {
+            $res.Foreground = Get-Brush '#8A5750'
+            $res.FontWeight = 'SemiBold'
+            $res.Text = '已开启 ' + [char]0x2191
+        }
+        $g.Children.Add($res) | Out-Null
+        $g.Children.Add($rf) | Out-Null
+
+$card.Child = $g
         $panel.Children.Add($card) | Out-Null
     }
     Set-Status ("共 {0} 个开机启动项" -f $items.Count)
