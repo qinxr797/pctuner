@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Continue'
 
 # ===== 版本号 =====
 # 改版本号只改这一处，标题栏 / 副标题 / 诊断报告都从这里取。
-$Script:AppVersion     = '6.1'
+$Script:AppVersion     = '6.2'
 $Script:AppVersionDate = '2026-09-28'
 
 # ---------------------------------------------------------------------
@@ -5050,7 +5050,8 @@ function Build-StartupUI {
         $panel.Children.Add($card) | Out-Null
     }
     Close-CardRows $panel
-    Set-Status ("共 {0} 个开机启动项" -f $items.Count)
+    # 同自带软件页：后台读完 / 换肤重画时人多半不在这一页，别串台
+    if ("$($Script:UI.Tabs.SelectedItem.Header)" -eq '启动项管理') { Set-Status ("共 {0} 个开机启动项" -f $items.Count) }
 }
 
 # ---------------------------------------------------------------------
